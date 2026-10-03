@@ -1,0 +1,32 @@
+# /etc/lefthand/config.yaml
+hid_device: /dev/hidg0
+
+# evtest で実際のデバイスを確認して書き換える
+keyboard: /dev/input/event0
+
+# Brain側のキー(Linuxのキー名) : PCに送るキー
+keys:
+  KEY_A: LCTRL+Z
+  KEY_S: LCTRL+LSHIFT+Z
+  KEY_D: LCTRL+S
+  KEY_SPACE: LSHIFT
+  KEY_Q: B
+  KEY_W: E
+
+touch:
+  device: /dev/input/event1
+  cols: 4
+  rows: 3
+  # evtest で四隅を触って ABS_X / ABS_Y の値を見て調整（min>maxで反転）
+  min_x: 0
+  max_x: 4095
+  min_y: 0
+  max_y: 4095
+  cells:
+    "0,0": B
+    "1,0": E
+    "2,0": LCTRL+Z
+    "3,0": LCTRL+LSHIFT+Z
+    "0,1": LEFTBRACE
+    "1,1": RIGHTBRACE
+    "3,2": SPACE
