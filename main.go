@@ -1,20 +1,30 @@
-// 左手デバイス変換デーモン（雛形）
+// 左手デバイス変換デーモン
 // Brainのキーボード/タッチパネルの evdev 入力を読み、config.yaml に従って
 // /dev/hidg0 に HID キーボードレポートを書き込む。
 //
 // ビルド:
-//   go mod init lefthand && go mod tidy
-//   GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -o lefthand
+//
+//	go mod init lefthand && go mod tidy
+//	GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -o lefthand
+//
+// 使い方:
+//
+//	lefthand [-v] [config.yaml]            通常動作
+//	lefthand -calibrate [config.yaml]      タッチの生座標を表示して範囲を求める
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	evdev "github.com/holoplot/go-evdev"
 	"gopkg.in/yaml.v3"
@@ -24,20 +34,35 @@ import (
 
 type Config struct {
 	HIDDevice string            `yaml:"hid_device"`
-	Keyboard  string            `yaml:"keyboard"`
-	Keys      map[string]string `yaml:"keys"` // "KEY_A": "LCTRL+Z"
+	Keyboard  string            `yaml:"keyboard"` // "/dev/input/eventN" またはデバイス名
+	Keys      map[string]string `yaml:"keys"`     // "KEY_A": "LCTRL+Z"
 	Touch     *TouchConfig      `yaml:"touch"`
 }
 
 type TouchConfig struct {
-	Device string            `yaml:"device"`
+	Device string            `yaml:"device"` // "/dev/input/eventN" またはデバイス名
 	Cols   int               `yaml:"cols"`
 	Rows   int               `yaml:"rows"`
+	SwapXY bool              `yaml:"swap_xy"` // パネルのX軸が画面の縦方向のとき
 	MinX   int32             `yaml:"min_x"`
 	MaxX   int32             `yaml:"max_x"`
 	MinY   int32             `yaml:"min_y"`
 	MaxY   int32             `yaml:"max_y"`
 	Cells  map[string]string `yaml:"cells"` // "col,row": "LCTRL+S"
+}
+
+const (
+	defaultHID      = "/dev/hidg0"
+	defaultKeyboard = "brain-kbd-i2c"
+	defaultTouch    = "mxs-lradc-ts"
+)
+
+var verbose bool
+
+func vlogf(format string, args ...any) {
+	if verbose {
+		log.Printf(format, args...)
+	}
 }
 
 // ---------- HID ----------
@@ -90,12 +115,87 @@ func parseCombo(s string) (Combo, error) {
 	return c, nil
 }
 
+// HIDWriter は /dev/hidg0 に非ブロッキングで書き込む。
+// ブロッキングで開くと、PCがレポートを取りに来ない間（スリープ中など）
+// write が永久に待ち、終了時の空レポートも送れなくなる。
+type HIDWriter struct {
+	path     string
+	fd       int
+	lastOpen time.Time
+	failing  bool
+}
+
+const (
+	hidRetryFor  = 50 * time.Millisecond // EAGAIN（前のレポートが未送信）を待つ上限
+	hidReopenGap = time.Second
+)
+
+func NewHIDWriter(path string) *HIDWriter {
+	w := &HIDWriter{path: path, fd: -1}
+	w.open()
+	return w
+}
+
+func (w *HIDWriter) open() error {
+	w.lastOpen = time.Now()
+	fd, err := syscall.Open(w.path, syscall.O_WRONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	w.fd = fd
+	return nil
+}
+
+// Write は失敗してもエラーを返すだけで、呼び出し側を止めない。
+func (w *HIDWriter) Write(r []byte) error {
+	err := w.write(r)
+	if err != nil && !w.failing {
+		log.Printf("hid write failed (PC未接続/スリープ中?): %v", err)
+	} else if err == nil && w.failing {
+		log.Printf("hid write recovered")
+	}
+	w.failing = err != nil
+	return err
+}
+
+func (w *HIDWriter) write(r []byte) error {
+	if w.fd < 0 {
+		if time.Since(w.lastOpen) < hidReopenGap {
+			return errors.New("hid device not open")
+		}
+		if err := w.open(); err != nil {
+			return err
+		}
+	}
+	deadline := time.Now().Add(hidRetryFor)
+	for {
+		_, err := syscall.Write(w.fd, r)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EINTR):
+			if time.Now().After(deadline) {
+				return err
+			}
+			time.Sleep(time.Millisecond)
+		case errors.Is(err, syscall.ESHUTDOWN):
+			// USB 未接続/未構成。fd はそのまま使える
+			return err
+		default:
+			syscall.Close(w.fd)
+			w.fd = -1
+			return err
+		}
+	}
+}
+
 // ---------- 押下状態とレポート送信 ----------
 
 type State struct {
 	mu     sync.Mutex
-	hid    *os.File
+	hid    *HIDWriter
 	active map[string]Combo // 入力元ID -> 出力
+	dirty  bool             // 最後の送信が失敗し、現在の状態がPCに届いていない
 }
 
 func (s *State) press(id string, c Combo) {
@@ -122,11 +222,29 @@ func (s *State) releaseAll() {
 	s.send()
 }
 
+// retryLoop は送信に失敗した状態を定期的に送り直す。
+// 離した瞬間のレポートが落ちても、キーが押しっぱなしにならないようにする。
+func (s *State) retryLoop() {
+	for range time.Tick(200 * time.Millisecond) {
+		s.mu.Lock()
+		if s.dirty {
+			s.send()
+		}
+		s.mu.Unlock()
+	}
+}
+
 // 呼び出し側でロック済みであること
 func (s *State) send() {
 	r := make([]byte, 8)
 	n := 0
-	for _, c := range s.active {
+	ids := make([]string, 0, len(s.active))
+	for id := range s.active {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids) // 6キーを超えたときにどれが残るかを毎回同じにする
+	for _, id := range ids {
+		c := s.active[id]
 		r[0] |= c.Mods
 	next:
 		for _, k := range c.Keys {
@@ -141,27 +259,62 @@ func (s *State) send() {
 			}
 		}
 	}
-	if _, err := s.hid.Write(r); err != nil {
-		// PC未接続時などはエラーになるのでログだけ
-		log.Printf("hid write: %v", err)
+	err := s.hid.Write(r)
+	s.dirty = err != nil
+	if err != nil {
+		vlogf("hid report % x (not sent: %v)", r, err)
+	} else {
+		vlogf("hid report % x", r)
 	}
+}
+
+// shutdown は空レポートを送ってから終了する。
+func (s *State) shutdown(code int) {
+	s.releaseAll()
+	os.Exit(code)
 }
 
 // ---------- 入力 ----------
 
-func runKeyboard(path string, keymap map[evdev.EvCode]Combo, s *State) {
-	dev, err := evdev.Open(path)
+// openInput は "/" で始まればパスとして、そうでなければデバイス名として開く。
+func openInput(spec string) (*evdev.InputDevice, error) {
+	if strings.HasPrefix(spec, "/") {
+		return evdev.Open(spec)
+	}
+	paths, err := evdev.ListDevicePaths()
 	if err != nil {
-		log.Fatalf("open keyboard: %v", err)
+		return nil, err
 	}
-	if err := dev.Grab(); err != nil {
-		log.Printf("grab keyboard: %v", err)
+	var names []string
+	for _, p := range paths {
+		if p.Name == spec {
+			return evdev.Open(p.Path)
+		}
+		names = append(names, fmt.Sprintf("%s=%q", p.Path, p.Name))
 	}
+	return nil, fmt.Errorf("input device %q not found (available: %s)", spec, strings.Join(names, ", "))
+}
+
+func describe(dev *evdev.InputDevice) string {
+	name, _ := dev.Name()
+	return fmt.Sprintf("%s (%s)", dev.Path(), name)
+}
+
+func evString(ev *evdev.InputEvent) string {
+	return fmt.Sprintf("%s %s %d", ev.TypeName(), ev.CodeName(), ev.Value)
+}
+
+func runKeyboard(dev *evdev.InputDevice, keymap map[evdev.EvCode]Combo, s *State) {
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
-			log.Fatalf("read keyboard: %v", err)
+			log.Printf("read keyboard: %v", err)
+			s.shutdown(1)
 		}
+		if ev.Type == evdev.EV_SYN || ev.Type == evdev.EV_MSC {
+			continue
+		}
+		vlogf("kbd: %s", evString(ev))
 		if ev.Type != evdev.EV_KEY {
 			continue
 		}
@@ -193,20 +346,14 @@ func cellOf(v, min, max int32, n int) int {
 	return i
 }
 
-func runTouch(tc *TouchConfig, cells map[string]Combo, s *State) {
-	dev, err := evdev.Open(tc.Device)
-	if err != nil {
-		log.Fatalf("open touch: %v", err)
-	}
-	if err := dev.Grab(); err != nil {
-		log.Printf("grab touch: %v", err)
-	}
+func runTouch(dev *evdev.InputDevice, tc *TouchConfig, cells map[string]Combo, s *State) {
 	var x, y int32
 	down, pressed := false, false
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
-			log.Fatalf("read touch: %v", err)
+			log.Printf("read touch: %v", err)
+			s.shutdown(1)
 		}
 		switch {
 		case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_X:
@@ -214,6 +361,7 @@ func runTouch(tc *TouchConfig, cells map[string]Combo, s *State) {
 		case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_Y:
 			y = ev.Value
 		case ev.Type == evdev.EV_KEY && ev.Code == evdev.BTN_TOUCH:
+			vlogf("touch: %s", evString(ev))
 			down = ev.Value == 1
 			if !down && pressed {
 				s.release("t")
@@ -222,10 +370,16 @@ func runTouch(tc *TouchConfig, cells map[string]Combo, s *State) {
 		case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
 			// 触れた瞬間のセルで確定（スライドしても変えない）
 			if down && !pressed {
+				px, py := x, y
+				if tc.SwapXY {
+					px, py = y, x
+				}
 				key := fmt.Sprintf("%d,%d",
-					cellOf(x, tc.MinX, tc.MaxX, tc.Cols),
-					cellOf(y, tc.MinY, tc.MaxY, tc.Rows))
-				if c, ok := cells[key]; ok {
+					cellOf(px, tc.MinX, tc.MaxX, tc.Cols),
+					cellOf(py, tc.MinY, tc.MaxY, tc.Rows))
+				c, ok := cells[key]
+				vlogf("touch: x=%d y=%d -> cell %s (mapped=%v)", x, y, key, ok)
+				if ok {
 					s.press("t", c)
 				}
 				pressed = true
@@ -234,23 +388,182 @@ func runTouch(tc *TouchConfig, cells map[string]Combo, s *State) {
 	}
 }
 
+// ---------- キャリブレーション ----------
+
+type sample struct{ x, y int32 }
+
+// runCalibrate はタッチごとの平均座標を表示し、四隅から範囲を求める。
+// 抵抗膜は触れ始め/離す瞬間の値が暴れるので、生の極値ではなく
+// タッチごとの平均を使う。
+func runCalibrate(spec string) {
+	dev, err := openInput(spec)
+	if err != nil {
+		log.Fatalf("open touch: %v", err)
+	}
+	log.Printf("calibrate: %s", describe(dev))
+	if infos, err := dev.AbsInfos(); err == nil {
+		for _, code := range []evdev.EvCode{evdev.ABS_X, evdev.ABS_Y, evdev.ABS_PRESSURE} {
+			if ai, ok := infos[code]; ok {
+				log.Printf("  %s: driver range %d..%d", evdev.CodeName(evdev.EV_ABS, code), ai.Minimum, ai.Maximum)
+			}
+		}
+	}
+	fmt.Fprintln(os.Stderr, "四隅を 左上 → 右上 → 右下 → 左下 の順に、1か所ずつしっかり押して離してください。")
+	fmt.Fprintln(os.Stderr, "終わったら Ctrl-C（または timeout で終了）。")
+
+	var (
+		mu                   sync.Mutex
+		touches              []sample
+		rawMinX, rawMaxX     int32 = 1<<31 - 1, -1 << 31
+		rawMinY, rawMaxY     int32 = 1<<31 - 1, -1 << 31
+		x, y                 int32
+		down                 bool
+		sumX, sumY, nSamples int64
+	)
+
+	report := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		fmt.Fprintf(os.Stderr, "\n=== calibration result (%d touches) ===\n", len(touches))
+		if len(touches) == 0 {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "raw sample extremes: x %d..%d, y %d..%d\n", rawMinX, rawMaxX, rawMinY, rawMaxY)
+		ax, bx, ay, by := touches[0].x, touches[0].x, touches[0].y, touches[0].y
+		for _, t := range touches {
+			ax, bx = min(ax, t.x), max(bx, t.x)
+			ay, by = min(ay, t.y), max(by, t.y)
+		}
+		fmt.Fprintf(os.Stderr, "per-touch average extremes: x %d..%d, y %d..%d\n", ax, bx, ay, by)
+		if len(touches) < 4 {
+			fmt.Fprintln(os.Stderr, "四隅が揃っていないので向きは判定できません")
+			return
+		}
+		c := touches[len(touches)-4:] // 最後の4回を 左上, 右上, 右下, 左下 とみなす
+		tl, tr, br, bl := c[0], c[1], c[2], c[3]
+		absd := func(v int32) int32 {
+			if v < 0 {
+				return -v
+			}
+			return v
+		}
+		swap := absd(tr.x-tl.x) < absd(bl.x-tl.x)
+		get := func(s sample) (int32, int32) {
+			if swap {
+				return s.y, s.x
+			}
+			return s.x, s.y
+		}
+		tlx, tly := get(tl)
+		trx, try := get(tr)
+		brx, bry := get(br)
+		blx, bly := get(bl)
+		// 見出しも値と同じ stdout に出す（stderr と分けると ssh 経由で順序が入れ替わる）。
+		// コメントにしておけば stdout をそのまま YAML として使える
+		fmt.Fprintf(os.Stdout, "  # suggested touch config (最後の4タッチ = 左上,右上,右下,左下)\n"+
+			"  swap_xy: %v\n  min_x: %d\n  max_x: %d\n  min_y: %d\n  max_y: %d\n",
+			swap, (tlx+blx)/2, (trx+brx)/2, (tly+try)/2, (bly+bry)/2)
+	}
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sig
+		report()
+		os.Exit(0)
+	}()
+
+	for {
+		ev, err := dev.ReadOne()
+		if err != nil {
+			log.Printf("read touch: %v", err)
+			report()
+			os.Exit(1)
+		}
+		switch {
+		case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_X:
+			x = ev.Value
+		case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_Y:
+			y = ev.Value
+		case ev.Type == evdev.EV_KEY && ev.Code == evdev.BTN_TOUCH:
+			mu.Lock()
+			if ev.Value == 1 {
+				down = true
+				sumX, sumY, nSamples = 0, 0, 0
+			} else if down {
+				down = false
+				if nSamples > 0 {
+					t := sample{int32(sumX / nSamples), int32(sumY / nSamples)}
+					touches = append(touches, t)
+					fmt.Fprintf(os.Stderr, "touch #%d: avg x=%d y=%d (%d samples)\n", len(touches), t.x, t.y, nSamples)
+				}
+			}
+			mu.Unlock()
+		case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
+			mu.Lock()
+			if down {
+				sumX += int64(x)
+				sumY += int64(y)
+				nSamples++
+				rawMinX, rawMaxX = min(rawMinX, x), max(rawMaxX, x)
+				rawMinY, rawMaxY = min(rawMinY, y), max(rawMaxY, y)
+				if verbose {
+					fmt.Fprintf(os.Stderr, "raw x=%d y=%d\n", x, y)
+				}
+			}
+			mu.Unlock()
+		}
+	}
+}
+
 // ---------- main ----------
 
-func main() {
-	cfgPath := "/etc/lefthand/config.yaml"
-	if len(os.Args) > 1 {
-		cfgPath = os.Args[1]
-	}
-	raw, err := os.ReadFile(cfgPath)
+func loadConfig(path string) (*Config, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if cfg.HIDDevice == "" {
-		cfg.HIDDevice = "/dev/hidg0"
+		cfg.HIDDevice = defaultHID
+	}
+	if cfg.Keyboard == "" {
+		cfg.Keyboard = defaultKeyboard
+	}
+	if cfg.Touch != nil && cfg.Touch.Device == "" {
+		cfg.Touch.Device = defaultTouch
+	}
+	return &cfg, nil
+}
+
+func main() {
+	calibrate := flag.Bool("calibrate", false, "タッチの生座標を表示し、四隅から座標範囲を求める")
+	flag.BoolVar(&verbose, "v", false, "受け取ったイベントと送ったHIDレポートを標準エラーに出す")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [config.yaml]\n", os.Args[0])
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	cfgPath := "/etc/lefthand/config.yaml"
+	if flag.NArg() > 0 {
+		cfgPath = flag.Arg(0)
+	}
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if *calibrate {
+		spec := defaultTouch
+		if cfg.Touch != nil {
+			spec = cfg.Touch.Device
+		}
+		runCalibrate(spec)
+		return
 	}
 
 	keymap := map[evdev.EvCode]Combo{}
@@ -266,31 +579,60 @@ func main() {
 		keymap[code] = c
 	}
 
-	hid, err := os.OpenFile(cfg.HIDDevice, os.O_WRONLY, 0)
-	if err != nil {
-		log.Fatalf("open hid: %v", err)
+	var cells map[string]Combo
+	if cfg.Touch != nil {
+		cells = map[string]Combo{}
+		for k, v := range cfg.Touch.Cells {
+			var col, row int
+			if _, err := fmt.Sscanf(k, "%d,%d", &col, &row); err != nil ||
+				col < 0 || col >= cfg.Touch.Cols || row < 0 || row >= cfg.Touch.Rows {
+				log.Fatalf("touch cell %q is out of %dx%d grid", k, cfg.Touch.Cols, cfg.Touch.Rows)
+			}
+			c, err := parseCombo(v)
+			if err != nil {
+				log.Fatal(err)
+			}
+			cells[fmt.Sprintf("%d,%d", col, row)] = c
+		}
 	}
-	s := &State{hid: hid, active: map[string]Combo{}}
+
+	// 入力デバイスを先に開く。失敗したら HID に何も送らずに終わる
+	kbd, err := openInput(cfg.Keyboard)
+	if err != nil {
+		log.Fatalf("open keyboard: %v", err)
+	}
+	var touch *evdev.InputDevice
+	if cfg.Touch != nil {
+		if touch, err = openInput(cfg.Touch.Device); err != nil {
+			log.Fatalf("open touch: %v", err)
+		}
+	}
+
+	s := &State{hid: NewHIDWriter(cfg.HIDDevice), active: map[string]Combo{}}
 
 	// 終了時に押しっぱなしを防ぐ
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sig
-		s.releaseAll()
-		os.Exit(0)
+		got := <-sig
+		log.Printf("%v received, releasing all keys", got)
+		s.shutdown(0)
 	}()
+	go s.retryLoop()
 
-	if cfg.Touch != nil {
-		cells := map[string]Combo{}
-		for k, v := range cfg.Touch.Cells {
-			c, err := parseCombo(v)
-			if err != nil {
-				log.Fatal(err)
-			}
-			cells[k] = c
-		}
-		go runTouch(cfg.Touch, cells, s)
+	// 起動直後の状態を揃える（前回異常終了したときの押しっぱなしも解除される）
+	s.releaseAll()
+
+	if err := kbd.Grab(); err != nil {
+		log.Printf("grab keyboard: %v", err)
 	}
-	runKeyboard(cfg.Keyboard, keymap, s)
+	log.Printf("keyboard: %s, %d keys mapped", describe(kbd), len(keymap))
+	if touch != nil {
+		if err := touch.Grab(); err != nil {
+			log.Printf("grab touch: %v", err)
+		}
+		log.Printf("touch: %s, %dx%d grid, %d cells mapped", describe(touch), cfg.Touch.Cols, cfg.Touch.Rows, len(cells))
+		go runTouch(touch, cfg.Touch, cells, s)
+	}
+	runKeyboard(kbd, keymap, s)
 }

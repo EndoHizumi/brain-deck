@@ -1,0 +1,21 @@
+[Unit]
+Description=Brain left-hand device daemon (evdev -> USB HID keyboard)
+# ガジェット（NCM+HID+ACM）は ethernet_gadget.service の drop-in で作る。
+# Wants= なので、ガジェット作成が失敗しても本体は起動する
+# （hidg0 への書き込み失敗は内部で吸収する）
+Wants=ethernet_gadget.service
+After=ethernet_gadget.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lefthand /etc/lefthand/config.yaml
+Restart=on-failure
+RestartSec=2
+# SIGTERM で空レポートを送ってから終わる
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

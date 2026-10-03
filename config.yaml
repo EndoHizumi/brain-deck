@@ -1,8 +1,9 @@
 # /etc/lefthand/config.yaml
 hid_device: /dev/hidg0
 
-# evtest で実際のデバイスを確認して書き換える
-keyboard: /dev/input/event0
+# パス(/dev/input/eventN)かデバイス名のどちらでも指定できる。
+# event 番号は起動順で変わることがあるので、デバイス名を推奨
+keyboard: brain-kbd-i2c
 
 # Brain側のキー(Linuxのキー名) : PCに送るキー
 keys:
@@ -14,14 +15,21 @@ keys:
   KEY_W: E
 
 touch:
-  device: /dev/input/event1
+  device: mxs-lradc-ts
   cols: 4
   rows: 3
-  # evtest で四隅を触って ABS_X / ABS_Y の値を見て調整（min>maxで反転）
-  min_x: 0
-  max_x: 4095
-  min_y: 0
-  max_y: 4095
+  # lefthand -calibrate で四隅を触って得た値を入れる（min>maxで反転）
+  # swap_xy: true でパネルのX/Yを入れ替える
+  # 2026-10-03 キャリブレーション（爪で画面の端ぎりぎりの四隅を押した値）
+  #   左上 229,3834 / 右上 3990,3773 / 右下 3886,352 / 左下 224,416
+  #   中央 2191,2222 も計算上の中心とほぼ一致（線形でずれなし）
+  # 指の腹で角を押した値（min_x 311 など）だと、セルの境目が内側に寄る
+  # Y は上下が逆なので min_y > max_y
+  swap_xy: false
+  min_x: 226
+  max_x: 3938
+  min_y: 3803
+  max_y: 384
   cells:
     "0,0": B
     "1,0": E
