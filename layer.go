@@ -24,6 +24,7 @@ type View struct {
 	Cols, Rows int
 	Cells      []*Action // row*Cols+col。nil は割り当てなし
 	Soft       map[string]*Action
+	km         *Keymap // この View を作った割り当て（設定を差し替えると変わる）
 	stackKey   string
 }
 
@@ -40,7 +41,7 @@ const (
 // 格子の大きさは、上から見て最初に touch を持つレイヤーで決まる。
 // セルが下のレイヤーに透過するのは、格子の大きさが同じあいだだけ。
 func (km *Keymap) view(stack []int) *View {
-	v := &View{Top: stack[len(stack)-1], Soft: map[string]*Action{}}
+	v := &View{Top: stack[len(stack)-1], Soft: map[string]*Action{}, km: km}
 	var cells map[cellPos]*Action
 	for i := len(stack) - 1; i >= 0; i-- {
 		g := km.Layers[stack[i]].Grid
@@ -119,6 +120,8 @@ type Engine struct {
 	view   *View
 	gen    uint64
 	onView func(*View) // 重なりが変わったとき（画面の描き直し）。待たずに返ること
+	// onStatus は重なりが変わったとき（設定 GUI への通知）。ロックを持ったまま呼ぶので、待たずに返ること
+	onStatus func(EngineStatus)
 }
 
 func NewEngine(km *Keymap, out *State) *Engine {
@@ -286,6 +289,16 @@ func (e *Engine) refresh() {
 	if e.onView != nil {
 		e.onView(v)
 	}
+	if e.onStatus != nil {
+		e.onStatus(e.statusLocked())
+	}
+}
+
+// SetOnStatus は、重なりが変わったときの通知先を設定する（設定 GUI へのレイヤーの通知）。
+func (e *Engine) SetOnStatus(f func(EngineStatus)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onStatus = f
 }
 
 func (e *Engine) describe() string {
@@ -294,6 +307,72 @@ func (e *Engine) describe() string {
 		parts = append(parts, fmt.Sprintf("%s(%s)", e.km.Layers[en.layer].Name, strings.TrimPrefix(en.kind.String(), "layer_")))
 	}
 	return strings.Join(parts, " > ")
+}
+
+// Reload は割り当てを差し替える（設定 GUI からの保存）。デーモンは止めない。
+// 押しているキーをすべて離し（空のレポートを送る）、重なりを base だけに戻してから差し替える。
+// 押したまま差し替えたキーやタッチは、離しても何も送らない。
+func (e *Engine) Reload(km *Keymap) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.out.releaseAll()
+	e.down = map[string]*Action{}
+	e.stack = nil
+	e.km = km
+	e.view = nil // 重なりが同じでも作り直し、画面に知らせる
+	e.refresh()
+	log.Printf("config reloaded")
+	logLayers(km)
+}
+
+// HitTest は、タッチの生座標が今の格子のどのセルか、どのソフトキーの範囲かを返す（押さない）。
+// Soft は割り当ての有無によらず、範囲に入っていれば名前を返す。
+func (e *Engine) HitTest(x, y int32) TouchHit {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	v := e.view
+	h := TouchHit{Gen: v.Gen, Col: -1, Row: -1}
+	if name, ok := e.km.hitSoft(x, y); ok {
+		h.Soft = name
+	}
+	if v.Cols > 0 {
+		h.Col, h.Row = touchCell(e.km.Touch, v.Cols, v.Rows, x, y)
+	}
+	return h
+}
+
+// EngineStatus は設定 GUI に返す、今のレイヤーの状態。
+type EngineStatus struct {
+	Layer string        `json:"layer"` // 今のレイヤー（いちばん上）
+	Label string        `json:"label"`
+	Mode  string        `json:"mode"` // base、latched（切り替えたまま）、temp（一時的）
+	Stack []StackStatus `json:"stack"`
+	Cols  int           `json:"cols"`
+	Rows  int           `json:"rows"`
+}
+
+type StackStatus struct {
+	Layer string `json:"layer"`
+	Kind  string `json:"kind"`
+}
+
+var modeNames = [...]string{modeBase: "base", modeLatched: "latched", modeTemp: "temp"}
+
+func (e *Engine) Status() EngineStatus {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.statusLocked()
+}
+
+func (e *Engine) statusLocked() EngineStatus {
+	v := e.view
+	top := e.km.Layers[v.Top]
+	st := EngineStatus{Layer: top.Name, Label: top.title(), Mode: modeNames[v.Mode],
+		Stack: []StackStatus{}, Cols: v.Cols, Rows: v.Rows}
+	for _, en := range e.stack {
+		st.Stack = append(st.Stack, StackStatus{e.km.Layers[en.layer].Name, en.kind.String()})
+	}
+	return st
 }
 
 // SetOnView は画面への通知先を設定する。shown は画面に描いてある View.Gen で、

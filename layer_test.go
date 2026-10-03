@@ -347,7 +347,7 @@ layers:
   - name: a
     keys: { KEY_Q: { layer_to: b } }
   - name: b
-    keys: { KEY_Q: { layer_to: a } }`, `from layer "a", "b"`},
+    keys: { KEY_Q: { layer_to: a } }`, `from layer "b"`},
 		{"toggle blocked by none", `
 layers:
   - name: base
@@ -403,6 +403,48 @@ layers:
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// 誤りには、GUI が表示する場所（JSON Pointer）が付く
+func TestConfigProblemPaths(t *testing.T) {
+	_, _, err := compileYAML(t, `
+touch: { min_x: 0, max_x: 1, min_y: 0, max_y: 1, soft_areas: { "a/b": { x: [0, 1], y: [0, 1] } } }
+layers:
+  - name: base
+    keys: { KEY_Q: LCTRL+NOPE, KEY_NOPE: B }
+    touch: { cols: 2, rows: 2, cells: { "2,0": B, "1,1": { layer_hold: nope } } }
+    soft_keys: { "a/b": { layer_to: gone } }
+  - name: other
+    touch: { cols: 0, rows: 3 }`)
+	got := map[string]bool{}
+	for _, p := range asProblems(err) {
+		got[p.Path] = true
+	}
+	for _, want := range []string{
+		"/layers/0/keys/KEY_Q", "/layers/0/keys/KEY_NOPE",
+		"/layers/0/touch/cells/2,0", "/layers/0/touch/cells/1,1",
+		"/layers/0/soft_keys/a~1b", "/layers/1/touch",
+	} {
+		if !got[want] {
+			t.Errorf("missing problem at %s (got %v)", want, got)
+		}
+	}
+
+	_, _, err = compileYAML(t, `
+layers:
+  - name: base
+    keys: { KEY_Q: { layer_to: a } }
+  - name: a`)
+	if p := asProblems(err); len(p) != 1 || p[0].Path != "/layers/1" {
+		t.Errorf("way back: %+v", p)
+	}
+	_, _, err = compileYAML(t, `
+layers:
+  - name: base
+  - name: base`)
+	if p := asProblems(err); len(p) != 1 || p[0].Path != "/layers/1/name" {
+		t.Errorf("duplicate: %+v", p)
 	}
 }
 

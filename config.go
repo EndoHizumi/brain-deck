@@ -110,6 +110,32 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// MarshalYAML は、手で読み書きしやすい形で書き出す。
+// キーだけなら `LCTRL+Z`、それ以外は 1 行のフロー形式 `{ key: B, label: ブラシ }` にする。
+func (a ActionSpec) MarshalYAML() (any, error) {
+	if a.Key != "" && a.count() == 1 && a.Label == "" {
+		return a.Key, nil
+	}
+	type plain ActionSpec
+	var n yaml.Node
+	if err := n.Encode(plain(a)); err != nil {
+		return nil, err
+	}
+	n.Style = yaml.FlowStyle
+	return &n, nil
+}
+
+// MarshalYAML は `{ x: [a, b], y: [c, d] }` の 1 行で書き出す。
+func (a SoftArea) MarshalYAML() (any, error) {
+	type plain SoftArea
+	var n yaml.Node
+	if err := n.Encode(plain(a)); err != nil {
+		return nil, err
+	}
+	n.Style = yaml.FlowStyle
+	return &n, nil
+}
+
 func (a ActionSpec) count() int {
 	n := 0
 	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo} {
@@ -174,7 +200,7 @@ func parseConfig(raw []byte) (*Config, error) {
 	switch cfg.Display.Rotate {
 	case 0, 90, 180, 270:
 	default:
-		return nil, errors.New("display.rotate must be 0, 90, 180 or 270")
+		return nil, Problems{{Path: "/display/rotate", Message: "display.rotate must be 0, 90, 180 or 270"}}
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
@@ -188,7 +214,7 @@ func (c *Config) normalize() error {
 	legacyTouch := t != nil && (t.Cols != 0 || t.Rows != 0 || t.Cells != nil)
 	if len(c.Layers) > 0 {
 		if c.Keys != nil || legacyTouch {
-			return errors.New("with layers, write keys and touch cols/rows/cells inside each layer")
+			return Problems{{Path: "/layers", Message: "with layers, write keys and touch cols/rows/cells inside each layer"}}
 		}
 		return nil
 	}
@@ -208,6 +234,40 @@ func (c *Config) displayEnabled() bool {
 }
 
 // ---------- 割り当ての組み立てと検証 ----------
+
+// Problem は設定の誤り 1 つ。Path は誤りの場所を JSON Pointer（RFC 6901）で表す。
+// 例：/layers/1/keys/KEY_Q、/layers/0/touch/cells/0,0。場所が分からないときは空。
+// 設定 GUI は Path を見て、誤りをその場所に表示する。
+type Problem struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+// Problems はまとめて見つかった誤り。error として使える。
+type Problems []Problem
+
+func (p Problems) Error() string {
+	msgs := make([]string, len(p))
+	for i, e := range p {
+		msgs[i] = e.Message
+	}
+	return strings.Join(msgs, "\n")
+}
+
+func (p Problems) sort() { sort.Slice(p, func(i, j int) bool { return p[i].Message < p[j].Message }) }
+
+// asProblems は err を Problems にする。場所の分からない誤り（YAML の文法など）は Path を空にする。
+func asProblems(err error) Problems {
+	var p Problems
+	if errors.As(err, &p) {
+		return p
+	}
+	return Problems{{Message: err.Error()}}
+}
+
+func pointerEscape(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
+}
 
 type ActKind uint8
 
@@ -281,17 +341,24 @@ func (km *Keymap) area(name string) (SoftArea, bool) {
 func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	km = &Keymap{Touch: cfg.Touch}
 	if len(cfg.Layers) == 0 {
-		return nil, nil, errors.New("no layers")
+		return nil, nil, Problems{{Path: "/layers", Message: "no layers"}}
 	}
 	index := map[string]int{}
+	var nameErrs Problems
 	for i, lc := range cfg.Layers {
+		path := fmt.Sprintf("/layers/%d/name", i)
 		if lc.Name == "" {
-			return nil, nil, fmt.Errorf("layers[%d]: name is required", i)
+			nameErrs = append(nameErrs, Problem{path, fmt.Sprintf("layers[%d]: name is required", i)})
+			continue
 		}
 		if _, dup := index[lc.Name]; dup {
-			return nil, nil, fmt.Errorf("layer %q is defined twice", lc.Name)
+			nameErrs = append(nameErrs, Problem{path, fmt.Sprintf("layer %q is defined twice", lc.Name)})
+			continue
 		}
 		index[lc.Name] = i
+	}
+	if len(nameErrs) > 0 {
+		return nil, nil, nameErrs
 	}
 	if cfg.Touch != nil {
 		names := make([]string, 0, len(cfg.Touch.SoftAreas))
@@ -304,10 +371,12 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		}
 	}
 
-	var errs []string
-	fail := func(format string, args ...any) { errs = append(errs, fmt.Sprintf(format, args...)) }
+	var errs Problems
+	fail := func(path, format string, args ...any) {
+		errs = append(errs, Problem{Path: path, Message: fmt.Sprintf(format, args...)})
+	}
 
-	action := func(where string, self int, s ActionSpec) *Action {
+	action := func(path, where string, self int, s ActionSpec) *Action {
 		a := &Action{Spec: s}
 		target := ""
 		switch {
@@ -317,7 +386,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			a.Kind = actKey
 			c, err := parseCombo(s.Key)
 			if err != nil {
-				fail("%s: %v", where, err)
+				fail(path, "%s: %v", where, err)
 			}
 			a.Combo = c
 		case s.LayerHold != "":
@@ -329,15 +398,15 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		case s.LayerTo != "":
 			a.Kind, target = actTo, s.LayerTo
 		default:
-			fail("%s: empty assignment", where)
+			fail(path, "%s: empty assignment", where)
 		}
 		if a.Kind.isLayer() {
 			t, ok := index[target]
 			switch {
 			case !ok:
-				fail("%s: %s refers to unknown layer %q", where, a.Kind, target)
+				fail(path, "%s: %s refers to unknown layer %q", where, a.Kind, target)
 			case t == 0 && (a.Kind == actToggle):
-				fail("%s: layer_toggle cannot target the base layer %q (use layer_to)", where, target)
+				fail(path, "%s: layer_toggle cannot target the base layer %q (use layer_to)", where, target)
 			}
 			a.Layer = t
 		}
@@ -346,63 +415,68 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 
 	var baseGrid *Grid
 	for li, lc := range cfg.Layers {
+		lp := fmt.Sprintf("/layers/%d", li)
 		l := &Layer{Name: lc.Name, Label: lc.Label, Keys: map[evdev.EvCode]*Action{}, Soft: map[string]*Action{}}
 		for name, s := range lc.Keys {
+			path := lp + "/keys/" + pointerEscape(name)
 			where := fmt.Sprintf("layer %q key %s", lc.Name, name)
 			code, ok := evdev.KEYFromString[name]
 			if !ok {
-				fail("%s: unknown source key (use Linux names such as KEY_A)", where)
+				fail(path, "%s: unknown source key (use Linux names such as KEY_A)", where)
 				continue
 			}
-			l.Keys[code] = action(where, li, s)
+			l.Keys[code] = action(path, where, li, s)
 		}
 		if lc.Touch != nil {
+			tp := lp + "/touch"
 			if cfg.Touch == nil {
-				fail("layer %q has touch, but the touch section (device and calibration) is missing", lc.Name)
+				fail("/touch", "layer %q has touch, but the touch section (device and calibration) is missing", lc.Name)
 			}
 			g := &Grid{Cols: lc.Touch.Cols, Rows: lc.Touch.Rows, Cells: map[cellPos]*Action{}}
 			if (g.Cols == 0) != (g.Rows == 0) {
-				fail("layer %q touch: write both cols and rows, or neither", lc.Name)
+				fail(tp, "layer %q touch: write both cols and rows, or neither", lc.Name)
 			}
 			if g.Cols == 0 && baseGrid != nil {
 				g.Cols, g.Rows = baseGrid.Cols, baseGrid.Rows
 			}
 			if g.Cols <= 0 || g.Rows <= 0 || g.Cols > 16 || g.Rows > 16 {
-				fail("layer %q touch: cols and rows must be 1..16", lc.Name)
+				fail(tp, "layer %q touch: cols and rows must be 1..16", lc.Name)
 				g.Cols, g.Rows = max(g.Cols, 1), max(g.Rows, 1)
 			}
 			for k, s := range lc.Touch.Cells {
+				path := tp + "/cells/" + pointerEscape(k)
 				where := fmt.Sprintf("layer %q touch cell %q", lc.Name, k)
 				var p cellPos
 				if _, err := fmt.Sscanf(k, "%d,%d", &p.Col, &p.Row); err != nil ||
 					p.Col < 0 || p.Col >= g.Cols || p.Row < 0 || p.Row >= g.Rows {
-					fail("%s: out of the %dx%d grid", where, g.Cols, g.Rows)
+					fail(path, "%s: out of the %dx%d grid", where, g.Cols, g.Rows)
 					continue
 				}
 				if _, dup := g.Cells[p]; dup {
-					fail("%s: defined twice", where)
+					fail(path, "%s: defined twice", where)
 				}
-				g.Cells[p] = action(where, li, s)
+				g.Cells[p] = action(path, where, li, s)
 			}
 			l.Grid = g
 			if li == 0 {
 				baseGrid = g
 			}
 		} else if li == 0 && cfg.Touch != nil {
-			fail("base layer %q needs touch cols and rows", lc.Name)
+			fail(lp+"/touch", "base layer %q needs touch cols and rows", lc.Name)
 		}
 		for name, s := range lc.SoftKeys {
+			path := lp + "/soft_keys/" + pointerEscape(name)
 			where := fmt.Sprintf("layer %q soft key %q", lc.Name, name)
 			if _, ok := km.area(name); !ok {
-				fail("%s: not defined in touch.soft_areas", where)
+				fail(path, "%s: not defined in touch.soft_areas", where)
 			}
-			l.Soft[name] = action(where, li, s)
+			l.Soft[name] = action(path, where, li, s)
 		}
 		km.Layers = append(km.Layers, l)
 	}
 	if len(errs) > 0 {
-		sort.Strings(errs)
-		return nil, nil, errors.New(strings.Join(errs, "\n"))
+		errs.sort()
+		return nil, nil, errs
 	}
 
 	if err := km.checkWayBack(); err != nil {
@@ -489,16 +563,17 @@ func (km *Keymap) checkWayBack() error {
 			}
 		}
 	}
-	var bad []string
+	var bad Problems
 	for i := 1; i < n; i++ {
 		if latched[i] && !good[i] {
-			bad = append(bad, fmt.Sprintf("%q", km.Layers[i].Name))
+			bad = append(bad, Problem{fmt.Sprintf("/layers/%d", i), fmt.Sprintf(
+				"no way back to the base layer %q from layer %q: "+
+					"put `layer_to: %s` (or a layer_toggle of the layer itself) on a key or cell that is usable there",
+				km.Layers[0].Name, km.Layers[i].Name, km.Layers[0].Name)})
 		}
 	}
 	if len(bad) > 0 {
-		return fmt.Errorf("no way back to the base layer %q from layer %s: "+
-			"put `layer_to: %s` (or a layer_toggle of the layer itself) on a key or cell that is usable there",
-			km.Layers[0].Name, strings.Join(bad, ", "), km.Layers[0].Name)
+		return bad
 	}
 	return nil
 }

@@ -12,6 +12,8 @@
 //	lefthand [-v] [config.yaml]            通常動作
 //	lefthand -calibrate [config.yaml]      タッチの生座標を表示して範囲を求める
 //	lefthand -check [config.yaml]          設定を検証する
+//
+// 動作中は /dev/ttyGS1（USB シリアル）で設定 GUI のリクエストを受ける（control.go）。
 package main
 
 import (
@@ -307,7 +309,7 @@ func evString(ev *evdev.InputEvent) string {
 	return fmt.Sprintf("%s %s %d", ev.TypeName(), ev.CodeName(), ev.Value)
 }
 
-func runKeyboard(dev *evdev.InputDevice, e *Engine) {
+func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor) {
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
@@ -324,6 +326,9 @@ func runKeyboard(dev *evdev.InputDevice, e *Engine) {
 		switch ev.Value {
 		case 1:
 			vlogf("kbd: %s", evString(ev))
+			if mon.KeyPressed(e, ev.Code) {
+				continue // 学習モード：設定 GUI に知らせるだけで、PC には送らない
+			}
 			e.PressKey(ev.Code)
 		case 0:
 			vlogf("kbd: %s", evString(ev))
@@ -358,7 +363,7 @@ func evTime(ev *evdev.InputEvent) time.Time {
 	return time.Unix(int64(ev.Time.Sec), int64(ev.Time.Usec)*1000)
 }
 
-func runTouch(dev *evdev.InputDevice, e *Engine, disp *Display) {
+func runTouch(dev *evdev.InputDevice, e *Engine, disp *Display, mon *Monitor) {
 	var x, y int32
 	down, pressed := false, false
 	var lit *TouchHit // ハイライト中のセル
@@ -387,6 +392,12 @@ func runTouch(dev *evdev.InputDevice, e *Engine, disp *Display) {
 		case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
 			// 触れた瞬間のセルで確定（スライドしても変えない）
 			if down && !pressed {
+				if mon.TouchPressed(e, x, y) {
+					// 学習モード：設定 GUI に知らせるだけ。離したときもエンジンには何も残っていない
+					vlogf("touch: x=%d y=%d -> settings GUI only", x, y)
+					pressed = true
+					continue
+				}
 				h := e.PressTouch(x, y) // HID を先に送り、描画はそのあと
 				if h.Mapped && h.Soft == "" {
 					disp.SetPressed(h.Gen, h.Col, h.Row, true)
@@ -661,6 +672,7 @@ func main() {
 	pngLayer := flag.String("render-layer", "", "-render-png で base に重ねるレイヤー（例: edit、edit:hold）")
 	pngPressed := flag.String("render-pressed", "", "-render-png で押下中として描くセル（例: \"0,0 2,1\"）")
 	pngSize := flag.String("render-size", "800x480", "-render-png の画面サイズ")
+	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [-check] [-dump-json] [-restore-console] [-render-png out.png] [config.yaml]\n", os.Args[0])
 		flag.PrintDefaults()
@@ -692,7 +704,15 @@ func main() {
 
 	km, warns, err := compileKeymap(cfg)
 	if err != nil {
-		log.Fatalf("%s:\n%v", cfgPath, err)
+		var msgs []string
+		for _, p := range asProblems(err) {
+			msg := p.Message
+			if p.Path != "" {
+				msg += "  [" + p.Path + "]"
+			}
+			msgs = append(msgs, msg)
+		}
+		log.Fatalf("%s:\n%s", cfgPath, strings.Join(msgs, "\n"))
 	}
 	for _, w := range warns {
 		log.Printf("warning: %s", w)
@@ -776,11 +796,41 @@ func main() {
 			} else {
 				disp = d
 				addAtExit(d.Close)
-				// レイヤーが変わったら描き直す。SetLayout は待たずに返る
-				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(km, v)) }, first.Gen)
+				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
+				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
 			}
 		}
-		go runTouch(touch, e, disp)
 	}
-	runKeyboard(kbd, e)
+
+	// 設定 GUI（USB シリアル）。通信が止まっても、入力の処理は待たない
+	mon := &Monitor{}
+	e.SetOnStatus(mon.LayerChanged)
+	if *serialPath != "" {
+		ctl := &Controller{
+			store:   &configStore{path: cfgPath, cfg: cfg, km: km, apply: reloader(e)},
+			engine:  e,
+			monitor: mon,
+			started: time.Now(),
+		}
+		go ctl.runSerial(*serialPath)
+	}
+
+	if touch != nil {
+		go runTouch(touch, e, disp, mon)
+	}
+	runKeyboard(kbd, e, mon)
+}
+
+// reloader は、保存した設定を動いているエンジンに反映する関数を返す。
+// 画面の描き直しは、エンジンの onView から行われる。
+func reloader(e *Engine) func(*Config, *Keymap) error {
+	return func(cfg *Config, km *Keymap) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic while applying: %v", r)
+			}
+		}()
+		e.Reload(km)
+		return nil
+	}
 }

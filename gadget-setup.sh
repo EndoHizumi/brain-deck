@@ -1,6 +1,8 @@
 #!/bin/bash
-# USB ガジェット eth を NCM + HID キーボード + CDC-ACM の複合デバイスにして、
+# USB ガジェット eth を NCM + HID キーボード + CDC-ACM 2 つの複合デバイスにして、
 # usb0 に固定 IP を付ける。
+#   acm.usb0 → /dev/ttyGS0：シリアルコンソール（getty）用
+#   acm.usb1 → /dev/ttyGS1：設定 GUI（lefthand の -serial）用
 #
 # ethernet_gadget.service の drop-in から、Brainux 標準の enable_ethernet_gadget の
 # 代わりに実行される（systemd/ethernet_gadget.service.d/lefthand.conf）。
@@ -10,6 +12,8 @@
 # 何度実行してもよい:
 #   - eth が無ければ Brainux と同じ設定で作る
 #   - HID/ACM が無ければ追加する（失敗しても NCM だけで接続は維持する）
+#   - 設定 GUI 用の ACM（acm.usb1）が無ければ追加する。動作中に追加するときは、
+#     一度 UDC から切り離すので usb0 が数秒リンクダウンする（IP はそのまま残る）
 #   - UDC が未接続なら接続し、usb0 に固定 IP を付ける
 #
 # 環境変数（動作確認用）:
@@ -27,6 +31,21 @@ NCM_DEV_ADDR=8a:15:8b:44:3a:02
 NCM_HOST_ADDR=8a:15:8b:44:3a:01
 
 hid_ok=1
+# 付け直しのために止めた lefthand.service を、最後に再開する印（サブシェルからも分かるようにファイルにする）
+RESTART_MARK=/run/lefthand-gadget-restart
+
+# unbind_udc は UDC から切り離す。動作中に付け直すときだけ切り離す（起動時は未接続）。
+# このカーネル（6.1）の f_hid は、/dev/hidg0 を開いたまま付け直すと、そのあと ENXIO で開けなくなる。
+# そのため、先に lefthand.service を止めて hidg0 を閉じさせる
+unbind_udc() {
+  [ -n "$(cat "$G/UDC")" ] || return 0
+  if systemctl is-active --quiet lefthand.service; then
+    echo "lefthand.service を止めてから付け直します"
+    systemctl stop lefthand.service
+    touch "$RESTART_MARK"
+  fi
+  echo "" > "$G/UDC"
+}
 
 create_eth() {
   modprobe libcomposite 2>/dev/null || true
@@ -66,9 +85,7 @@ add_hid_acm() {
   done
 
   # 接続済みなら一旦切る（usb0 が一瞬リンクダウンする）。起動時は未接続なので切れない
-  if [ -n "$(cat UDC)" ]; then
-    echo "" > UDC
-  fi
+  unbind_udc
 
   # 元スクリプトは VID/PID 未設定(0000:0000)なので設定する
   echo 0x1d6b > idVendor    # Linux Foundation（個人開発用）
@@ -86,13 +103,28 @@ add_hid_acm() {
   printf '\x05\x01\x09\x06\xa1\x01\x05\x07\x19\xe0\x29\xe7\x15\x00\x25\x01\x75\x01\x95\x08\x81\x02\x95\x01\x75\x08\x81\x03\x95\x05\x75\x01\x05\x08\x19\x01\x29\x05\x91\x02\x95\x01\x75\x03\x91\x03\x95\x06\x75\x08\x15\x00\x25\x65\x05\x07\x19\x00\x29\x65\x81\x00\xc0' \
     > functions/hid.usb0/report_desc
 
-  # --- CDC-ACM（設定GUI / シリアルログイン用 → /dev/ttyGS0） ---
+  # --- CDC-ACM（シリアルログイン用 → /dev/ttyGS0） ---
 
   for f in hid.usb0 acm.usb0; do
     [ -e "configs/c.1/$f" ] || ln -s "functions/$f" configs/c.1/
   done
   echo "NCM+HID+ACM" > configs/c.1/strings/0x409/configuration
   echo "added: HID + ACM"
+}
+
+# 設定 GUI 用の 2 つ目の ACM（/dev/ttyGS1）。acm.usb0 より後にリンクするので、
+# PC 側では ttyGS0 が先の番号（Linux なら /dev/ttyACM0）、こちらが次の番号（/dev/ttyACM1）になる
+add_acm_gui() {
+  cd "$G"
+  [ -e configs/c.1/acm.usb1 ] && return 0
+  if ! mkdir -p functions/acm.usb1 2>/dev/null; then
+    echo "functions/acm.usb1 を作成できません（ACM のポート数の上限?）" >&2
+    return 1
+  fi
+  unbind_udc
+  ln -s functions/acm.usb1 configs/c.1/
+  echo "NCM+HID+ACM+ACM" > configs/c.1/strings/0x409/configuration
+  echo "added: ACM for the settings GUI (port $(cat functions/acm.usb1/port_num))"
 }
 
 [ -d "$G" ] || create_eth
@@ -113,8 +145,23 @@ else
   fi
 fi
 
+# GUI 用の ACM は HID が使えるときだけ足す。失敗しても、ほかの機能はそのまま使う
+if [ "$hid_ok" = 1 ]; then
+  set +e
+  (set -e; add_acm_gui)
+  rc=$?
+  set -e
+  if [ "$rc" != 0 ]; then
+    echo "設定 GUI 用の ACM を追加できませんでした。GUI は使えませんが、ほかは動きます" >&2
+  fi
+fi
+
 if [ "${SKIP_BIND:-0}" = 1 ]; then
   echo "SKIP_BIND=1: UDC 接続と IP 設定を省略"
+  if [ -e "$RESTART_MARK" ]; then
+    rm -f "$RESTART_MARK"
+    systemctl start --no-block lefthand.service
+  fi
   [ "$hid_ok" = 1 ]
   exit
 fi
@@ -128,6 +175,12 @@ fi
 ip link set usb0 up
 ip addr add "$BRAIN_IP" dev usb0 2>/dev/null || true   # 付与済みなら何もしない
 
-ls -l /dev/hidg0 /dev/ttyGS0 || echo "warning: /dev/hidg0 または /dev/ttyGS0 が見つかりません" >&2
+if [ -e "$RESTART_MARK" ]; then
+  rm -f "$RESTART_MARK"
+  systemctl start --no-block lefthand.service
+  echo "lefthand.service を再開しました"
+fi
+
+ls -l /dev/hidg0 /dev/ttyGS0 /dev/ttyGS1 || echo "warning: /dev/hidg0、/dev/ttyGS0、/dev/ttyGS1 のどれかが見つかりません" >&2
 echo "done: usb0 = $BRAIN_IP"
 [ "$hid_ok" = 1 ]
