@@ -1,0 +1,456 @@
+{
+  "model": "PW-SH2",
+  "keys": [
+    {
+      "id": "power",
+      "label": "電源",
+      "row": 0,
+      "x": -0.5,
+      "w": 1,
+      "note": "イベントが出ない（カーネルが処理する）"
+    },
+    {
+      "id": "search",
+      "label": "調べる",
+      "code": "KEY_ESC",
+      "symbol": "KEY_ESC",
+      "row": 0,
+      "x": 0.5,
+      "w": 1,
+      "note": "「戻る」と同じコード。区別できない"
+    },
+    {
+      "id": "kokugo",
+      "label": "国語",
+      "code": "KEY_TAB",
+      "symbol": "KEY_TAB",
+      "row": 0,
+      "x": 1.5,
+      "w": 1
+    },
+    {
+      "id": "eiwa",
+      "label": "英和/和英",
+      "code": "KEY_PAGEUP",
+      "symbol": "KEY_PAGEUP",
+      "row": 0,
+      "x": 2.5,
+      "w": 1,
+      "note": "「ページアップ」キーではない"
+    },
+    {
+      "id": "mydict",
+      "label": "マイ辞書",
+      "code": "KEY_PAGEDOWN",
+      "symbol": "KEY_PAGEDOWN",
+      "row": 0,
+      "x": 3.5,
+      "w": 1
+    },
+    {
+      "id": "history",
+      "label": "履歴/しおり",
+      "code": "KEY_INSERT",
+      "symbol": "KEY_INSERT",
+      "row": 0,
+      "x": 4.5,
+      "w": 1
+    },
+    {
+      "id": "marker",
+      "label": "マーカーテスト",
+      "code": "KEY_DELETE",
+      "symbol": "KEY_DELETE",
+      "row": 0,
+      "x": 5.5,
+      "w": 1
+    },
+    {
+      "id": "tool",
+      "label": "ツール",
+      "row": 0,
+      "x": 7,
+      "w": 1,
+      "note": "dts に割り当てがない。イベントが出ない"
+    },
+    {
+      "id": "home",
+      "label": "ホーム",
+      "row": 0,
+      "x": 8,
+      "w": 1,
+      "note": "dts に割り当てがない。イベントが出ない"
+    },
+    {
+      "id": "q",
+      "label": "Q",
+      "code": "KEY_Q",
+      "symbol": "KEY_1",
+      "row": 1,
+      "x": 0,
+      "w": 1
+    },
+    {
+      "id": "w",
+      "label": "W",
+      "code": "KEY_W",
+      "symbol": "KEY_2",
+      "row": 1,
+      "x": 1,
+      "w": 1
+    },
+    {
+      "id": "e",
+      "label": "E",
+      "code": "KEY_E",
+      "symbol": "KEY_3",
+      "row": 1,
+      "x": 2,
+      "w": 1
+    },
+    {
+      "id": "r",
+      "label": "R",
+      "code": "KEY_R",
+      "symbol": "KEY_4",
+      "row": 1,
+      "x": 3,
+      "w": 1
+    },
+    {
+      "id": "t",
+      "label": "T",
+      "code": "KEY_T",
+      "symbol": "KEY_5",
+      "row": 1,
+      "x": 4,
+      "w": 1
+    },
+    {
+      "id": "y",
+      "label": "Y",
+      "code": "KEY_Y",
+      "symbol": "KEY_6",
+      "row": 1,
+      "x": 5,
+      "w": 1
+    },
+    {
+      "id": "u",
+      "label": "U",
+      "code": "KEY_U",
+      "symbol": "KEY_7",
+      "row": 1,
+      "x": 6,
+      "w": 1
+    },
+    {
+      "id": "i",
+      "label": "I",
+      "code": "KEY_I",
+      "symbol": "KEY_8",
+      "row": 1,
+      "x": 7,
+      "w": 1
+    },
+    {
+      "id": "o",
+      "label": "O",
+      "code": "KEY_O",
+      "symbol": "KEY_9",
+      "row": 1,
+      "x": 8,
+      "w": 1
+    },
+    {
+      "id": "p",
+      "label": "P",
+      "code": "KEY_P",
+      "symbol": "KEY_0",
+      "row": 1,
+      "x": 9,
+      "w": 1
+    },
+    {
+      "id": "a",
+      "label": "A",
+      "code": "KEY_A",
+      "row": 2,
+      "x": 0.5,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "s",
+      "label": "S",
+      "code": "KEY_S",
+      "row": 2,
+      "x": 1.5,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "d",
+      "label": "D",
+      "code": "KEY_D",
+      "symbol": "KEY_GRAVE",
+      "row": 2,
+      "x": 2.5,
+      "w": 1
+    },
+    {
+      "id": "f",
+      "label": "F",
+      "code": "KEY_F",
+      "symbol": "KEY_EQUAL",
+      "row": 2,
+      "x": 3.5,
+      "w": 1
+    },
+    {
+      "id": "g",
+      "label": "G",
+      "code": "KEY_G",
+      "symbol": "KEY_BACKSLASH",
+      "row": 2,
+      "x": 4.5,
+      "w": 1
+    },
+    {
+      "id": "h",
+      "label": "H",
+      "code": "KEY_H",
+      "symbol": "KEY_SEMICOLON",
+      "row": 2,
+      "x": 5.5,
+      "w": 1
+    },
+    {
+      "id": "j",
+      "label": "J",
+      "code": "KEY_J",
+      "symbol": "KEY_APOSTROPHE",
+      "row": 2,
+      "x": 6.5,
+      "w": 1
+    },
+    {
+      "id": "k",
+      "label": "K",
+      "code": "KEY_K",
+      "symbol": "KEY_LEFTBRACE",
+      "row": 2,
+      "x": 7.5,
+      "w": 1
+    },
+    {
+      "id": "l",
+      "label": "L",
+      "code": "KEY_L",
+      "symbol": "KEY_RIGHTBRACE",
+      "row": 2,
+      "x": 8.5,
+      "w": 1
+    },
+    {
+      "id": "shift",
+      "label": "シフト",
+      "code": "KEY_LEFTSHIFT",
+      "symbol": "KEY_LEFTSHIFT",
+      "row": 3,
+      "x": 0,
+      "w": 1
+    },
+    {
+      "id": "z",
+      "label": "Z",
+      "code": "KEY_Z",
+      "row": 3,
+      "x": 1,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "x",
+      "label": "X",
+      "code": "KEY_X",
+      "row": 3,
+      "x": 2,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "c",
+      "label": "C",
+      "code": "KEY_C",
+      "row": 3,
+      "x": 3,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "v",
+      "label": "V",
+      "code": "KEY_V",
+      "row": 3,
+      "x": 4,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "b",
+      "label": "B",
+      "code": "KEY_B",
+      "row": 3,
+      "x": 5,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "n",
+      "label": "N",
+      "code": "KEY_N",
+      "symbol": "KEY_COMMA",
+      "row": 3,
+      "x": 6,
+      "w": 1
+    },
+    {
+      "id": "m",
+      "label": "M",
+      "code": "KEY_M",
+      "symbol": "KEY_DOT",
+      "row": 3,
+      "x": 7,
+      "w": 1
+    },
+    {
+      "id": "minus",
+      "label": "−",
+      "code": "KEY_MINUS",
+      "symbol": "KEY_SLASH",
+      "row": 3,
+      "x": 8,
+      "w": 1
+    },
+    {
+      "id": "bs",
+      "label": "後退",
+      "code": "KEY_BACKSPACE",
+      "symbol": "KEY_BACKSPACE",
+      "row": 3,
+      "x": 9,
+      "w": 1
+    },
+    {
+      "id": "ctrl",
+      "label": "ページアップ",
+      "code": "KEY_LEFTCTRL",
+      "symbol": "KEY_LEFTCTRL",
+      "row": 4,
+      "x": 0,
+      "w": 1,
+      "note": "《 を横に倒した記号。wiki の Ctrl"
+    },
+    {
+      "id": "alt",
+      "label": "文字切替",
+      "code": "KEY_LEFTALT",
+      "symbol": "KEY_LEFTALT",
+      "row": 4,
+      "x": 1,
+      "w": 1,
+      "note": "wiki の Alt。layer_hold に向く"
+    },
+    {
+      "id": "symbol",
+      "label": "記号",
+      "row": 4,
+      "x": 2,
+      "w": 1,
+      "note": "ドライバの中で処理する。押しているあいだ、ほかのキーのコードが変わる"
+    },
+    {
+      "id": "space",
+      "label": "スペース",
+      "code": "KEY_SPACE",
+      "row": 4,
+      "x": 3,
+      "w": 2,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "back",
+      "label": "戻る",
+      "code": "KEY_ESC",
+      "row": 4,
+      "x": 5,
+      "w": 1,
+      "note": "「調べる」と同じコード。「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "enter",
+      "label": "決定",
+      "code": "KEY_ENTER",
+      "row": 4,
+      "x": 6,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "left",
+      "label": "←",
+      "code": "KEY_LEFT",
+      "row": 4,
+      "x": 7,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "up",
+      "label": "↑",
+      "code": "KEY_UP",
+      "row": 4,
+      "x": 8,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "down",
+      "label": "↓",
+      "code": "KEY_DOWN",
+      "row": 4,
+      "x": 9,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    },
+    {
+      "id": "right",
+      "label": "→",
+      "code": "KEY_RIGHT",
+      "row": 4,
+      "x": 10,
+      "w": 1,
+      "note": "「記号」を押しているあいだは届かない"
+    }
+  ],
+  "max_rollover": 3,
+  "blocked": [
+    [
+      "KEY_LEFTALT",
+      "KEY_Q",
+      "KEY_W"
+    ]
+  ],
+  "constraints": [
+    "ドライバは 1 回に最大 3 キーまで読む。キーボードの回路にも、同時押しできない組み合わせがある",
+    "文字切り替え + Q を押したまま W を押すと、W が届かなかった。layer_hold のレイヤーで 2 つの文字キーを同時に押す使い方は避ける",
+    "「記号」はイベントを出さない。押しているあいだ、Q〜P は KEY_1〜KEY_0、D〜L は記号、N・M・− は , . / として届き、A、S、Z〜B、スペース、決定、戻る、矢印は届かない",
+    "調べる と 戻る は同じ KEY_ESC で、区別できない",
+    "電源、ツール、ホーム、記号 は割り当てられない"
+  ],
+  "screen": {
+    "w": 800,
+    "h": 480
+  }
+}
