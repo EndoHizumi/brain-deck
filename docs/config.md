@@ -6,6 +6,8 @@
 - **検証**：`lefthand -check config.yaml` で、デーモンを起動せずに検証できる。誤りはすべてまとめて表示する。
 - **JSON への変換**：`lefthand -dump-json config.yaml` は、検証したうえで、旧形式を layers の形にそろえた JSON を出力する。割り当ては、すべてオブジェクトの形（`{"key": "B"}`）になる。
 - **知らない項目**：書き間違いを見逃さないよう、知らない項目があると読み込みに失敗する。
+- **設定 GUI で保存したとき**：デーモンが YAML で書き直す（`lefthand -check` を通る形）。割り当ては 1 行（`KEY_A: LCTRL+Z`、`"0,0": {key: B, label: ブラシ}`）で、項目は名前順になる。**手で書いたコメントは消える**。前の版は `config.yaml.prev` に残る。
+- **設定 GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`touch` の有無、`display` は、開いているデバイスにかかわるので、動作中のデーモンには反映できない。ファイルを直接編集し、サービスを再起動する。プロトコルは [protocol.md](protocol.md)。
 
 ## 全体
 

@@ -8,6 +8,7 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは黄色になる。
 - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
 - **PC から見た Brain**：標準の USB キーボードとして見えるので、PC 側に専用のソフトは要らない。同じ USB ケーブルで、設定や保守のためのネットワーク（SSH）とシリアルも使える。
+- **設定 GUI**：PC のブラウザ（Chrome / Edge）から、USB シリアル経由で設定を読み書きできる。保存するとデーモンを止めずにすぐ反映する。
 
 ## 目次
 
@@ -17,12 +18,13 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 4. [インストール](#インストール)
 5. [PC との接続](#pc-との接続)
 6. [設定](#設定)
-7. [タッチのキャリブレーション](#タッチのキャリブレーション)
-8. [日常の操作](#日常の操作)
-9. [画面とコンソール](#画面とコンソール)
-10. [困ったとき](#困ったとき)
-11. [開発](#開発)
-12. [フォントとライセンス](#フォントとライセンス)
+7. [設定 GUI](#設定-gui)
+8. [タッチのキャリブレーション](#タッチのキャリブレーション)
+9. [日常の操作](#日常の操作)
+10. [画面とコンソール](#画面とコンソール)
+11. [困ったとき](#困ったとき)
+12. [開発](#開発)
+13. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -31,8 +33,9 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 ```
 本体キーボード (brain-kbd-i2c)  ─┐
                                   ├─ lefthand ─→ /dev/hidg0 ─→ USB ─→ PC（キーボードとして認識）
-タッチパネル   (mxs-lradc-ts)   ─┘      │
-                                         └─→ /dev/fb0（セルとラベルを表示）
+タッチパネル   (mxs-lradc-ts)   ─┘      │  │
+                                         │  └─→ /dev/fb0（セルとラベルを表示）
+PC のブラウザ（設定 GUI） ←─ USB シリアル ─→ /dev/ttyGS1（設定の読み書き、学習モード）
 ```
 
 - **入力の専有**：デーモンは本体のキーボードとタッチパネルを専有する。動いているあいだ、Brain 自身のコンソールには入力が届かない。
@@ -42,7 +45,7 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 
 起動時は、次の順に動く。
 
-1. `ethernet_gadget.service` が USB ガジェットを作る。Brainux 標準の処理を drop-in で置き換え、ネットワーク（NCM）、キーボード（HID）、シリアル（ACM）の複合デバイスにする。Brain の usb0 には固定 IP 192.168.7.2 を付ける。
+1. `ethernet_gadget.service` が USB ガジェットを作る。Brainux 標準の処理を drop-in で置き換え、ネットワーク（NCM）、キーボード（HID）、シリアル 2 つ（ACM。コンソール用と設定 GUI 用）の複合デバイスにする。Brain の usb0 には固定 IP 192.168.7.2 を付ける。
 2. `lefthand.service` がデーモンを起動する。ガジェットの作成と、ログイン画面の ly の起動を待ってから動く。
 
 電源を入れてからキー入力を受け付けるまで、約 68 秒かかる。
@@ -95,18 +98,19 @@ install.sh は次のファイルを配置し、`systemctl daemon-reload` を行�
   ssh brain sudo systemctl enable --now lefthand.service
   ```
 
-- **ガジェットの設定**：drop-in は、次に Brain を起動したときから使われる。
+- **ガジェットの設定**：drop-in と gadget-setup.sh は、次に Brain を起動したときから使われる。再起動せずに設定 GUI 用のシリアルを足すときは、`ssh brain sudo /usr/local/sbin/lefthand-gadget-setup` を実行する。USB を一度付け直すので、SSH が数秒止まる。そのあいだ lefthand.service を止め、終わったら再開する（このカーネルでは、/dev/hidg0 を開いたまま付け直すと、HID が使えなくなるため）。SSH が切れても止まらないよう、`sudo systemd-run --collect /usr/local/sbin/lefthand-gadget-setup` で実行するとよい。
 - **元に戻す**：drop-in を消して `systemctl daemon-reload` すると、Brainux 標準のガジェット設定に戻る。Brainux 本体のファイルは書き換えていない。
 
 ## PC との接続
 
-USB でつなぐと、PC には次の 3 つが見える。
+USB でつなぐと、PC には次の 4 つが見える。
 
-| 機能 | PC 側の見え方 | 用途 |
-| --- | --- | --- |
-| HID キーボード | 「SHARP Brain」というキーボード | 左手デバイスとしての入力 |
-| NCM | ネットワークインターフェース（Linux では enx8a158b443a01） | SSH |
-| CDC-ACM | シリアルポート（Linux では /dev/ttyACM0） | シリアルログイン |
+| 機能 | PC 側の見え方 | Brain 側 | 用途 |
+| --- | --- | --- | --- |
+| HID キーボード | 「SHARP Brain」というキーボード | /dev/hidg0 | 左手デバイスとしての入力 |
+| NCM | ネットワークインターフェース（Linux では enx8a158b443a01） | usb0 | SSH |
+| CDC-ACM（1 つ目） | シリアルポート（Linux では /dev/ttyACM0） | /dev/ttyGS0 | シリアルコンソール用。getty は立てていない |
+| CDC-ACM（2 つ目） | シリアルポート（Linux では /dev/ttyACM1） | /dev/ttyGS1 | 設定 GUI |
 
 キーボードとしては、つなぐだけで使える。SSH を使うには、PC 側のインターフェースに固定 IP を付ける。PC に DHCP サーバーは要らない。
 
@@ -125,7 +129,8 @@ Host brain
 
 ## 設定
 
-設定は `/etc/lefthand/config.yaml` に YAML（または JSON）で書く。変更したら `sudo systemctl restart lefthand.service` で反映する。
+設定は `/etc/lefthand/config.yaml` に YAML（または JSON）で書く。[設定 GUI](#設定-gui) を使うか、ファイルを直接編集して `sudo systemctl restart lefthand.service` で反映する。
+設定 GUI で保存すると、ファイルは GUI が YAML で書き直すので、**手で書いたコメントは消える**。前の版は `/etc/lefthand/config.yaml.prev` に残る。
 形式の詳細は [docs/config.md](docs/config.md)、本体のキーの名前は [docs/keymap-pwsh2.md](docs/keymap-pwsh2.md) にある。
 書き方の例は、このリポジトリの config.yaml にある。
 
@@ -245,6 +250,55 @@ display:
 
 画面が使えないときは、ログに理由を出して、入力の変換だけを続ける。
 
+## 設定 GUI
+
+PC のブラウザから、USB シリアル（WebSerial）で Brain の設定を読み書きする。ソースは `gui/`、プロトコルは [docs/protocol.md](docs/protocol.md)。
+
+![設定 GUI](docs/gui.png)
+
+### 開き方
+
+WebSerial に対応した **Chrome か Edge** で開く。WebSerial は https のページか localhost でしか使えない。Firefox と Safari は対応していない。
+
+- **localhost で開く**（Node.js 22 以降）：
+
+  ```sh
+  cd gui
+  npm install
+  npm run dev          # http://localhost:5173/ を開く
+  ```
+
+  作り直しなしで置くだけにするなら、`npm run build` で `gui/dist/` に静的なファイルができる。`npx vite preview`（http://localhost:4173/）か、任意の静的サーバーで開く。`file://` では開けない。
+- **https で開く**：`gui/dist/` をそのまま https のサーバーに置く。パスは相対なので、サブディレクトリでもよい。GitHub Pages なら、`.github/workflows/gui-pages.yml` が main への push のたびに置き直す（リポジトリの Settings → Pages の Source を「GitHub Actions」にしておく）。
+- **Brain なしで試す**：URL に `?demo` を付けて開くと、設定の例（config.yaml）を持った模擬のデーモンにつながる。保存しても Brain には何も送らない。
+
+### Linux でシリアルを使う権限
+
+Linux では、/dev/ttyACM* は root と dialout グループしか開けない。ブラウザでポートを選んでも開けないときは、自分を dialout グループに入れる。
+
+```sh
+ls -l /dev/ttyACM*            # crw-rw---- 1 root dialout ... なら必要
+sudo usermod -aG dialout $USER
+```
+
+一度ログアウトしてログインし直すと有効になる（`id` で dialout が出ればよい）。Windows と macOS では要らない。
+
+### 使い方
+
+1. **接続**：Brain と PC を USB ケーブルでつなぎ、「Brain に接続」を押す。ポートの一覧から Brain（USB 1d6b:0104）を選ぶ。Brain のシリアルは 2 つあり、設定用は 2 つ目（Linux では /dev/ttyACM1）。違うほうを選ぶと「設定用ではないようです」と出るので、もう一度押して別のほうを選ぶ。一度選んだポートは、次からは聞かれずにつながる。上に `lefthand` のバージョンと、Brain の今のレイヤーが出る。
+2. **レイヤー**：上のタブで切り替える。「＋ レイヤー」で追加、「このレイヤーを消す」で削除。名前を変えると、そのレイヤーへ切り替える割り当ても書き換わる。表示名は Brain の画面の右上に出る名前。
+3. **キーボード**：Brain の本体キーが並ぶ。濃い色がこのレイヤーで割り当てたキー、薄い色は下のレイヤーから透過したキー、斜線は割り当てられないキー（電源、ツール、ホーム、記号）。「『記号』を押しながら」にすると、記号キーを押しているあいだに届くコード（Q なら KEY_1）を編集できる。
+4. **タッチ**：Brain の画面と同じ比率で、格子とラベルを、実機と同じ色と字形で描く。セルをクリックして選ぶ。右の帯は、画面右に印刷されたソフトキー（HOME、▲ など）。列と行の数はここで変える。base 以外のレイヤーでは、格子を下のレイヤーのままにするか、上書きするかを選ぶ。小さくしてはみ出すセルがあれば、消してよいか聞く。「タッチパネルの調整」で、キャリブレーションの値とソフトキーの区画の座標も変えられる。
+5. **割り当て**：選んだキーやセルに、右の欄で割り当てる。種類は、透過（このレイヤーには書かない）、キーを送る、何もしない（none）、レイヤーの 4 つの切り替え方。
+6. **送るキー**：修飾キーのチェックと、キーの一覧から選ぶ。「PC のキーで入力」を押してから PC のキーボードで押すと、そのまま取り込む（例：Ctrl+Shift+Z を押すと `LCTRL+LSHIFT+Z`）。取り込むのは押した位置のキーなので、日本語配列の PC でも US 配列の名前になる。Ctrl+W や Ctrl+T など、ブラウザが先に使うキーは取り込めないので、一覧から選ぶ。
+7. **学習モード**：「学習モード」を押してから Brain のキーを押すかタッチすると、そのキーやセルが選ばれる。そのあいだ、Brain は PC にキーを送らない。もう一度押すと終わる。GUI を閉じても、30 秒で Brain は元に戻る。
+8. **検証**：編集するたびに Brain で検証し、誤りをその場所（キーやセルの赤い枠、タブの数字）と右の一覧に出す。一覧をクリックすると、その場所へ移る。
+9. **保存**：「Brain に保存…」で、変更点の一覧が出る。確かめて「保存して反映する」を押すと、Brain が検証してから保存し、すぐに反映する。押しているキーはいったん離れる。誤りがあるあいだは保存できない。
+10. **ファイル**：「YAML で書き出す」「JSON で書き出す」で、編集中の設定を PC に保存する。「ファイルを開く」で読み込む。読み込んだだけでは Brain は変わらない。Brain につないでいなくても、ファイルの編集はできる（検証は Brain につないだときに行う）。
+
+- **GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`display` は、デーモンを再起動しないと変えられないので、GUI からの保存では変えられない（変えると誤りになる）。ファイルを直接編集して、サービスを再起動する。
+- **ほかの人が同時に**：ポートは 1 つのタブしか開けない。SSH でファイルを直接編集したときは、GUI で「切断」して接続し直すと読み直す。
+
 ## タッチのキャリブレーション
 
 パネルの座標と画面の端の対応を測り、`touch` の min_x などに書く。
@@ -328,7 +382,9 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | 押した位置と違うセルが反応する | キャリブレーションをやり直す |
 | 画面が戻らず、デーモンの表示が残っている | `ssh brain sudo /usr/local/bin/lefthand -restore-console` で元の VT に戻す |
 | 画面に何も表示されない | ログに `display disabled` が出ていないか。設定の `display.enabled` が false になっていないか |
-| ラベルの一部が □ になる | フォントにない文字。JIS 第一・第二水準の漢字と、一般的な記号は表示できる |
+| ラベルの一部が □ になる | フォントにない文字。JIS 第一・第二水準の漢字と、一般的な記号は表示できる。設定 GUI では、入力したときに知らせる |
+| 設定 GUI がつながらない | ポートの一覧に Brain が 2 つあるか（`ls /dev/ttyACM*` で 2 つ）。1 つしかないなら、Brain のガジェットが古い（[インストール](#インストール)の「ガジェットの設定」）。Linux で開けないなら dialout グループ（[設定 GUI](#linux-でシリアルを使う権限)）。ログに `control: listening on /dev/ttyGS1` が出ているか |
+| 設定 GUI で保存できない | 右の「検証」の一覧に誤りがないか。`hid_device` などを変えていないか |
 
 ## 開発
 
@@ -337,7 +393,11 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | ファイル | 内容 |
 | --- | --- |
 | main.go | 入力の読み取り、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
-| config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証 |
+| config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
+| control.go | 設定 GUI とのシリアル通信（/dev/ttyGS1） |
+| apply.go | 設定の保存と、再起動なしの反映、失敗したときの巻き戻し |
+| keymap_pwsh2.go | 設定 GUI に渡す、本体キーの配置と制約 |
+| version.go | バージョンの文字列 |
 | layer.go | レイヤーの重なり、透過の解決、押したときの割り当ての記録 |
 | display.go | セルの配置と描画、描画用の goroutine |
 | fb.go | フレームバッファの読み書き、裏画面への描画 |
@@ -350,13 +410,27 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config.yaml | 設定の例。実機と同じ値 |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
+| docs/protocol.md | 設定 GUI とのプロトコル |
+| gui/ | 設定 GUI（TypeScript、Vite） |
 | REPORT.md | 作業の記録 |
 
 ### テスト
 
 ```sh
 go test ./...
+cd gui && npm test      # 設定 GUI（シリアルはモック）
 ```
+
+設定 GUI のテストは、デモ用の模擬デーモン（`gui/src/demo.ts`）につないで、接続、編集、検証、保存、学習モード、切断を確かめる。
+プレビューは、`gui/test/fixtures/` の PNG（`lefthand -render-png` で書き出したもの）と画素単位で比べる。画面の描き方を変えたら、PNG を作り直す。
+
+```sh
+go run . -render-png gui/test/fixtures/base.png config.yaml
+go run . -render-png gui/test/fixtures/view.png -render-layer view config.yaml
+go run . -render-png gui/test/fixtures/edit-hold.png -render-layer edit:hold -render-pressed "0,0 3,2" config.yaml
+```
+
+本体キーの表（keymap_pwsh2.go）を変えたら、GUI に同梱した表も `LEFTHAND_UPDATE_KEYMAP=1 go test -run KeymapJSON` で書き直す。
 
 画面の見た目は、実機がなくても PNG に書き出して確かめられる。
 
@@ -378,7 +452,9 @@ ssh brain 'sudo systemctl stop lefthand.service; cd ~/lefthand && sudo LEFTHAND_
 ### コマンドラインのオプション
 
 ```
-lefthand [-v] [config.yaml]                  通常の動作。設定を省略すると /etc/lefthand/config.yaml
+lefthand [-v] [-serial /dev/ttyGS1] [config.yaml]
+                                             通常の動作。設定を省略すると /etc/lefthand/config.yaml。
+                                             -serial は設定 GUI と通信するシリアル（空なら使わない）
 lefthand -calibrate [config.yaml]            タッチの座標を測る
 lefthand -check [config.yaml]                設定を検証して終わる
 lefthand -dump-json [config.yaml]            layers の形にそろえた JSON を出力して終わる
