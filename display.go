@@ -18,6 +18,7 @@ import (
 // CellView は 1 セルに描く内容。
 type CellView struct {
 	Mapped bool
+	Layer  bool   // レイヤーを切り替えるセル
 	Label  string // 大きく描く文字（改行で複数行）
 	Sub    string // 下に小さく描く送信キー（Label と同じなら空）
 }
@@ -33,6 +34,19 @@ type Layout struct {
 	Cols, Rows int
 	W, H       int
 	Cells      []CellView // row*Cols+col
+	Gen        uint64     // View.Gen。古い格子への SetPressed を捨てるのに使う
+	Title      string     // 隅に出すレイヤー名
+	Mode       LayerMode
+}
+
+// badgeRect は、レイヤー名を出す右上の札の範囲を返す。
+func (l *Layout) badgeRect() image.Rectangle {
+	if l.Title == "" {
+		return image.Rectangle{}
+	}
+	w := font.textWidth(l.Title)*badgeScale + 2*badgePad
+	h := fontH*badgeScale + 2*badgePad
+	return image.Rect(l.W-w, 0, l.W, h)
 }
 
 func (l *Layout) rect(col, row int) image.Rectangle {
@@ -51,6 +65,24 @@ var (
 	colPressedText = RGB{0, 0, 0}
 	colPressedSub  = RGB{0x50, 0x40, 0x00}
 	colEmptyBorder = RGB{0x30, 0x34, 0x3a}
+	colLayerCell   = RGB{0x2a, 0x22, 0x3c} // レイヤーを切り替えるセル
+
+	// レイヤーの入り方ごとの、枠と札の色
+	modeBorder = [...]RGB{
+		modeBase:    colBorder,
+		modeLatched: {0x40, 0xc0, 0x70}, // 切り替えたまま（緑）
+		modeTemp:    {0xff, 0x80, 0x20}, // 一時的（橙）
+	}
+	modeBadge = [...]RGB{
+		modeBase:    {0x3a, 0x48, 0x5c},
+		modeLatched: {0x2e, 0x9e, 0x5b},
+		modeTemp:    {0xff, 0x80, 0x20},
+	}
+	modeBadgeText = [...]RGB{
+		modeBase:    colText,
+		modeLatched: colText,
+		modeTemp:    {0, 0, 0},
+	}
 )
 
 const (
@@ -58,6 +90,8 @@ const (
 	textMargin = 8
 	maxScale   = 6
 	subScale   = 2
+	badgeScale = 2
+	badgePad   = 5
 )
 
 // fitScale は、行の集まりが w×h に収まる最大の倍率を返す（最小 1）。
@@ -82,14 +116,17 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 	v := l.Cells[row*l.Cols+col]
 	if !v.Mapped {
 		cv.frame(box, 1, colEmptyBorder)
-		return cell
+		return cell.Union(redrawBadge(cv, l, cell))
 	}
 	fillC, textC, subC := colCell, colText, colSub
+	if v.Layer {
+		fillC = colLayerCell
+	}
 	if pressed {
 		fillC, textC, subC = colPressed, colPressedText, colPressedSub
 	}
 	cv.fill(box, fillC)
-	cv.frame(box, 2, colBorder)
+	cv.frame(box, 2, modeBorder[l.Mode])
 
 	inner := box.Inset(textMargin)
 	subH := 0
@@ -111,7 +148,27 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 		x := inner.Min.X + (inner.Dx()-font.textWidth(v.Sub)*ss)/2
 		cv.text(max(x, inner.Min.X), inner.Max.Y-fontH*ss, v.Sub, ss, subC, inner)
 	}
-	return cell
+	return cell.Union(redrawBadge(cv, l, cell))
+}
+
+// redrawBadge は、描き直したセルが札に重なっていれば札を描き直し、その範囲を返す。
+func redrawBadge(cv *Canvas, l *Layout, cell image.Rectangle) image.Rectangle {
+	b := l.badgeRect()
+	if !b.Overlaps(cell) {
+		return image.Rectangle{}
+	}
+	drawBadge(cv, l)
+	return b
+}
+
+// drawBadge は右上に今のレイヤー名を描く。色でレイヤーの入り方がわかる。
+func drawBadge(cv *Canvas, l *Layout) {
+	b := l.badgeRect()
+	if b.Empty() {
+		return
+	}
+	cv.fill(b, modeBadge[l.Mode])
+	cv.text(b.Min.X+badgePad, b.Min.Y+badgePad, l.Title, badgeScale, modeBadgeText[l.Mode], b)
 }
 
 func drawAll(cv *Canvas, l *Layout, pressed []bool) {
@@ -121,6 +178,7 @@ func drawAll(cv *Canvas, l *Layout, pressed []bool) {
 			drawCell(cv, l, c, r, pressed[r*l.Cols+c])
 		}
 	}
+	drawBadge(cv, l)
 }
 
 // ---------- 描画ループ ----------
@@ -128,20 +186,23 @@ func drawAll(cv *Canvas, l *Layout, pressed []bool) {
 // Display は入力側から押下状態を受け取り、別の goroutine で画面を描き直す。
 // 入力側の SetPressed はロックして値を書くだけで、描画を待たない。
 type Display struct {
-	mu   sync.Mutex
-	want []bool
-	wake chan struct{}
+	mu      sync.Mutex
+	want    []bool
+	wantGen uint64  // want が対応する格子
+	next    *Layout // 描き直しを待っている格子（レイヤーの切り替え）
+	wake    chan struct{}
 
 	drawMu sync.Mutex // 描画と終了処理の排他
 	closed bool
 	active bool // 専用 VT が表示されている
 	drawn  []bool
 
-	fb     *Framebuffer
-	vt     *VT
-	cv     *Canvas
-	layout *Layout
-	vtSig  chan os.Signal
+	fb         *Framebuffer
+	vt         *VT
+	cv         *Canvas
+	layout     *Layout // 描画側だけが触る
+	layoutCols int     // 描いている格子の列数（d.mu で守る）
+	vtSig      chan os.Signal
 }
 
 // StartDisplay はフレームバッファと専用 VT を開き、描画 goroutine を起動する。
@@ -155,8 +216,8 @@ func StartDisplay(dc *DisplayConfig, l *Layout) (*Display, error) {
 	l.W, l.H = cv.W, cv.H
 
 	d := &Display{
-		want: make([]bool, len(l.Cells)), drawn: make([]bool, len(l.Cells)),
-		wake: make(chan struct{}, 1), fb: fb, cv: cv, layout: l,
+		want: make([]bool, len(l.Cells)), wantGen: l.Gen, drawn: make([]bool, len(l.Cells)),
+		wake: make(chan struct{}, 1), fb: fb, cv: cv, layout: l, layoutCols: l.Cols,
 		vtSig: make(chan os.Signal, 4),
 	}
 	// VT_PROCESS のシグナルは VT を設定する前に受けられるようにしておく
@@ -184,14 +245,43 @@ func StartDisplay(dc *DisplayConfig, l *Layout) (*Display, error) {
 }
 
 // SetPressed はセルの押下状態を変える。描画は待たない。d が nil でもよい。
-func (d *Display) SetPressed(col, row int, on bool) {
+// gen が今の格子と違う（押したあとにレイヤーが変わった）ときは何もしない。
+func (d *Display) SetPressed(gen uint64, col, row int, on bool) {
 	if d == nil {
 		return
 	}
-	i := row*d.layout.Cols + col
 	d.mu.Lock()
-	d.want[i] = on
+	if gen == d.wantGen && col >= 0 && row >= 0 {
+		if i := row*d.cols() + col; i < len(d.want) {
+			d.want[i] = on
+		}
+	}
 	d.mu.Unlock()
+	d.poke()
+}
+
+// SetLayout は格子を差し替える（レイヤーの切り替え）。描画は待たない。
+func (d *Display) SetLayout(l *Layout) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.next = l
+	d.wantGen = l.Gen
+	d.want = make([]bool, len(l.Cells))
+	d.mu.Unlock()
+	d.poke()
+}
+
+// cols は want が対応する格子の列数。d.mu を持って呼ぶ
+func (d *Display) cols() int {
+	if d.next != nil {
+		return d.next.Cols
+	}
+	return d.layoutCols
+}
+
+func (d *Display) poke() {
 	select {
 	case d.wake <- struct{}{}:
 	default: // すでに起こしてある
@@ -274,15 +364,31 @@ func (d *Display) reclaim() {
 	}
 }
 
-// redraw は押下状態が変わったセルだけを描き直す。
+// redraw は、格子が変わっていれば全体を、そうでなければ押下状態が変わったセルだけを描き直す。
 func (d *Display) redraw() bool {
 	d.mu.Lock()
+	next := d.next
+	d.next = nil
+	if next != nil {
+		d.layoutCols = next.Cols
+	}
 	want := append([]bool(nil), d.want...)
 	d.mu.Unlock()
 	d.drawMu.Lock()
 	defer d.drawMu.Unlock()
 	if d.closed {
 		return false
+	}
+	if next != nil {
+		t := time.Now()
+		next.W, next.H = d.cv.W, d.cv.H
+		d.layout = next
+		d.drawn = make([]bool, len(next.Cells))
+		drawAll(d.cv, next, d.drawn)
+		if d.active {
+			d.fb.Blit(d.cv, image.Rect(0, 0, d.cv.pw, d.cv.ph))
+		}
+		vlogf("display: layer %q redraw %v", next.Title, time.Since(t))
 	}
 	for i := range want {
 		if want[i] == d.drawn[i] {

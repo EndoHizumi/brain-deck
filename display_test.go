@@ -29,7 +29,7 @@ func TestCellSpanMatchesTouch(t *testing.T) {
 		for _, py := range []int{0, 159, 160, 319, 320, 479} {
 			rawX := tc.MinX + int32((float64(px)+0.5)*float64(tc.MaxX-tc.MinX)/w)
 			rawY := tc.MinY + int32((float64(py)+0.5)*float64(tc.MaxY-tc.MinY)/h)
-			col, row := touchCell(tc, rawX, rawY)
+			col, row := touchCell(tc, tc.Cols, tc.Rows, rawX, rawY)
 			l := &Layout{Cols: tc.Cols, Rows: tc.Rows, W: w, H: h}
 			if !image.Pt(px, py).In(l.rect(col, row)) {
 				t.Fatalf("pixel %d,%d -> raw %d,%d -> cell %d,%d, rect %v", px, py, rawX, rawY, col, row, l.rect(col, row))
@@ -54,14 +54,18 @@ touch:
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := cfg.Touch.Cells
-	if c["0,0"] != (CellSpec{Key: "B"}) || c["1,0"] != (CellSpec{Key: "LCTRL+Z", Label: "取り消し"}) || c["0,1"] != (CellSpec{Key: "E"}) {
+	c := cfg.Layers[0].Touch.Cells
+	if c["0,0"] != (ActionSpec{Key: "B"}) || c["1,0"] != (ActionSpec{Key: "LCTRL+Z", Label: "取り消し"}) || c["0,1"] != (ActionSpec{Key: "E"}) {
 		t.Fatalf("cells = %+v", c)
 	}
 	if !cfg.displayEnabled() || cfg.Display.Device != "/dev/fb0" {
 		t.Fatalf("display defaults: %+v", cfg.Display)
 	}
-	l := buildLayout(cfg.Touch)
+	km, _, err := compileKeymap(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := buildLayout(km, km.view([]int{0}))
 	if v := l.Cells[0]; v.Label != "B" || v.Sub != "" {
 		t.Errorf("0,0: %+v", v)
 	}

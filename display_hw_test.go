@@ -22,7 +22,12 @@ func TestHWDisplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := StartDisplay(cfg.Display, buildLayout(cfg.Touch))
+	km, _, err := compileKeymap(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := buildLayout(km, km.view([]int{0}))
+	d, err := StartDisplay(cfg.Display, l)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,25 +59,57 @@ func TestHWDisplay(t *testing.T) {
 
 	// 入力側の呼び出しが描画を待たないこと
 	t0 := time.Now()
-	d.SetPressed(0, 0, true)
-	d.SetPressed(3, 2, true)
+	d.SetPressed(l.Gen, 0, 0, true)
+	d.SetPressed(l.Gen, 3, 2, true)
 	if el := time.Since(t0); el > 5*time.Millisecond {
 		t.Errorf("SetPressed blocked for %v", el)
 	}
 	t.Logf("press redraw: %v / %v", waitDrawn(0, true), waitDrawn(11, true))
 	snap("pressed")
-	d.SetPressed(0, 0, false)
-	d.SetPressed(3, 2, false)
+	d.SetPressed(l.Gen, 0, 0, false)
+	d.SetPressed(l.Gen, 3, 2, false)
 	t.Logf("release redraw: %v / %v", waitDrawn(0, false), waitDrawn(11, false))
 	snap("released")
 
 	// 連打しても入力側は止まらず、最後の状態が描かれる
 	t0 = time.Now()
 	for i := 0; i < 1000; i++ {
-		d.SetPressed(1, 0, i%2 == 0)
+		d.SetPressed(l.Gen, 1, 0, i%2 == 0)
 	}
 	t.Logf("1000 SetPressed calls: %v", time.Since(t0))
 	waitDrawn(1, false)
+
+	// レイヤーを切り替える：SetLayout は待たずに返り、描画側が全体を描き直す
+	if len(km.Layers) > 1 {
+		nl := buildLayout(km, km.view([]int{0, 1}))
+		nl.Gen = l.Gen + 1
+		nl.Mode = modeTemp
+		t0 = time.Now()
+		d.SetLayout(nl)
+		if el := time.Since(t0); el > 5*time.Millisecond {
+			t.Errorf("SetLayout blocked for %v", el)
+		}
+		for time.Since(t0) < 2*time.Second {
+			d.drawMu.Lock()
+			ok := d.layout == nl
+			d.drawMu.Unlock()
+			if ok {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Logf("layer switch redraw: %v", time.Since(t0))
+		d.SetPressed(nl.Gen, 0, 0, true)
+		d.SetPressed(l.Gen, 1, 0, true) // 古い格子への押下は捨てる
+		waitDrawn(0, true)
+		snap("layer")
+		d.mu.Lock()
+		stale := d.want[1]
+		d.mu.Unlock()
+		if stale {
+			t.Error("SetPressed with an old generation changed the new layout")
+		}
+	}
 
 	d.Close()
 	vt0, err := os.ReadFile("/sys/class/tty/tty0/active")

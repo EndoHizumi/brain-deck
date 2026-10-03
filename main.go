@@ -11,9 +11,11 @@
 //
 //	lefthand [-v] [config.yaml]            通常動作
 //	lefthand -calibrate [config.yaml]      タッチの生座標を表示して範囲を求める
+//	lefthand -check [config.yaml]          設定を検証する
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,66 +31,6 @@ import (
 	"time"
 
 	evdev "github.com/holoplot/go-evdev"
-	"gopkg.in/yaml.v3"
-)
-
-// ---------- 設定 ----------
-
-type Config struct {
-	HIDDevice string            `yaml:"hid_device"`
-	Keyboard  string            `yaml:"keyboard"` // "/dev/input/eventN" またはデバイス名
-	Keys      map[string]string `yaml:"keys"`     // "KEY_A": "LCTRL+Z"
-	Touch     *TouchConfig      `yaml:"touch"`
-	Display   *DisplayConfig    `yaml:"display"`
-}
-
-type TouchConfig struct {
-	Device string              `yaml:"device"` // "/dev/input/eventN" またはデバイス名
-	Cols   int                 `yaml:"cols"`
-	Rows   int                 `yaml:"rows"`
-	SwapXY bool                `yaml:"swap_xy"` // パネルのX軸が画面の縦方向のとき
-	MinX   int32               `yaml:"min_x"`
-	MaxX   int32               `yaml:"max_x"`
-	MinY   int32               `yaml:"min_y"`
-	MaxY   int32               `yaml:"max_y"`
-	Cells  map[string]CellSpec `yaml:"cells"` // "col,row": "LCTRL+S" または { key: ..., label: ... }
-}
-
-// CellSpec はタッチセル 1 つの設定。
-// `"0,0": B` と `"0,0": { key: B, label: "ブラシ" }` のどちらでも書ける。
-type CellSpec struct {
-	Key   string `yaml:"key"`
-	Label string `yaml:"label"`
-}
-
-func (c *CellSpec) UnmarshalYAML(n *yaml.Node) error {
-	if n.Kind == yaml.ScalarNode {
-		c.Key = n.Value
-		return nil
-	}
-	type plain CellSpec // UnmarshalYAML を持たない型で中身を読む
-	if err := n.Decode((*plain)(c)); err != nil {
-		return err
-	}
-	if c.Key == "" {
-		return fmt.Errorf("line %d: touch cell needs key", n.Line)
-	}
-	return nil
-}
-
-// DisplayConfig は画面表示の設定。display を省略してもタッチがあれば表示する。
-type DisplayConfig struct {
-	Enabled *bool  `yaml:"enabled"` // false で画面を使わない
-	Device  string `yaml:"device"`  // フレームバッファ
-	VT      int    `yaml:"vt"`      // 使う VT の番号。0 なら tty8 以降の空きを使う
-	Rotate  int    `yaml:"rotate"`  // 画面の回転（0, 90, 180, 270）
-}
-
-const (
-	defaultHID      = "/dev/hidg0"
-	defaultKeyboard = "brain-kbd-i2c"
-	defaultTouch    = "mxs-lradc-ts"
-	defaultFB       = "/dev/fb0"
 )
 
 var verbose bool
@@ -358,30 +300,27 @@ func evString(ev *evdev.InputEvent) string {
 	return fmt.Sprintf("%s %s %d", ev.TypeName(), ev.CodeName(), ev.Value)
 }
 
-func runKeyboard(dev *evdev.InputDevice, keymap map[evdev.EvCode]Combo, s *State) {
+func runKeyboard(dev *evdev.InputDevice, e *Engine) {
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
 			log.Printf("read keyboard: %v", err)
-			s.shutdown(1)
+			e.out.shutdown(1)
 		}
 		if ev.Type == evdev.EV_SYN || ev.Type == evdev.EV_MSC {
 			continue
 		}
-		vlogf("kbd: %s", evString(ev))
 		if ev.Type != evdev.EV_KEY {
+			vlogf("kbd: %s", evString(ev))
 			continue
 		}
-		c, ok := keymap[ev.Code]
-		if !ok {
-			continue
-		}
-		id := fmt.Sprintf("k:%d", ev.Code)
 		switch ev.Value {
 		case 1:
-			s.press(id, c)
+			vlogf("kbd: %s", evString(ev))
+			e.PressKey(ev.Code)
 		case 0:
-			s.release(id)
+			vlogf("kbd: %s", evString(ev))
+			e.ReleaseKey(ev.Code)
 		} // 2 = オートリピートは無視（PC側でリピートする）
 	}
 }
@@ -400,27 +339,27 @@ func cellOf(v, min, max int32, n int) int {
 	return i
 }
 
-// touchCell はタッチの生座標からセルを求める。画面の枠も同じ境界で描く（cellSpan）。
-func touchCell(tc *TouchConfig, x, y int32) (col, row int) {
+// touchCell はタッチの生座標から cols×rows の格子のセルを求める。画面の枠も同じ境界で描く（cellSpan）。
+func touchCell(tc *TouchConfig, cols, rows int, x, y int32) (col, row int) {
 	if tc.SwapXY {
 		x, y = y, x
 	}
-	return cellOf(x, tc.MinX, tc.MaxX, tc.Cols), cellOf(y, tc.MinY, tc.MaxY, tc.Rows)
+	return cellOf(x, tc.MinX, tc.MaxX, cols), cellOf(y, tc.MinY, tc.MaxY, rows)
 }
 
 func evTime(ev *evdev.InputEvent) time.Time {
 	return time.Unix(int64(ev.Time.Sec), int64(ev.Time.Usec)*1000)
 }
 
-func runTouch(dev *evdev.InputDevice, tc *TouchConfig, cells map[string]Combo, s *State, disp *Display) {
+func runTouch(dev *evdev.InputDevice, e *Engine, disp *Display) {
 	var x, y int32
 	down, pressed := false, false
-	litCol, litRow := -1, -1 // ハイライト中のセル
+	var lit *TouchHit // ハイライト中のセル
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
 			log.Printf("read touch: %v", err)
-			s.shutdown(1)
+			e.out.shutdown(1)
 		}
 		switch {
 		case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_X:
@@ -431,26 +370,27 @@ func runTouch(dev *evdev.InputDevice, tc *TouchConfig, cells map[string]Combo, s
 			vlogf("touch: %s", evString(ev))
 			down = ev.Value == 1
 			if !down && pressed {
-				s.release("t")
+				e.Release("t")
 				pressed = false
-				if litCol >= 0 {
-					disp.SetPressed(litCol, litRow, false)
-					litCol, litRow = -1, -1
+				if lit != nil {
+					disp.SetPressed(lit.Gen, lit.Col, lit.Row, false)
+					lit = nil
 				}
 			}
 		case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
 			// 触れた瞬間のセルで確定（スライドしても変えない）
 			if down && !pressed {
-				col, row := touchCell(tc, x, y)
-				key := fmt.Sprintf("%d,%d", col, row)
-				c, ok := cells[key]
-				if ok {
-					s.press("t", c) // HID を先に送り、描画はそのあと
-					disp.SetPressed(col, row, true)
-					litCol, litRow = col, row
+				h := e.PressTouch(x, y) // HID を先に送り、描画はそのあと
+				if h.Mapped && h.Soft == "" {
+					disp.SetPressed(h.Gen, h.Col, h.Row, true)
+					lit = &h
 				}
-				vlogf("touch: x=%d y=%d -> cell %s (mapped=%v) %v after event",
-					x, y, key, ok, time.Since(evTime(ev)).Round(100*time.Microsecond))
+				where := fmt.Sprintf("cell %d,%d", h.Col, h.Row)
+				if h.Soft != "" {
+					where = "soft key " + h.Soft
+				}
+				vlogf("touch: x=%d y=%d -> %s (mapped=%v) %v after event",
+					x, y, where, h.Mapped, time.Since(evTime(ev)).Round(100*time.Microsecond))
 				pressed = true
 			}
 		}
@@ -585,44 +525,7 @@ func runCalibrate(spec string) {
 	}
 }
 
-// ---------- main ----------
-
-func loadConfig(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	if cfg.HIDDevice == "" {
-		cfg.HIDDevice = defaultHID
-	}
-	if cfg.Keyboard == "" {
-		cfg.Keyboard = defaultKeyboard
-	}
-	if cfg.Touch != nil && cfg.Touch.Device == "" {
-		cfg.Touch.Device = defaultTouch
-	}
-	if cfg.Display == nil {
-		cfg.Display = &DisplayConfig{}
-	}
-	if cfg.Display.Device == "" {
-		cfg.Display.Device = defaultFB
-	}
-	switch cfg.Display.Rotate {
-	case 0, 90, 180, 270:
-	default:
-		return nil, fmt.Errorf("%s: display.rotate must be 0, 90, 180 or 270", path)
-	}
-	return &cfg, nil
-}
-
-// displayEnabled は画面を使うかどうか。タッチがなければ描くものがない。
-func (c *Config) displayEnabled() bool {
-	return c.Touch != nil && (c.Display.Enabled == nil || *c.Display.Enabled)
-}
+// ---------- 画面の内容 ----------
 
 // 画面に出すキー名。設定の書き方より短く、読みやすくする
 var prettyKey = map[string]string{
@@ -649,28 +552,77 @@ func prettyCombo(s string) string {
 	return strings.Join(parts, "+")
 }
 
-// buildLayout はタッチの設定から、画面に描くセルの内容を作る。
-func buildLayout(tc *TouchConfig) *Layout {
-	l := &Layout{Cols: tc.Cols, Rows: tc.Rows, Cells: make([]CellView, tc.Cols*tc.Rows)}
-	for k, spec := range tc.Cells {
-		var col, row int
-		fmt.Sscanf(k, "%d,%d", &col, &row) // 範囲は main で検査済み
-		keys := prettyCombo(spec.Key)
-		v := CellView{Mapped: true, Label: spec.Label, Sub: keys}
-		if v.Label == "" || v.Label == keys {
-			v.Label, v.Sub = keys, ""
+// 画面に出す、レイヤー切り替えの種類
+var layerVerb = map[ActKind]string{
+	actHold: "押す間", actToggle: "切替", actOneshot: "1回", actTo: "移動",
+}
+
+// cellView は割り当てから、セルに描く内容を作る。
+func cellView(km *Keymap, a *Action) CellView {
+	if a == nil {
+		return CellView{}
+	}
+	label := a.Spec.Label
+	var sub string
+	if a.Kind.isLayer() {
+		dest := km.Layers[a.Layer].title()
+		sub = layerVerb[a.Kind]
+		if label == "" {
+			label = dest
+		} else {
+			sub += ":" + dest
 		}
-		l.Cells[row*tc.Cols+col] = v
+		return CellView{Mapped: true, Layer: true, Label: label, Sub: sub}
+	}
+	keys := prettyCombo(a.Spec.Key)
+	v := CellView{Mapped: true, Label: label, Sub: keys}
+	if v.Label == "" || v.Label == keys {
+		v.Label, v.Sub = keys, ""
+	}
+	return v
+}
+
+// buildLayout は今の重なりから、画面に描くセルの内容を作る。
+func buildLayout(km *Keymap, v *View) *Layout {
+	l := &Layout{Cols: v.Cols, Rows: v.Rows, Cells: make([]CellView, len(v.Cells)),
+		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode}
+	for i, a := range v.Cells {
+		l.Cells[i] = cellView(km, a)
 	}
 	return l
 }
 
 // renderPNG は実機なしで画面の見た目を PNG に書き出す（確認用）。
-func renderPNG(cfg *Config, out string, pressedSpec string, w, h int) error {
+// layer を指定すると、そのレイヤーを base の上に重ねた画面を描く（hold なら一時的な色）。
+func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec string, w, h int) error {
 	if cfg.Touch == nil {
 		return errors.New("config has no touch section")
 	}
-	l := buildLayout(cfg.Touch)
+	e := NewEngine(km, &State{hid: NewHIDWriter(os.DevNull), active: map[string]Combo{}})
+	if layer != "" {
+		name, kind, _ := strings.Cut(layer, ":")
+		a := &Action{Kind: actToggle}
+		switch kind {
+		case "", "toggle":
+		case "hold":
+			a.Kind = actHold
+		default:
+			return fmt.Errorf("-render-layer %q: mode must be toggle or hold", layer)
+		}
+		a.Layer = -1
+		for i, l := range km.Layers {
+			if l.Name == name {
+				a.Layer = i
+			}
+		}
+		if a.Layer < 0 {
+			return fmt.Errorf("-render-layer: unknown layer %q", name)
+		}
+		if a.Layer != 0 {
+			e.press("render", a)
+		}
+	}
+	l := buildLayout(km, e.View())
 	cv := NewCanvas(w, h, w*rgb565.Bpp, rgb565, cfg.Display.Rotate)
 	l.W, l.H = cv.W, cv.H
 	pressed := make([]bool, len(l.Cells))
@@ -689,15 +641,20 @@ func renderPNG(cfg *Config, out string, pressedSpec string, w, h int) error {
 	return png.Encode(f, cv.Image())
 }
 
+// ---------- main ----------
+
 func main() {
 	calibrate := flag.Bool("calibrate", false, "タッチの生座標を表示し、四隅から座標範囲を求める")
 	flag.BoolVar(&verbose, "v", false, "受け取ったイベントと送ったHIDレポートを標準エラーに出す")
 	restore := flag.Bool("restore-console", false, "異常終了で残った専用 VT を元に戻して終わる（systemd の ExecStopPost 用）")
+	check := flag.Bool("check", false, "設定を検証して終わる")
+	dumpJSON := flag.Bool("dump-json", false, "設定を検証し、layers の形にそろえた JSON を標準出力に書いて終わる")
 	pngOut := flag.String("render-png", "", "画面の見た目を PNG に書き出して終わる（実機不要）")
+	pngLayer := flag.String("render-layer", "", "-render-png で base に重ねるレイヤー（例: edit、edit:hold）")
 	pngPressed := flag.String("render-pressed", "", "-render-png で押下中として描くセル（例: \"0,0 2,1\"）")
 	pngSize := flag.String("render-size", "800x480", "-render-png の画面サイズ")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [-restore-console] [-render-png out.png] [config.yaml]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [-check] [-dump-json] [-restore-console] [-render-png out.png] [config.yaml]\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -725,46 +682,33 @@ func main() {
 		return
 	}
 
-	keymap := map[evdev.EvCode]Combo{}
-	for name, target := range cfg.Keys {
-		code, ok := evdev.KEYFromString[name]
-		if !ok {
-			log.Fatalf("unknown source key %q", name)
-		}
-		c, err := parseCombo(target)
-		if err != nil {
+	km, warns, err := compileKeymap(cfg)
+	if err != nil {
+		log.Fatalf("%s:\n%v", cfgPath, err)
+	}
+	for _, w := range warns {
+		log.Printf("warning: %s", w)
+	}
+
+	switch {
+	case *check:
+		logLayers(km)
+		log.Printf("%s: ok", cfgPath)
+		return
+	case *dumpJSON:
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(cfg); err != nil {
 			log.Fatal(err)
 		}
-		keymap[code] = c
-	}
-
-	var cells map[string]Combo
-	if cfg.Touch != nil {
-		cells = map[string]Combo{}
-		for k, v := range cfg.Touch.Cells {
-			var col, row int
-			if _, err := fmt.Sscanf(k, "%d,%d", &col, &row); err != nil ||
-				col < 0 || col >= cfg.Touch.Cols || row < 0 || row >= cfg.Touch.Rows {
-				log.Fatalf("touch cell %q is out of %dx%d grid", k, cfg.Touch.Cols, cfg.Touch.Rows)
-			}
-			c, err := parseCombo(v.Key)
-			if err != nil {
-				log.Fatal(err)
-			}
-			norm := fmt.Sprintf("%d,%d", col, row)
-			if _, dup := cells[norm]; dup {
-				log.Fatalf("touch cell %q is defined twice", k)
-			}
-			cells[norm] = c
-		}
-	}
-
-	if *pngOut != "" {
+		return
+	case *pngOut != "":
 		var w, h int
 		if _, err := fmt.Sscanf(*pngSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 			log.Fatalf("bad -render-size %q", *pngSize)
 		}
-		if err := renderPNG(cfg, *pngOut, *pngPressed, w, h); err != nil {
+		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, w, h); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -789,6 +733,7 @@ func main() {
 	}
 
 	s := &State{hid: NewHIDWriter(cfg.HIDDevice), active: map[string]Combo{}}
+	e := NewEngine(km, s)
 
 	// 終了時に押しっぱなしを防ぐ
 	sig := make(chan os.Signal, 1)
@@ -806,24 +751,27 @@ func main() {
 	if err := kbd.Grab(); err != nil {
 		log.Printf("grab keyboard: %v", err)
 	}
-	log.Printf("keyboard: %s, %d keys mapped", describe(kbd), len(keymap))
+	log.Printf("keyboard: %s", describe(kbd))
+	logLayers(km)
 	var disp *Display
 	if touch != nil {
 		if err := touch.Grab(); err != nil {
 			log.Printf("grab touch: %v", err)
 		}
-		log.Printf("touch: %s, %dx%d grid, %d cells mapped", describe(touch), cfg.Touch.Cols, cfg.Touch.Rows, len(cells))
+		log.Printf("touch: %s, %d soft keys", describe(touch), len(km.Areas))
 		// 画面が使えなくても入力は動かす
 		if cfg.displayEnabled() {
-			d, err := StartDisplay(cfg.Display, buildLayout(cfg.Touch))
+			d, err := StartDisplay(cfg.Display, buildLayout(km, e.View()))
 			if err != nil {
 				log.Printf("display disabled: %v", err)
 			} else {
 				disp = d
 				addAtExit(d.Close)
+				// レイヤーが変わったら描き直す。SetLayout は待たずに返る
+				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(km, v)) })
 			}
 		}
-		go runTouch(touch, cfg.Touch, cells, s, disp)
+		go runTouch(touch, e, disp)
 	}
-	runKeyboard(kbd, keymap, s)
+	runKeyboard(kbd, e)
 }
