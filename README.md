@@ -6,6 +6,7 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは黄色になる。
+- **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
 - **PC から見た Brain**：標準の USB キーボードとして見えるので、PC 側に専用のソフトは要らない。同じ USB ケーブルで、設定や保守のためのネットワーク（SSH）とシリアルも使える。
 
 ## 目次
@@ -61,7 +62,7 @@ GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -o lefthand
 go test ./...
 ```
 
-できる実行ファイルは約 4.4MB で、フォントも含めてこれ 1 つで動く。
+できる実行ファイルは約 5.5MB で、フォントも含めてこれ 1 つで動く。
 
 ## インストール
 
@@ -124,37 +125,60 @@ Host brain
 
 ## 設定
 
-設定は `/etc/lefthand/config.yaml` に YAML で書く。変更したら `sudo systemctl restart lefthand.service` で反映する。
+設定は `/etc/lefthand/config.yaml` に YAML（または JSON）で書く。変更したら `sudo systemctl restart lefthand.service` で反映する。
+形式の詳細は [docs/config.md](docs/config.md)、本体のキーの名前は [docs/keymap-pwsh2.md](docs/keymap-pwsh2.md) にある。
 書き方の例は、このリポジトリの config.yaml にある。
+
+変更する前に、デーモンを止めずに検証できる。
+
+```sh
+ssh brain lefthand -check /etc/lefthand/config.yaml
+```
 
 ### 全体
 
 ```yaml
 hid_device: /dev/hidg0      # 送信先。省略可
 keyboard: brain-kbd-i2c     # 本体キーボード。省略可
-keys: { ... }               # 本体キーの割り当て
-touch: { ... }              # タッチパネル。省略するとタッチと画面を使わない
+touch: { ... }              # タッチパネルとソフトキーの範囲。省略するとタッチと画面を使わない
+layers: [ ... ]             # レイヤーごとの割り当て。最初のものが base
 display: { ... }            # 画面表示。省略可
 ```
 
 入力デバイスは、`/dev/input/eventN` のパスでも、デバイス名でも指定できる。
 event の番号は起動の順で変わることがあるので、デバイス名で書く。
 
-### 本体キーの割り当て（keys）
-
-左に Brain のキー、右に PC に送るキーを書く。
+### レイヤー（layers）
 
 ```yaml
-keys:
-  KEY_A: LCTRL+Z           # A で Ctrl+Z
-  KEY_S: LCTRL+LSHIFT+Z    # S で Ctrl+Shift+Z
-  KEY_SPACE: LSHIFT        # スペースを Shift として使う
-  KEY_Q: B
+layers:
+  - name: base
+    label: "基本"
+    keys:
+      KEY_Q: B                               # Q で B
+      KEY_A: LCTRL+Z                         # A で Ctrl+Z
+      KEY_LEFTALT: { layer_hold: edit }      # 文字切り替えを押しているあいだ edit
+      KEY_ESC: { layer_to: base }            # 調べる・戻るで base に戻る
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": { key: B, label: "ブラシ" }
+        "3,2": { layer_toggle: edit, label: "編集" }
+  - name: edit
+    label: "編集"
+    keys:
+      KEY_Q: LCTRL+C                         # edit では Q で Ctrl+C
+      KEY_W: none                            # 何もしない
 ```
 
-- **左側**：Linux のキー名（`KEY_A`、`KEY_SPACE` など）。どのキーがどの名前かは、`-v` を付けて起動し、キーを押したときのログで確かめる。
-- **右側**：送るキーを `+` でつなぐ。大文字小文字は区別しない。
-- **割り当てのないキー**：何も送らない。
+- **キーの名前**：左側は Linux のキー名（`KEY_A`、`KEY_SPACE` など）。どのキーがどの名前かは [docs/keymap-pwsh2.md](docs/keymap-pwsh2.md) にある。
+- **送るキー**：右側は送るキーを `+` でつなぐ。大文字小文字は区別しない。
+- **切り替え**：`layer_hold`（押しているあいだ）、`layer_toggle`（押すたび）、`layer_oneshot`（次の 1 キーだけ）、`layer_to`（そのレイヤーへ移る）の 4 つ。
+- **透過**：書いていないキーとセルは、下のレイヤーの割り当てを使う。`none` と書くと無効になる。
+- **押したまま切り替えたとき**：キーは押したときの割り当てで離すので、押しっぱなしにならない。
+- **base に戻る手段**：切り替えたままになるレイヤーには、base に戻る手段が要る。ないと、読み込み時にエラーになる。
+- **旧形式**：トップレベルに `keys` と `touch.cells` を書く形式も、base レイヤーとしてそのまま読める。
 
 PC に送れるキーの名前は次のとおり。
 
@@ -169,33 +193,43 @@ PC に送れるキーの名前は次のとおり。
 
 記号は US 配列での位置を送る。PC が日本語配列のときは、PC 側で別の文字になることがある。
 
-### タッチパネル（touch）
+### タッチパネル（touch とレイヤーの touch）
 
-画面を `cols` 列 × `rows` 行の格子に分け、セルごとにキーを割り当てる。
+パネルの設定は `touch` に、格子とセルの割り当ては各レイヤーの `touch` に書く。
 
 ```yaml
 touch:
   device: mxs-lradc-ts
-  cols: 4
-  rows: 3
   swap_xy: false
   min_x: 226
   max_x: 3938
   min_y: 3803
   max_y: 384
-  cells:
-    "0,0": B                                   # 画面にはキー名「B」を表示
-    "1,0": { key: LCTRL+Z, label: "取り消し" }   # 「取り消し」を大きく、「Ctrl+Z」を下に小さく表示
-    "3,2": { key: SPACE, label: "手のひら" }
+  soft_areas:                                 # 画面右の印刷された帯
+    home: { x: [3740, 4095], y: [3377, 4095] }
 ```
 
 - **セルの番号**：`"列,行"` で書き、左上が `"0,0"`。列は右へ、行は下へ増える。
 - **min_x などの値**：パネルの生の座標と画面の端との対応。値の求め方は[タッチのキャリブレーション](#タッチのキャリブレーション)を参照。
 - **判定**：触れた瞬間のセルで決まり、離すまで変わらない。指を滑らせても、別のセルには移らない。
+- **格子の大きさ**：レイヤーごとに変えられる。cols と rows を省略すると base と同じ大きさになる。
 - **label**：日本語も使える。`"\n"` で改行できる。その場合はダブルクォートで囲む。
 - **label の大きさ**：セルに収まるよう、自動で決まる。等倍でも収まらない部分は切れる。
 - **label がないセル**：送るキーを短く書き直して表示する。例：`LCTRL+LSHIFT+Z` は `Ctrl+Shift+Z`。
-- **画面の見た目**：割り当てのないセルは、暗い枠だけを描く。押しているあいだ、そのセルは黄色になる。
+- **画面の見た目**：割り当てのないセルは、暗い枠だけを描く。押しているあいだ、そのセルは黄色になる。レイヤーを切り替えるセルは紫で描く。
+- **ソフトキー**：画面右の帯（HOME ▲ ▼ ▶ ◀ 決定 戻る 操作機能）はタッチに反応する。レイヤーの `soft_keys` で割り当てられる。帯の座標は画面の右端と重なるので、割り当てた区画だけがセルより優先される。
+
+### 今のレイヤーの表示
+
+画面の右上に、今のレイヤーの label を出す。色で入り方がわかる。
+
+| 色 | 状態 |
+| --- | --- |
+| 青 | base だけ |
+| 緑 | layer_toggle か layer_to で切り替えたまま |
+| 橙 | layer_hold か layer_oneshot で、一時的に切り替えている |
+
+セルの枠も同じ色になる。
 
 ### 画面表示（display）
 
@@ -251,7 +285,7 @@ display:
 ### ログを見ながら試す
 
 デーモンを止めてから、`-v` を付けて手動で起動する。
-受け取ったイベント、送ったレポート、タッチから送信までの時間、画面の描き直しにかかった時間がログに出る。
+受け取ったイベント、送ったレポート、タッチから送信までの時間、レイヤーの切り替え、画面の描き直しにかかった時間がログに出る。
 
 ```sh
 ssh brain 'cd ~/lefthand && sudo timeout 60 ./lefthand -v /etc/lefthand/config.yaml'
@@ -275,7 +309,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 - **終了時**：元の VT とテキストモードに戻し、専用 VT を解放する。SIGTERM、SIGINT、入力デバイスのエラーのいずれでも同じ。
 - **強制終了されたとき**：systemd の `ExecStopPost` で `lefthand -restore-console` を実行し、`/run/lefthand-vt` に残った情報から元の VT に戻す。
 - **ほかのプロセスが VT を切り替えたとき**：描画を止めて切り替えを許可し、2 秒後に専用 VT を取り戻す。デーモンの動作中はキーボードを専有していて、コンソールが見えても操作できないため。
-- **描画の負荷**：起動時に画面全体を一度描き、そのあとは変わったセルだけを描き直す。描画は優先度を下げた別のスレッドで行い、キー入力の処理を待たせない。
+- **描画の負荷**：起動時とレイヤーを切り替えたときに画面全体を描き、そのあとは変わったセルだけを描き直す。描画は優先度を下げた別のスレッドで行い、キー入力の処理を待たせない。
 
 | 画面の仕様 | 値 |
 | --- | --- |
@@ -300,7 +334,9 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 
 | ファイル | 内容 |
 | --- | --- |
-| main.go | 設定の読み込み、入力の読み取り、HID レポートの送信、キャリブレーション |
+| main.go | 入力の読み取り、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
+| config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証 |
+| layer.go | レイヤーの重なり、透過の解決、押したときの割り当ての記録 |
 | display.go | セルの配置と描画、描画用の goroutine |
 | fb.go | フレームバッファの読み書き、裏画面への描画 |
 | vt.go | 専用 VT の確保と、元の VT への復帰 |
@@ -310,6 +346,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | systemd/ | サービスと drop-in |
 | install.sh | Brain 上での配置 |
 | config.yaml | 設定の例。実機と同じ値 |
+| docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
+| docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
 | REPORT.md | 作業の記録 |
 
 ### テスト
@@ -322,6 +360,7 @@ go test ./...
 
 ```sh
 go run . -render-png out.png -render-pressed "0,0 3,2" config.yaml
+go run . -render-png edit.png -render-layer edit:hold config.yaml   # edit を一時的に重ねた画面
 ```
 
 実機では、描画テストで専用 VT への切り替え、セルの押下と解除、元の VT への復帰を確かめられる。
@@ -339,8 +378,11 @@ ssh brain 'sudo systemctl stop lefthand.service; cd ~/lefthand && sudo LEFTHAND_
 ```
 lefthand [-v] [config.yaml]                  通常の動作。設定を省略すると /etc/lefthand/config.yaml
 lefthand -calibrate [config.yaml]            タッチの座標を測る
+lefthand -check [config.yaml]                設定を検証して終わる
+lefthand -dump-json [config.yaml]            layers の形にそろえた JSON を出力して終わる
 lefthand -restore-console                    残った専用 VT を元に戻して終わる
 lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き出して終わる
+         -render-layer name[:hold]           base に重ねるレイヤー（hold なら一時的な色）
          -render-pressed "列,行 ..."         押下中として描くセル
          -render-size 800x480                画面の大きさ
 ```

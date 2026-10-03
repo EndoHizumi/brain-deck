@@ -1,0 +1,187 @@
+# 設定ファイルの形式
+
+`/etc/lefthand/config.yaml` の形式。YAML と JSON のどちらでも書ける。JSON は YAML の一部なので、同じファイル名のまま JSON を書いてもよい。
+設定 GUI（WebSerial）も、この形式をそのまま読み書きする。
+
+- **検証**：`lefthand -check config.yaml` で、デーモンを起動せずに検証できる。誤りはすべてまとめて表示する。
+- **JSON への変換**：`lefthand -dump-json config.yaml` は、検証したうえで、旧形式を layers の形にそろえた JSON を出力する。割り当ては、すべてオブジェクトの形（`{"key": "B"}`）になる。
+- **知らない項目**：書き間違いを見逃さないよう、知らない項目があると読み込みに失敗する。
+
+## 全体
+
+```yaml
+hid_device: /dev/hidg0      # 送信先。省略可
+keyboard: brain-kbd-i2c     # 本体キーボード。パスかデバイス名。省略可
+touch: { ... }              # タッチパネルそのものの設定。省略するとタッチと画面を使わない
+layers: [ ... ]             # レイヤー。最初のものが base
+display: { ... }            # 画面表示。省略可
+```
+
+| 項目 | 型 | 内容 |
+| --- | --- | --- |
+| hid_device | 文字列 | 既定は `/dev/hidg0` |
+| keyboard | 文字列 | 既定は `brain-kbd-i2c` |
+| touch | オブジェクト | 下を参照 |
+| layers | 配列 | 1 つ以上。下を参照 |
+| display | オブジェクト | enabled（真偽）、device（既定 `/dev/fb0`）、vt（0 で自動）、rotate（0、90、180、270） |
+
+## touch：タッチパネル
+
+どのレイヤーでも共通の、ハードウェアの設定。格子の大きさとセルは、各レイヤーに書く。
+
+| 項目 | 型 | 内容 |
+| --- | --- | --- |
+| device | 文字列 | 既定は `mxs-lradc-ts` |
+| swap_xy | 真偽 | パネルの X 軸が画面の縦方向のとき true |
+| min_x、max_x、min_y、max_y | 整数 | 画面の端に当たる生の座標。`lefthand -calibrate` で測る。min > max なら軸を反転 |
+| soft_areas | オブジェクト | ソフトキーの名前 → 範囲。範囲は `{ x: [a, b], y: [c, d] }` で、パネルの生の座標（swap_xy の影響を受けない）。a と b の順はどちらでもよい |
+
+## layers：レイヤー
+
+```yaml
+layers:
+  - name: base              # 必須。ほかのレイヤーから参照する名前
+    label: "基本"           # 画面の隅に出す名前。省略すると name
+    keys: { ... }           # 本体キーの割り当て
+    touch:                  # タッチの格子
+      cols: 4
+      rows: 3
+      cells: { ... }
+    soft_keys: { ... }      # ソフトキーの割り当て
+```
+
+- **base**：最初のレイヤーが base になる。名前は何でもよいが、`base` を勧める。base はいつも一番下にあり、外れない。
+- **重なり**：layer_hold などで入ったレイヤーは、base の上に、入った順に積まれる。いちばん上が「今のレイヤー」で、画面の右上に label を表示する。
+- **透過**：割り当てを探すときは、いちばん上から順に見る。書いていないキー・セル・ソフトキーは、下のレイヤーの割り当てを使う。
+- **none**：`none` と書くと、そこで探すのを止めて何もしない。下のレイヤーの割り当ても使わない。
+
+### keys
+
+左に Linux のキー名（`KEY_Q` など）、右に割り当てを書く。PW-SH2 のキー名は [keymap-pwsh2.md](keymap-pwsh2.md) を参照。
+
+### touch
+
+| 項目 | 型 | 内容 |
+| --- | --- | --- |
+| cols、rows | 整数 1〜16 | 格子の列数と行数。base 以外では、両方とも省略すると base と同じ大きさ |
+| cells | オブジェクト | `"列,行"` → 割り当て。左上が `"0,0"` |
+
+- **格子の大きさ**：上から見て、最初に touch を持つレイヤーの格子を使う。touch を書いていないレイヤーは、下のレイヤーの格子をそのまま使う。
+- **セルの透過**：格子の大きさが下のレイヤーと同じあいだだけ、書いていないセルは下のレイヤーのものを使う。大きさが違えば、書いていないセルは空になる。
+- **判定**：触れた瞬間に、今の格子で決まる。指を滑らせても、レイヤーが変わっても、離すまで変わらない。
+
+### soft_keys
+
+`touch.soft_areas` の名前 → 割り当て。割り当てがある区画だけが、格子のセルより優先される。
+今の重なりで割り当てがない区画を押すと、格子のセルとして扱う。
+
+## 割り当て
+
+キー・セル・ソフトキーのどれにも、同じ形で書く。
+
+| 書き方 | 意味 |
+| --- | --- |
+| `LCTRL+Z` | キーを送る。`+` でつなぐ。大文字小文字は区別しない |
+| `none` | 何もしない（下のレイヤーも使わない） |
+| `{ key: LCTRL+Z, label: "取り消し" }` | キーを送る。label は画面のセルに大きく出す。`\n` で改行 |
+| `{ layer_hold: edit }` | 押しているあいだ、edit を重ねる |
+| `{ layer_toggle: edit }` | 押すたびに、edit を重ねる・外す |
+| `{ layer_oneshot: edit }` | 次に押した 1 キーだけ、edit を重ねる。もう一度押すと取り消す |
+| `{ layer_to: edit }` | base と edit だけにする（ほかの重なりは外す）。`layer_to: base` で base だけに戻る |
+
+- **オブジェクトの形**：`key`、`layer_hold`、`layer_toggle`、`layer_oneshot`、`layer_to` のうち、ちょうど 1 つを書く。`label` はどれにも付けられる。
+- **送れるキーの名前**：修飾キー（LCTRL、LSHIFT、LALT、LGUI、RCTRL、RSHIFT、RALT、RGUI）、A〜Z、0〜9、F1〜F12、ENTER、ESC、BACKSPACE、TAB、SPACE、INSERT、DELETE、HOME、END、PAGEUP、PAGEDOWN、UP、DOWN、LEFT、RIGHT、MINUS、EQUAL、LEFTBRACE、RIGHTBRACE、BACKSLASH、SEMICOLON、APOSTROPHE、GRAVE、COMMA、DOT、SLASH。
+- **レイヤーのセルの表示**：layer_* のセルは紫で描く。label を省略すると、行き先のレイヤーの label を大きく、切り替えの種類（押す間、切替、1回、移動）を下に小さく出す。
+
+### 動き方の細かい決まり
+
+- **押したまま切り替えたとき**：キーは、押したときの割り当てで離す。たとえば edit で Ctrl+C を押したまま edit を抜けても、離したときに Ctrl+C を離す。
+- **layer_hold**：押したキーを離すと、そのキーで重ねたレイヤーだけを外す。ほかの重なりはそのまま。
+- **layer_toggle**：そのレイヤーが layer_toggle か layer_to で重なっていれば外し、なければ重ねる。上のレイヤーで同じキーを書かなければ、透過して base の layer_toggle が働くので、同じキーで戻れる。
+- **layer_oneshot**：layer_* 以外の入力を押したとき（割り当てのないキーを含む）に、押したキーの割り当てを決めてから外れる。
+- **layer_to**：重なりを全部外してから、行き先を重ねる。layer_hold で押しているキーを離しても、もう何も外れない。
+- **オートリピート**：無視する。リピートは PC 側に任せる。
+
+## 画面の表示
+
+- **右上の札**：今のレイヤーの label を出す。色で入り方がわかる。
+- **色**：base だけのときは青、layer_toggle か layer_to で入ったとき（離しても戻らない）は緑、layer_hold か layer_oneshot で入ったとき（一時的）は橙。セルの枠も同じ色になる。
+- **描き直し**：レイヤーが変わると、画面全体を描き直す。描画は別のスレッドで行い、キー入力の処理を待たせない。
+
+## 読み込み時の検証
+
+次のものは誤りとして、デーモンを起動しない。
+
+| 誤り | 例 |
+| --- | --- |
+| 存在しないレイヤーの参照 | `layer_hold: nope` |
+| base に戻れないレイヤー | layer_toggle か layer_to で入るのに、戻る手段がない。layer_to どうしで行き来するだけで base に戻れない輪も含む |
+| base への layer_toggle | base は外せないので、layer_to を使う |
+| レイヤー名の重複・名前なし | |
+| 割り当ての書き方 | key と layer_* を両方書いた、どれも書いていない、知らない項目 |
+| 知らないキー名 | `KEY_NOPE`、`LCTRL+NOPE` |
+| 格子の外のセル、同じセルの重複 | 4x3 の格子に `"4,0"` |
+| 定義していないソフトキー | soft_areas にない名前を soft_keys に書いた |
+| base の格子がない | touch があるのに、base に cols/rows がない |
+| 旧形式との混在 | layers と、トップレベルの keys（または touch.cells）を両方書いた |
+
+**base に戻る手段**とみなすのは、そのレイヤーを base の上に重ねたときに押せる（透過も含む）、次のいずれか。
+
+- `layer_to: base`
+- そのレイヤー自身の `layer_toggle`
+- base に戻れるレイヤーへの `layer_to`
+- `layer_hold` か `layer_oneshot` で重ねるレイヤーの中の、上のいずれか
+
+layer_hold と layer_oneshot でしか入らないレイヤーは、離せば（次のキーで）戻るので調べない。
+どこからも参照されないレイヤーは、警告だけを出す。
+
+## 旧形式
+
+トップレベルに `keys` と、`touch` の `cols`、`rows`、`cells` を書く形式も、そのまま読める。
+読み込むときに、`name: base` のレイヤー 1 つに置き換える。
+
+```yaml
+keys:
+  KEY_A: LCTRL+Z
+touch:
+  device: mxs-lradc-ts
+  cols: 4
+  rows: 3
+  min_x: 226
+  max_x: 3938
+  min_y: 3803
+  max_y: 384
+  cells:
+    "0,0": { key: B, label: "ブラシ" }
+```
+
+## JSON の例
+
+```json
+{
+  "touch": {
+    "min_x": 226, "max_x": 3938, "min_y": 3803, "max_y": 384,
+    "soft_areas": { "home": { "x": [3740, 4095], "y": [3377, 4095] } }
+  },
+  "layers": [
+    {
+      "name": "base",
+      "label": "基本",
+      "keys": {
+        "KEY_Q": { "key": "B" },
+        "KEY_LEFTALT": { "layer_hold": "edit" },
+        "KEY_ESC": { "layer_to": "base" }
+      },
+      "touch": { "cols": 4, "rows": 3, "cells": { "0,0": { "key": "B", "label": "ブラシ" } } },
+      "soft_keys": { "home": { "layer_to": "base" } }
+    },
+    {
+      "name": "edit",
+      "label": "編集",
+      "keys": { "KEY_Q": { "key": "LCTRL+C" }, "KEY_W": { "key": "none" } }
+    }
+  ]
+}
+```
+
+完全な例は、リポジトリの [config.yaml](../config.yaml)。
