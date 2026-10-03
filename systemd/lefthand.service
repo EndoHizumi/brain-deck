@@ -5,12 +5,17 @@ Description=Brain left-hand device daemon (evdev -> USB HID keyboard)
 # （hidg0 への書き込み失敗は内部で吸収する）
 Wants=ethernet_gadget.service
 After=ethernet_gadget.service
+# 画面は専用の VT に描く。ly（tty2）は起動時に自分の VT へ切り替えるので、そのあとに起動する
+After=ly.service getty@tty1.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/lefthand /etc/lefthand/config.yaml
+# 強制終了などで画面の後始末ができなかったときに、元の VT とテキストモードに戻す。
+# 正常に終了したときは何もしない
+ExecStopPost=-/usr/local/bin/lefthand -restore-console
 Restart=on-failure
 RestartSec=2
 # SIGTERM で空レポートを送ってから終わる

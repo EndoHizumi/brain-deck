@@ -6,6 +6,40 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：画面へのセルとラベルの表示（2026-10-04）
+
+タッチセルの枠とラベルを画面に描くようにした。押しているセルは黄色になる。
+実機のサービスに反映済みで、画面の内容はフレームバッファを読み出して確認した。
+タッチ位置と表示のずれは、ユーザーの目視確認がまだ。
+
+| フレームバッファ | 値 |
+| --- | --- |
+| デバイス | /dev/fb0（braindrmfb、DRM の fbdev エミュレーション） |
+| 解像度 | 800x480、回転なし（fbcon も 0） |
+| 色 | 16 bpp、RGB565（R 11/5、G 5/6、B 0/5） |
+| stride | 1600 バイト |
+| 自動消灯 | consoleblank は 0（無効）。バックライトは 7/7 |
+
+- **コンソールとの共存**：tty2 では ly（ログイン画面）が、tty1 では getty が動いている。fbterm はログイン後に .bash_profile から起動するだけで、常駐していない。デーモンは空いている tty8 に切り替え、KD_GRAPHICS と VT_PROCESS を設定して描く。終了時は tty2 に戻す。
+- **起動順**：ly は起動時に tty2 へ切り替えるので、lefthand.service を ly.service のあとに起動する。ほかのプロセスに VT を切り替えられたときは、2 秒後に tty8 を取り戻す。
+- **強制終了**：ExecStopPost の `lefthand -restore-console` が元の VT に戻す。
+- **性能**：起動時の全体描画は約 25〜50 ms、セル 1 つの描き直しは 3〜8 ms。描画は nice 10 の専用スレッドで行い、入力側は状態を書くだけで待たない。
+
+| 追加・変更したファイル | 内容 |
+| --- | --- |
+| fb.go（新規） | フレームバッファの ioctl と mmap、裏画面、塗りつぶしと文字の描画 |
+| vt.go（新規） | 専用 VT の確保、切り替え、終了時と異常終了後の復帰 |
+| display.go（新規） | セルの配置、描画 goroutine、VT の release と acquire の処理 |
+| font.go、font/（新規） | 埋め込みフォント k8x12 とライセンス |
+| tools/mkfont（新規） | BDF を埋め込み用のバイナリに変換する |
+| main.go | セルの `label`、`display` 設定、押下中のハイライト、終了時の後始末、`-restore-console` と `-render-png` |
+| config.yaml | 各セルにラベルを付け、display を追加 |
+| systemd/lefthand.service | `After=ly.service` と `ExecStopPost` を追加 |
+| README.md（新規） | 設定の書き方、画面の仕組み、フォントのライセンス |
+| display_test.go、display_hw_test.go（新規） | 単体テストと、実機で動かす描画テスト |
+
+Brain 上の元のバイナリと設定は、`/usr/local/bin/lefthand.prev` と `/etc/lefthand/config.yaml.prev` に残してある。
+
 ## 動作確認の結果
 
 キーボード、タッチ、起動時の自動設定のすべてが実機で動いた。送信エラーは一度も出ていない。

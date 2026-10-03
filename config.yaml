@@ -30,11 +30,21 @@ touch:
   max_x: 3938
   min_y: 3803
   max_y: 384
+  # "列,行": 送るキー            … 画面にはキー名を表示する
+  # "列,行": { key: 送るキー, label: "表示名" }  … 表示名を大きく、キー名を下に小さく表示する
+  # label の中の \n で改行できる（ダブルクォートで囲むこと）
   cells:
-    "0,0": B
-    "1,0": E
-    "2,0": LCTRL+Z
-    "3,0": LCTRL+LSHIFT+Z
-    "0,1": LEFTBRACE
-    "1,1": RIGHTBRACE
-    "3,2": SPACE
+    "0,0": { key: B, label: "ブラシ" }
+    "1,0": { key: E, label: "消しゴム" }
+    "2,0": { key: LCTRL+Z, label: "取り消し" }
+    "3,0": { key: LCTRL+LSHIFT+Z, label: "やり直し" }
+    "0,1": { key: LEFTBRACE, label: "ブラシ小" }
+    "1,1": { key: RIGHTBRACE, label: "ブラシ大" }
+    "3,2": { key: SPACE, label: "手のひら" }
+
+# 画面表示。省略すると、touch があれば /dev/fb0 に描く
+display:
+  enabled: true
+  device: /dev/fb0
+  vt: 0       # 0 なら tty8 以降の空いている VT を使う
+  rotate: 0   # 画面の回転（0, 90, 180, 270）

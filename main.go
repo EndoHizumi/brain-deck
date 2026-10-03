@@ -17,9 +17,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image/png"
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -37,24 +39,56 @@ type Config struct {
 	Keyboard  string            `yaml:"keyboard"` // "/dev/input/eventN" またはデバイス名
 	Keys      map[string]string `yaml:"keys"`     // "KEY_A": "LCTRL+Z"
 	Touch     *TouchConfig      `yaml:"touch"`
+	Display   *DisplayConfig    `yaml:"display"`
 }
 
 type TouchConfig struct {
-	Device string            `yaml:"device"` // "/dev/input/eventN" またはデバイス名
-	Cols   int               `yaml:"cols"`
-	Rows   int               `yaml:"rows"`
-	SwapXY bool              `yaml:"swap_xy"` // パネルのX軸が画面の縦方向のとき
-	MinX   int32             `yaml:"min_x"`
-	MaxX   int32             `yaml:"max_x"`
-	MinY   int32             `yaml:"min_y"`
-	MaxY   int32             `yaml:"max_y"`
-	Cells  map[string]string `yaml:"cells"` // "col,row": "LCTRL+S"
+	Device string              `yaml:"device"` // "/dev/input/eventN" またはデバイス名
+	Cols   int                 `yaml:"cols"`
+	Rows   int                 `yaml:"rows"`
+	SwapXY bool                `yaml:"swap_xy"` // パネルのX軸が画面の縦方向のとき
+	MinX   int32               `yaml:"min_x"`
+	MaxX   int32               `yaml:"max_x"`
+	MinY   int32               `yaml:"min_y"`
+	MaxY   int32               `yaml:"max_y"`
+	Cells  map[string]CellSpec `yaml:"cells"` // "col,row": "LCTRL+S" または { key: ..., label: ... }
+}
+
+// CellSpec はタッチセル 1 つの設定。
+// `"0,0": B` と `"0,0": { key: B, label: "ブラシ" }` のどちらでも書ける。
+type CellSpec struct {
+	Key   string `yaml:"key"`
+	Label string `yaml:"label"`
+}
+
+func (c *CellSpec) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		c.Key = n.Value
+		return nil
+	}
+	type plain CellSpec // UnmarshalYAML を持たない型で中身を読む
+	if err := n.Decode((*plain)(c)); err != nil {
+		return err
+	}
+	if c.Key == "" {
+		return fmt.Errorf("line %d: touch cell needs key", n.Line)
+	}
+	return nil
+}
+
+// DisplayConfig は画面表示の設定。display を省略してもタッチがあれば表示する。
+type DisplayConfig struct {
+	Enabled *bool  `yaml:"enabled"` // false で画面を使わない
+	Device  string `yaml:"device"`  // フレームバッファ
+	VT      int    `yaml:"vt"`      // 使う VT の番号。0 なら tty8 以降の空きを使う
+	Rotate  int    `yaml:"rotate"`  // 画面の回転（0, 90, 180, 270）
 }
 
 const (
 	defaultHID      = "/dev/hidg0"
 	defaultKeyboard = "brain-kbd-i2c"
 	defaultTouch    = "mxs-lradc-ts"
+	defaultFB       = "/dev/fb0"
 )
 
 var verbose bool
@@ -268,9 +302,29 @@ func (s *State) send() {
 	}
 }
 
-// shutdown は空レポートを送ってから終了する。
+var (
+	cleanupOnce sync.Once
+	atExitMu    sync.Mutex
+	atExit      []func() // 終了時に実行する（画面の後始末など）
+)
+
+func addAtExit(f func()) {
+	atExitMu.Lock()
+	atExit = append(atExit, f)
+	atExitMu.Unlock()
+}
+
+// shutdown は空レポートを送り、後始末をしてから終了する。
+// 複数の goroutine から同時に呼ばれても、後始末は一度だけ行う。
 func (s *State) shutdown(code int) {
-	s.releaseAll()
+	cleanupOnce.Do(func() {
+		s.releaseAll()
+		atExitMu.Lock()
+		defer atExitMu.Unlock()
+		for _, f := range atExit {
+			f()
+		}
+	})
 	os.Exit(code)
 }
 
@@ -346,9 +400,22 @@ func cellOf(v, min, max int32, n int) int {
 	return i
 }
 
-func runTouch(dev *evdev.InputDevice, tc *TouchConfig, cells map[string]Combo, s *State) {
+// touchCell はタッチの生座標からセルを求める。画面の枠も同じ境界で描く（cellSpan）。
+func touchCell(tc *TouchConfig, x, y int32) (col, row int) {
+	if tc.SwapXY {
+		x, y = y, x
+	}
+	return cellOf(x, tc.MinX, tc.MaxX, tc.Cols), cellOf(y, tc.MinY, tc.MaxY, tc.Rows)
+}
+
+func evTime(ev *evdev.InputEvent) time.Time {
+	return time.Unix(int64(ev.Time.Sec), int64(ev.Time.Usec)*1000)
+}
+
+func runTouch(dev *evdev.InputDevice, tc *TouchConfig, cells map[string]Combo, s *State, disp *Display) {
 	var x, y int32
 	down, pressed := false, false
+	litCol, litRow := -1, -1 // ハイライト中のセル
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
@@ -366,22 +433,24 @@ func runTouch(dev *evdev.InputDevice, tc *TouchConfig, cells map[string]Combo, s
 			if !down && pressed {
 				s.release("t")
 				pressed = false
+				if litCol >= 0 {
+					disp.SetPressed(litCol, litRow, false)
+					litCol, litRow = -1, -1
+				}
 			}
 		case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
 			// 触れた瞬間のセルで確定（スライドしても変えない）
 			if down && !pressed {
-				px, py := x, y
-				if tc.SwapXY {
-					px, py = y, x
-				}
-				key := fmt.Sprintf("%d,%d",
-					cellOf(px, tc.MinX, tc.MaxX, tc.Cols),
-					cellOf(py, tc.MinY, tc.MaxY, tc.Rows))
+				col, row := touchCell(tc, x, y)
+				key := fmt.Sprintf("%d,%d", col, row)
 				c, ok := cells[key]
-				vlogf("touch: x=%d y=%d -> cell %s (mapped=%v)", x, y, key, ok)
 				if ok {
-					s.press("t", c)
+					s.press("t", c) // HID を先に送り、描画はそのあと
+					disp.SetPressed(col, row, true)
+					litCol, litRow = col, row
 				}
+				vlogf("touch: x=%d y=%d -> cell %s (mapped=%v) %v after event",
+					x, y, key, ok, time.Since(evTime(ev)).Round(100*time.Microsecond))
 				pressed = true
 			}
 		}
@@ -536,17 +605,107 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.Touch != nil && cfg.Touch.Device == "" {
 		cfg.Touch.Device = defaultTouch
 	}
+	if cfg.Display == nil {
+		cfg.Display = &DisplayConfig{}
+	}
+	if cfg.Display.Device == "" {
+		cfg.Display.Device = defaultFB
+	}
+	switch cfg.Display.Rotate {
+	case 0, 90, 180, 270:
+	default:
+		return nil, fmt.Errorf("%s: display.rotate must be 0, 90, 180 or 270", path)
+	}
 	return &cfg, nil
+}
+
+// displayEnabled は画面を使うかどうか。タッチがなければ描くものがない。
+func (c *Config) displayEnabled() bool {
+	return c.Touch != nil && (c.Display.Enabled == nil || *c.Display.Enabled)
+}
+
+// 画面に出すキー名。設定の書き方より短く、読みやすくする
+var prettyKey = map[string]string{
+	"LCTRL": "Ctrl", "RCTRL": "Ctrl", "LSHIFT": "Shift", "RSHIFT": "Shift",
+	"LALT": "Alt", "RALT": "Alt", "LGUI": "Win", "RGUI": "Win",
+	"ENTER": "Enter", "ESC": "Esc", "BACKSPACE": "BS", "TAB": "Tab", "SPACE": "Space",
+	"MINUS": "-", "EQUAL": "=", "LEFTBRACE": "[", "RIGHTBRACE": "]",
+	"BACKSLASH": "\\", "SEMICOLON": ";", "APOSTROPHE": "'", "GRAVE": "`",
+	"COMMA": ",", "DOT": ".", "SLASH": "/",
+	"INSERT": "Ins", "HOME": "Home", "PAGEUP": "PgUp", "DELETE": "Del",
+	"END": "End", "PAGEDOWN": "PgDn",
+	"RIGHT": "→", "LEFT": "←", "DOWN": "↓", "UP": "↑",
+}
+
+func prettyCombo(s string) string {
+	parts := strings.Split(s, "+")
+	for i, p := range parts {
+		p = strings.ToUpper(strings.TrimSpace(p))
+		if q, ok := prettyKey[p]; ok {
+			p = q
+		}
+		parts[i] = p
+	}
+	return strings.Join(parts, "+")
+}
+
+// buildLayout はタッチの設定から、画面に描くセルの内容を作る。
+func buildLayout(tc *TouchConfig) *Layout {
+	l := &Layout{Cols: tc.Cols, Rows: tc.Rows, Cells: make([]CellView, tc.Cols*tc.Rows)}
+	for k, spec := range tc.Cells {
+		var col, row int
+		fmt.Sscanf(k, "%d,%d", &col, &row) // 範囲は main で検査済み
+		keys := prettyCombo(spec.Key)
+		v := CellView{Mapped: true, Label: spec.Label, Sub: keys}
+		if v.Label == "" || v.Label == keys {
+			v.Label, v.Sub = keys, ""
+		}
+		l.Cells[row*tc.Cols+col] = v
+	}
+	return l
+}
+
+// renderPNG は実機なしで画面の見た目を PNG に書き出す（確認用）。
+func renderPNG(cfg *Config, out string, pressedSpec string, w, h int) error {
+	if cfg.Touch == nil {
+		return errors.New("config has no touch section")
+	}
+	l := buildLayout(cfg.Touch)
+	cv := NewCanvas(w, h, w*rgb565.Bpp, rgb565, cfg.Display.Rotate)
+	l.W, l.H = cv.W, cv.H
+	pressed := make([]bool, len(l.Cells))
+	for _, p := range strings.Fields(strings.ReplaceAll(pressedSpec, ";", " ")) {
+		var c, r int
+		if _, err := fmt.Sscanf(p, "%d,%d", &c, &r); err == nil && c < l.Cols && r < l.Rows {
+			pressed[r*l.Cols+c] = true
+		}
+	}
+	drawAll(cv, l, pressed)
+	f, err := os.Create(out)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return png.Encode(f, cv.Image())
 }
 
 func main() {
 	calibrate := flag.Bool("calibrate", false, "タッチの生座標を表示し、四隅から座標範囲を求める")
 	flag.BoolVar(&verbose, "v", false, "受け取ったイベントと送ったHIDレポートを標準エラーに出す")
+	restore := flag.Bool("restore-console", false, "異常終了で残った専用 VT を元に戻して終わる（systemd の ExecStopPost 用）")
+	pngOut := flag.String("render-png", "", "画面の見た目を PNG に書き出して終わる（実機不要）")
+	pngPressed := flag.String("render-pressed", "", "-render-png で押下中として描くセル（例: \"0,0 2,1\"）")
+	pngSize := flag.String("render-size", "800x480", "-render-png の画面サイズ")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [config.yaml]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [-restore-console] [-render-png out.png] [config.yaml]\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *restore {
+		restoreConsole()
+		return
+	}
 
 	cfgPath := "/etc/lefthand/config.yaml"
 	if flag.NArg() > 0 {
@@ -588,12 +747,33 @@ func main() {
 				col < 0 || col >= cfg.Touch.Cols || row < 0 || row >= cfg.Touch.Rows {
 				log.Fatalf("touch cell %q is out of %dx%d grid", k, cfg.Touch.Cols, cfg.Touch.Rows)
 			}
-			c, err := parseCombo(v)
+			c, err := parseCombo(v.Key)
 			if err != nil {
 				log.Fatal(err)
 			}
-			cells[fmt.Sprintf("%d,%d", col, row)] = c
+			norm := fmt.Sprintf("%d,%d", col, row)
+			if _, dup := cells[norm]; dup {
+				log.Fatalf("touch cell %q is defined twice", k)
+			}
+			cells[norm] = c
 		}
+	}
+
+	if *pngOut != "" {
+		var w, h int
+		if _, err := fmt.Sscanf(*pngSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
+			log.Fatalf("bad -render-size %q", *pngSize)
+		}
+		if err := renderPNG(cfg, *pngOut, *pngPressed, w, h); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	// CPU が 1 つでも、描画中に入力の goroutine がすぐ動けるようにする
+	// （描画スレッドは nice 10 に下げてあるので、OS が入力側を優先する）
+	if runtime.GOMAXPROCS(0) < 2 {
+		runtime.GOMAXPROCS(2)
 	}
 
 	// 入力デバイスを先に開く。失敗したら HID に何も送らずに終わる
@@ -627,12 +807,23 @@ func main() {
 		log.Printf("grab keyboard: %v", err)
 	}
 	log.Printf("keyboard: %s, %d keys mapped", describe(kbd), len(keymap))
+	var disp *Display
 	if touch != nil {
 		if err := touch.Grab(); err != nil {
 			log.Printf("grab touch: %v", err)
 		}
 		log.Printf("touch: %s, %dx%d grid, %d cells mapped", describe(touch), cfg.Touch.Cols, cfg.Touch.Rows, len(cells))
-		go runTouch(touch, cfg.Touch, cells, s)
+		// 画面が使えなくても入力は動かす
+		if cfg.displayEnabled() {
+			d, err := StartDisplay(cfg.Display, buildLayout(cfg.Touch))
+			if err != nil {
+				log.Printf("display disabled: %v", err)
+			} else {
+				disp = d
+				addAtExit(d.Close)
+			}
+		}
+		go runTouch(touch, cfg.Touch, cells, s, disp)
 	}
 	runKeyboard(kbd, keymap, s)
 }
