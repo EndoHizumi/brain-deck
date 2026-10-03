@@ -88,14 +88,14 @@ layers:
   - name: view
     label: "表示"
     keys:
-      KEY_Q: LCTRL+EQUAL
-      KEY_W: LCTRL+MINUS
+      KEY_Q: LCTRL+KPPLUS                    # テンキーの + なので、PC の配列によらず Ctrl++
+      KEY_W: LCTRL+KPMINUS
     touch:                                   # 格子の大きさも変えられる（base のセルは透過しない）
       cols: 3
       rows: 2
       cells:
-        "0,0": { key: LCTRL+EQUAL, label: "拡大" }
-        "1,0": { key: LCTRL+MINUS, label: "縮小" }
+        "0,0": { key: LCTRL+KPPLUS, label: "拡大" }
+        "1,0": { key: LCTRL+KPMINUS, label: "縮小" }
         "2,0": { key: LCTRL+0, label: "全体" }
         "0,1": { key: H, label: "左右反転" }
         "1,1": { key: R, label: "回転" }

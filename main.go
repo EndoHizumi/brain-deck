@@ -61,6 +61,9 @@ var hidUsage = map[string]byte{
 	"INSERT": 0x49, "HOME": 0x4a, "PAGEUP": 0x4b, "DELETE": 0x4c,
 	"END": 0x4d, "PAGEDOWN": 0x4e,
 	"RIGHT": 0x4f, "LEFT": 0x50, "DOWN": 0x51, "UP": 0x52,
+	// テンキー。PC の配列（US/日本語）によらず同じ文字になるので、Ctrl++ などに使える
+	"KPSLASH": 0x54, "KPASTERISK": 0x55, "KPMINUS": 0x56, "KPPLUS": 0x57,
+	"KPENTER": 0x58, "KPDOT": 0x63,
 }
 
 func init() {
@@ -71,6 +74,10 @@ func init() {
 		hidUsage[fmt.Sprint(i)] = byte(0x1e + i - 1)
 	}
 	hidUsage["0"] = 0x27
+	for i := 1; i <= 9; i++ {
+		hidUsage[fmt.Sprintf("KP%d", i)] = byte(0x59 + i - 1)
+	}
+	hidUsage["KP0"] = 0x62
 	for i := 1; i <= 12; i++ {
 		hidUsage[fmt.Sprintf("F%d", i)] = byte(0x3a + i - 1)
 	}
@@ -538,6 +545,7 @@ var prettyKey = map[string]string{
 	"INSERT": "Ins", "HOME": "Home", "PAGEUP": "PgUp", "DELETE": "Del",
 	"END": "End", "PAGEDOWN": "PgDn",
 	"RIGHT": "→", "LEFT": "←", "DOWN": "↓", "UP": "↑",
+	"KPSLASH": "/", "KPASTERISK": "*", "KPMINUS": "-", "KPPLUS": "+", "KPENTER": "Enter", "KPDOT": ".",
 }
 
 func prettyCombo(s string) string {
@@ -761,14 +769,15 @@ func main() {
 		log.Printf("touch: %s, %d soft keys", describe(touch), len(km.Areas))
 		// 画面が使えなくても入力は動かす
 		if cfg.displayEnabled() {
-			d, err := StartDisplay(cfg.Display, buildLayout(km, e.View()))
+			first := buildLayout(km, e.View())
+			d, err := StartDisplay(cfg.Display, first)
 			if err != nil {
 				log.Printf("display disabled: %v", err)
 			} else {
 				disp = d
 				addAtExit(d.Close)
 				// レイヤーが変わったら描き直す。SetLayout は待たずに返る
-				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(km, v)) })
+				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(km, v)) }, first.Gen)
 			}
 		}
 		go runTouch(touch, e, disp)

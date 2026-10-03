@@ -189,9 +189,11 @@ PC に送れるキーの名前は次のとおり。
 | ファンクション | F1〜F12 |
 | 編集 | ENTER、ESC、BACKSPACE、TAB、SPACE、INSERT、DELETE、HOME、END、PAGEUP、PAGEDOWN |
 | 矢印 | UP、DOWN、LEFT、RIGHT |
+| テンキー | KP0〜KP9、KPPLUS（+）、KPMINUS（-）、KPASTERISK（*）、KPSLASH（/）、KPDOT（.）、KPENTER |
 | 記号 | MINUS（-）、EQUAL（=）、LEFTBRACE（[）、RIGHTBRACE（]）、BACKSLASH（\）、SEMICOLON（;）、APOSTROPHE（'）、GRAVE（`）、COMMA（,）、DOT（.）、SLASH（/） |
 
 記号は US 配列での位置を送る。PC が日本語配列のときは、PC 側で別の文字になることがある。
+`+` のように配列で位置が違う文字は、テンキーの名前で送ると配列によらない。例：拡大の Ctrl++ は `LCTRL+KPPLUS`。
 
 ### タッチパネル（touch とレイヤーの touch）
 

@@ -296,12 +296,13 @@ func (e *Engine) describe() string {
 	return strings.Join(parts, " > ")
 }
 
-// SetOnView は画面への通知先を設定し、今の重なりを一度知らせる。
-func (e *Engine) SetOnView(f func(*View)) {
+// SetOnView は画面への通知先を設定する。shown は画面に描いてある View.Gen で、
+// そのあとに重なりが変わっていれば、今の重なりを一度知らせる。
+func (e *Engine) SetOnView(f func(*View), shown uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.onView = f
-	if f != nil {
+	if f != nil && e.view.Gen != shown {
 		f(e.view)
 	}
 }

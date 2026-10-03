@@ -73,3 +73,18 @@ func TestHIDWriterMissingDeviceDoesNotPanic(t *testing.T) {
 		t.Fatal("failed write should mark state dirty for retry")
 	}
 }
+
+func TestKeypadKeys(t *testing.T) {
+	c, err := parseCombo("LCTRL+KPPLUS")
+	if err != nil || c.Mods != 0x01 || c.Keys[0] != 0x57 {
+		t.Fatalf("got %+v %v", c, err)
+	}
+	for name, want := range map[string]byte{"KP1": 0x59, "KP9": 0x61, "KP0": 0x62, "KPMINUS": 0x56, "KPDOT": 0x63} {
+		if got := hidUsage[name]; got != want {
+			t.Errorf("%s = %#x want %#x", name, got, want)
+		}
+	}
+	if got := prettyCombo("LCTRL+KPPLUS"); got != "Ctrl++" {
+		t.Errorf("pretty = %q", got)
+	}
+}
