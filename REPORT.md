@@ -6,6 +6,47 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：設定 GUI（2026-10-04）
+
+ブラウザ（WebSerial）から、Brain の設定を読み書きできるようにした。実機で確認し、問題は見つからなかった。
+使い方は README、通信の形式は [docs/protocol.md](docs/protocol.md) にある。
+
+- **通信路**：USB ガジェットに ACM を 1 つ足した。デーモンが `/dev/ttyGS1`（PC では ttyACM1 など）で待ち受ける。`/dev/ttyGS0` はコンソール用に残した。
+- **コマンド**：hello、get_config、validate、set_config、get_keymap、get_status、subscribe_input。
+- **反映**：保存すると、再起動せずにすぐ反映する。前の版は `/etc/lefthand/config.yaml.prev` に残る。GUI で保存すると、ファイルのコメントは消える。
+- **GUI**：`gui/`（Vite + TypeScript）。テストは 50 件すべて通る。GitHub Pages 用のワークフローも用意した（まだ push していない）。
+
+### 実機での確認
+
+ユーザーに PC（Linux、dialout グループに追加済み）のブラウザから操作してもらった。
+
+| 項目 | 結果 |
+| --- | --- |
+| 接続（ttyACM1 を選ぶ） | OK |
+| 学習モード（Brain の Q、左上のセル） | OK |
+| Q を X に、セル 2,1 を Y「テスト」にして保存 | OK |
+| Brain の画面と PC への入力に反映 | OK |
+| Shift を押したまま保存したとき、押しっぱなしにならないか | 未確認 |
+| 気づいたこと | なし |
+
+報告された問題はなかったので、コードは変えていない。
+
+### 確認後の後片付け
+
+確認のあいだに、デーモンのログで 4 回の保存（01:07、01:09、01:18、01:19）があった。
+そのため `config.yaml.prev` は 3 回目の保存の版で、確認前の版ではない。
+
+- **確認前の版の特定**：コミット 506c460 の `config.yaml`（HEAD と同じ）。Brain の `~/lefthand/config.yaml` とも一致した。
+- **確認後の版との差**：`-dump-json` でそろえて比べると、違いは base の KEY_Q（B が Q に）と KEY_W（E が W に）の 2 つだけだった。セル 2,1 はすでに消えていた。
+- **戻し方**：確認後の版を Brain の `~/lefthand/config.yaml.gui-test-20261004` と `/etc/lefthand/config.yaml.prev` に残した。確認前の版を `-check` で検証して配置し、lefthand.service を再起動した。
+- **戻ったことの確認**：再起動後、ttyGS1 で待ち受けていた。PC から get_config で取った設定は、確認前の版の `-dump-json` と完全に一致した。
+
+### 残っている課題
+
+- **Shift を押したまま保存**：押しっぱなしにならないかは、まだ実機で確かめていない。
+- **Windows と macOS**：Linux でしか試していない。ポートの選び方やドライバの違いを確かめる。
+- **GitHub Pages**：ワークフローはあるが、push と公開はしていない。公開したら、https のページから接続できるかを試す。
+
 ## 追記：レイヤー機能（2026-10-04）
 
 キーとタッチの割り当てを、レイヤーで切り替えられるようにした。実機で全項目を確かめ、サービスに反映済み。
