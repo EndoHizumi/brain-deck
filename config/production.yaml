@@ -1,0 +1,211 @@
+# /etc/lefthand/config.yaml（本番用）
+#
+# Brainux Wiki のキーアサインに合わせた設定。
+#   https://wiki.brainux.org/beginners/get-started/#キーボード
+#   PW-SH2 は「Sx1 ~ Sx3, HC4 ~ HC6, SR1」のグループ：
+#     Shift = シフト、Ctrl = ページアップ（《 を横に倒した記号）、Alt = 文字切り替え、記号 = 記号
+#
+# 方針：
+#   - base では、カーネルが出すキーをすべて、同じキーとして PC に送る。
+#     そのため PC からは、Brainux のコンソールと同じキー配列に見える（keymap.png の 通常 / Shift / 記号 / 記号 + Shift）。
+#   - 「記号」キーはカーネルの中で処理され、押しているあいだ別のキーコードが届く（Q〜P → KEY_1〜KEY_0 など）。
+#     これも同じキーとして送るので、記号の入力も Wiki と同じになる。
+#   - Wiki では、イベントが出る本体キーすべてに役割がある（辞書キーも Esc・Tab・PgU・PgD・Ins・Del）。
+#     そのため、レイヤーの切り替えは、画面右の帯のソフトキーとタッチのセルで行う。
+#   - 割り当てのない本体キーは、PC に何も送らない。base には、届くキーをすべて書いてある。
+#
+# 書き方は docs/config.md、本体のキーの名前は docs/keymap-pwsh2.md を参照。
+# 送る記号は US 配列での位置。PC が JIS 配列だと、一部の記号が別の文字になる（docs/keymap-pwsh2.md の物理キーとは無関係）。
+# テスト用の設定は、リポジトリ直下の config.yaml。
+hid_device: /dev/hidg0
+
+# パス(/dev/input/eventN)かデバイス名のどちらでも指定できる。
+# event 番号は起動順で変わることがあるので、デバイス名を推奨
+keyboard: brain-kbd-i2c
+
+# タッチパネルそのものの設定（どのレイヤーでも共通）。テスト用の config.yaml と同じ値
+touch:
+  device: mxs-lradc-ts
+  # 2026-10-03 キャリブレーション（爪で画面の端ぎりぎりの四隅を押した値）
+  #   左上 229,3834 / 右上 3990,3773 / 右下 3886,352 / 左下 224,416
+  # Y は上下が逆なので min_y > max_y
+  swap_xy: false
+  min_x: 226
+  max_x: 3938
+  min_y: 3803
+  max_y: 384
+  # 画面右の印刷された帯（HOME ▲ ▼ ▶ ◀ 決定 戻る 操作機能）。パネルの生の座標で書く。
+  # 画面の右端（右の列の右側 40 ドットほど）と重なるので、
+  # レイヤーの soft_keys に割り当てたものだけが、セルより優先される
+  soft_areas:
+    home:  { x: [3740, 4095], y: [3377, 4095] }
+    up:    { x: [3740, 4095], y: [2949, 3376] }
+    down:  { x: [3740, 4095], y: [2522, 2948] }
+    right: { x: [3740, 4095], y: [2095, 2521] }
+    left:  { x: [3740, 4095], y: [1667, 2094] }
+    enter: { x: [3740, 4095], y: [1240, 1666] }
+    back:  { x: [3740, 4095], y: [812, 1239] }
+    menu:  { x: [3740, 4095], y: [0, 811] }
+
+# レイヤー。最初のものが base（いつも一番下にある）。
+# 書いていないキー・セル・ソフトキーは、下のレイヤーの割り当てを使う。none と書くと無効
+layers:
+  # ================================================================
+  # base：Brainux Wiki と同じキー配列
+  # ================================================================
+  - name: base
+    label: "基本"
+    keys:
+      # ---- 上の段（辞書キー）。Wiki の「Esc Tab PgU PgD Ins Del」 ----
+      # 電源（Wiki の Pwr）は、実機ではイベントが出ないので書かない。ツール・ホームも出ない
+      KEY_ESC: ESC              # 調べる・戻る（同じコード）。Wiki の Esc
+      KEY_TAB: TAB              # 国語。Wiki の Tab
+      KEY_PAGEUP: PAGEUP        # 英和/和英。Wiki の PgU（「ページアップ」キーではない）
+      KEY_PAGEDOWN: PAGEDOWN    # マイ辞書。Wiki の PgD
+      KEY_INSERT: INSERT        # 履歴/しおり。Wiki の Ins
+      KEY_DELETE: DELETE        # マーカーテスト。Wiki の Del
+
+      # ---- 文字キー。Wiki の「通常」と「Shift」（Shift はシフトキーとの組み合わせで PC 側が処理する） ----
+      KEY_Q: Q
+      KEY_W: W
+      KEY_E: E
+      KEY_R: R
+      KEY_T: T
+      KEY_Y: Y
+      KEY_U: U
+      KEY_I: I
+      KEY_O: O
+      KEY_P: P
+      KEY_A: A
+      KEY_S: S
+      KEY_D: D
+      KEY_F: F
+      KEY_G: G
+      KEY_H: H
+      KEY_J: J
+      KEY_K: K
+      KEY_L: L
+      KEY_Z: Z
+      KEY_X: X
+      KEY_C: C
+      KEY_V: V
+      KEY_B: B
+      KEY_N: N
+      KEY_M: M
+      KEY_MINUS: MINUS          # −。Wiki の - / Shift で _
+      KEY_BACKSPACE: BACKSPACE  # 後退。Wiki の BS
+
+      # ---- 修飾キー。Wiki の Shift・Ctrl・Alt ----
+      KEY_LEFTSHIFT: LSHIFT     # シフト
+      KEY_LEFTCTRL: LCTRL       # ページアップ（《 を横に倒した記号）
+      KEY_LEFTALT: LALT         # 文字切り替え
+
+      # ---- 下の段。Wiki の画像にはないが、カーネルが出すキーをそのまま送る ----
+      KEY_SPACE: SPACE          # スペース
+      KEY_ENTER: ENTER          # 決定
+      KEY_LEFT: LEFT            # ←
+      KEY_UP: UP                # ↑
+      KEY_DOWN: DOWN            # ↓
+      KEY_RIGHT: RIGHT          # →
+
+      # ---- 「記号」を押しているあいだに届くコード。Wiki の「記号」と「記号 + Shift」 ----
+      # 数字は YAML の数値にならないよう引用符で囲む
+      KEY_1: "1"                # 記号+Q → 1、+Shift で !
+      KEY_2: "2"                # 記号+W → 2、+Shift で @
+      KEY_3: "3"                # 記号+E → 3、+Shift で #
+      KEY_4: "4"                # 記号+R → 4、+Shift で $
+      KEY_5: "5"                # 記号+T → 5、+Shift で %
+      KEY_6: "6"                # 記号+Y → 6、+Shift で ^
+      KEY_7: "7"                # 記号+U → 7、+Shift で &
+      KEY_8: "8"                # 記号+I → 8、+Shift で *
+      KEY_9: "9"                # 記号+O → 9、+Shift で (
+      KEY_0: "0"                # 記号+P → 0、+Shift で )
+      KEY_GRAVE: GRAVE          # 記号+D → `、+Shift で ~
+      KEY_EQUAL: EQUAL          # 記号+F → =、+Shift で +
+      KEY_BACKSLASH: BACKSLASH  # 記号+G → \、+Shift で |
+      KEY_SEMICOLON: SEMICOLON  # 記号+H → ;、+Shift で :
+      KEY_APOSTROPHE: APOSTROPHE  # 記号+J → '、+Shift で "
+      KEY_LEFTBRACE: LEFTBRACE  # 記号+K → [、+Shift で {
+      KEY_RIGHTBRACE: RIGHTBRACE  # 記号+L → ]、+Shift で }
+      KEY_COMMA: COMMA          # 記号+N → ,、+Shift で <
+      KEY_DOT: DOT              # 記号+M → .、+Shift で >
+      KEY_SLASH: SLASH          # 記号+− → /、+Shift で ?
+      # 記号を押しているあいだ、A・S・Z〜B・スペース・決定・戻る・矢印は、カーネルが捨てる（Wiki の画像でも空欄）
+
+    # ---- タッチのセル（テスト用の config.yaml から引き継ぐ） ----
+    # "列,行": { key: 送るキー, label: "表示名" }。label の中の \n で改行できる
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": { key: B, label: "ブラシ" }
+        "1,0": { key: E, label: "消しゴム" }
+        "2,0": { key: LCTRL+Z, label: "取り消し" }
+        "3,0": { key: LCTRL+LSHIFT+Z, label: "やり直し" }
+        "0,1": { key: LEFTBRACE, label: "ブラシ小" }
+        "1,1": { key: RIGHTBRACE, label: "ブラシ大" }
+        "0,2": { layer_toggle: view, label: "表示" }
+        "1,2": { layer_toggle: edit, label: "編集" }   # 追加：文字切り替え・マイ辞書で入っていた「編集」の代わり
+        "3,2": { key: SPACE, label: "手のひら" }
+
+    # ---- 画面右の帯：レイヤーの切り替え ----
+    # Wiki で役割が決まっていないので、ここにレイヤーの切り替えを集める。
+    # 上のレイヤーで書かなければ透過するので、どのレイヤーからでも同じように使える。
+    # 割り当てていない区画（決定・戻る・操作機能）は、右の列のセルとして働く
+    soft_keys:
+      home: { layer_to: base }        # HOME：どのレイヤーからでも base に戻る（前の 調べる・戻る の代わり）
+      up: { layer_toggle: edit }      # ▲：押すたびに「編集」を出し入れ
+      down: { layer_toggle: view }    # ▼：押すたびに「表示」を出し入れ（前の 国語 の代わり）
+      right: { layer_oneshot: edit }  # ▶：次の 1 キーだけ「編集」（前の マイ辞書 の代わり）
+      left: { layer_hold: edit }      # ◀：押しているあいだ「編集」（前の 文字切り替え の代わり。本体キーと一緒に使う）
+
+  # ================================================================
+  # edit：編集のショートカット（テスト用の config.yaml から引き継ぐ）
+  # 入り方：帯の ▲（切替）・▶（1回）・◀（押す間）、タッチの「編集」セル
+  # 戻り方：帯の HOME、▲、タッチの「編集」セル（いずれも base から透過）
+  # ================================================================
+  - name: edit
+    label: "編集"
+    keys:
+      KEY_Q: LCTRL+C
+      KEY_W: LCTRL+V
+      KEY_E: LCTRL+X
+      KEY_A: LCTRL+A
+      KEY_D: LCTRL+D
+      # 書いていないキーは base（Wiki の配列）のまま
+    touch:                                   # cols/rows を省略すると base と同じ 4x3。書いていないセルは base のもの
+      cells:
+        "0,0": { key: LCTRL+C, label: "コピー" }
+        "1,0": { key: LCTRL+V, label: "貼り付け" }
+        "2,0": { key: LCTRL+X, label: "切り取り" }
+        "3,0": { key: LCTRL+A, label: "全選択" }
+        "0,1": { key: LCTRL+D, label: "選択解除" }
+        "1,1": { key: LCTRL+T, label: "変形" }
+
+  # ================================================================
+  # view：表示の操作（テスト用の config.yaml から引き継ぐ）
+  # 入り方：帯の ▼、タッチの「表示」セル
+  # 戻り方：帯の HOME、▼、このレイヤーの「戻る」セル
+  # ================================================================
+  - name: view
+    label: "表示"
+    keys:
+      KEY_Q: LCTRL+KPPLUS                    # テンキーの + なので、PC の配列によらず Ctrl++
+      KEY_W: LCTRL+KPMINUS
+    touch:                                   # 格子の大きさを変えるので、base のセルは透過しない（帯のソフトキーは透過する）
+      cols: 3
+      rows: 2
+      cells:
+        "0,0": { key: LCTRL+KPPLUS, label: "拡大" }
+        "1,0": { key: LCTRL+KPMINUS, label: "縮小" }
+        "2,0": { key: LCTRL+0, label: "全体" }
+        "0,1": { key: H, label: "左右反転" }
+        "1,1": { key: R, label: "回転" }
+        "2,1": { layer_toggle: view, label: "戻る" }
+
+# 画面表示。省略すると、touch があれば /dev/fb0 に描く
+display:
+  enabled: true
+  device: /dev/fb0
+  vt: 0       # 0 なら tty8 以降の空いている VT を使う
+  rotate: 0   # 画面の回転（0, 90, 180, 270）
