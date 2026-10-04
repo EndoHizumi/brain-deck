@@ -1,0 +1,340 @@
+# /etc/lefthand/config.yaml（Web 開発用：macOS + VS Code + Firefox）
+#
+# 本体キーは config/production.yaml と同じく、Brainux Wiki のキーアサインのまま送る。
+#   https://wiki.brainux.org/beginners/get-started/#キーボード
+#   シフト = Shift、ページアップ = Control、文字切り替え = Option（Alt）、記号 = 記号
+# 画面のセルと帯で、macOS・VS Code・Firefox のショートカットを送る。
+#
+# macOS で使う前に：
+#   - Brain の本体には Command キーがない。帯の「戻る」か、base の「Cmd」セルを押しているあいだ Command になる。
+#     押さえたまま本体のキーを押すと Command+キー（例：「戻る」を押さえて C で Cmd+C）
+#   - 記号は US 配列の位置で送る。PC が JIS 配列なら、このキーボードの種類を ANSI にしておく
+#     （システム設定 → キーボード → 「キーボードの種類を変更…」）。
+#   - F11（ステップイン）は、macOS の既定では「デスクトップを表示」に取られる。
+#     システム設定 → キーボード → キーボードショートカット → Mission Control で外しておく。
+#   - Control+←/→/↑/↓ は macOS の操作スペースと Mission Control。ウィンドウのレイヤーで使う。
+#   - 画面のセルの下に小さく出る送信キーでは、Command（LGUI）は「Win」、Option（LALT）は「Alt」と表示される。
+#
+# 書き方は docs/config.md、本体のキーの名前は docs/keymap-pwsh2.md を参照。
+hid_device: /dev/hidg0
+keyboard: brain-kbd-i2c
+
+# タッチパネルそのものの設定（どのレイヤーでも共通）。config/production.yaml と同じ値
+touch:
+  device: mxs-lradc-ts
+  # 2026-10-03 キャリブレーション（爪で画面の端ぎりぎりの四隅を押した値）。Y は上下が逆なので min_y > max_y
+  swap_xy: false
+  min_x: 226
+  max_x: 3938
+  min_y: 3803
+  max_y: 384
+  # 画面右の印刷された帯（HOME ▲ ▼ ▶ ◀ 決定 戻る 操作機能）。パネルの生の座標で書く。
+  # このファイルでは 8 区画すべてに割り当てるので、右の列のセルの右端 40 ドットほどは、いつも帯として働く
+  soft_areas:
+    home:  { x: [3740, 4095], y: [3377, 4095] }
+    up:    { x: [3740, 4095], y: [2949, 3376] }
+    down:  { x: [3740, 4095], y: [2522, 2948] }
+    right: { x: [3740, 4095], y: [2095, 2521] }
+    left:  { x: [3740, 4095], y: [1667, 2094] }
+    enter: { x: [3740, 4095], y: [1240, 1666] }
+    back:  { x: [3740, 4095], y: [812, 1239] }
+    menu:  { x: [3740, 4095], y: [0, 811] }
+
+# レイヤー。最初のものが base（いつも一番下にある）。
+# 書いていないキー・セル・ソフトキーは、下のレイヤーの割り当てを使う。none と書くと無効。
+# 本体キーを変えるのは「移動」だけ。ほかのレイヤーは、本体キーが base（Wiki の配列）のまま
+layers:
+  # ================================================================
+  # base：本体キーは Wiki と同じ。セルは macOS の基本の操作
+  # ================================================================
+  - name: base
+    label: "基本"
+    keys:
+      # ---- 上の段（辞書キー）。Wiki の「Esc Tab PgU PgD Ins Del」 ----
+      # 電源（Wiki の Pwr）は、実機ではイベントが出ないので書かない。ツール・ホームも出ない
+      KEY_ESC: ESC              # 調べる・戻る（同じコード）。Wiki の Esc
+      KEY_TAB: TAB              # 国語。Wiki の Tab
+      KEY_PAGEUP: PAGEUP        # 英和/和英。Wiki の PgU（「ページアップ」キーではない）
+      KEY_PAGEDOWN: PAGEDOWN    # マイ辞書。Wiki の PgD
+      KEY_INSERT: INSERT        # 履歴/しおり。Wiki の Ins
+      KEY_DELETE: DELETE        # マーカーテスト。Wiki の Del
+
+      # ---- 文字キー。Wiki の「通常」と「Shift」（Shift はシフトキーとの組み合わせで PC 側が処理する） ----
+      KEY_Q: Q
+      KEY_W: W
+      KEY_E: E
+      KEY_R: R
+      KEY_T: T
+      KEY_Y: Y
+      KEY_U: U
+      KEY_I: I
+      KEY_O: O
+      KEY_P: P
+      KEY_A: A
+      KEY_S: S
+      KEY_D: D
+      KEY_F: F
+      KEY_G: G
+      KEY_H: H
+      KEY_J: J
+      KEY_K: K
+      KEY_L: L
+      KEY_Z: Z
+      KEY_X: X
+      KEY_C: C
+      KEY_V: V
+      KEY_B: B
+      KEY_N: N
+      KEY_M: M
+      KEY_MINUS: MINUS          # −。Wiki の - / Shift で _
+      KEY_BACKSPACE: BACKSPACE  # 後退。Wiki の BS
+
+      # ---- 修飾キー。Wiki の Shift・Ctrl・Alt ----
+      KEY_LEFTSHIFT: LSHIFT     # シフト
+      KEY_LEFTCTRL: LCTRL       # ページアップ（《 を横に倒した記号）
+      KEY_LEFTALT: LALT         # 文字切り替え
+
+      # ---- 下の段。Wiki の画像にはないが、カーネルが出すキーをそのまま送る ----
+      KEY_SPACE: SPACE          # スペース
+      KEY_ENTER: ENTER          # 決定
+      KEY_LEFT: LEFT            # ←
+      KEY_UP: UP                # ↑
+      KEY_DOWN: DOWN            # ↓
+      KEY_RIGHT: RIGHT          # →
+
+      # ---- 「記号」を押しているあいだに届くコード。Wiki の「記号」と「記号 + Shift」 ----
+      # 数字は YAML の数値にならないよう引用符で囲む
+      KEY_1: "1"                # 記号+Q → 1、+Shift で !
+      KEY_2: "2"                # 記号+W → 2、+Shift で @
+      KEY_3: "3"                # 記号+E → 3、+Shift で #
+      KEY_4: "4"                # 記号+R → 4、+Shift で $
+      KEY_5: "5"                # 記号+T → 5、+Shift で %
+      KEY_6: "6"                # 記号+Y → 6、+Shift で ^
+      KEY_7: "7"                # 記号+U → 7、+Shift で &
+      KEY_8: "8"                # 記号+I → 8、+Shift で *
+      KEY_9: "9"                # 記号+O → 9、+Shift で (
+      KEY_0: "0"                # 記号+P → 0、+Shift で )
+      KEY_GRAVE: GRAVE          # 記号+D → `、+Shift で ~
+      KEY_EQUAL: EQUAL          # 記号+F → =、+Shift で +
+      KEY_BACKSLASH: BACKSLASH  # 記号+G → \、+Shift で |
+      KEY_SEMICOLON: SEMICOLON  # 記号+H → ;、+Shift で :
+      KEY_APOSTROPHE: APOSTROPHE  # 記号+J → '、+Shift で "
+      KEY_LEFTBRACE: LEFTBRACE  # 記号+K → [、+Shift で {
+      KEY_RIGHTBRACE: RIGHTBRACE  # 記号+L → ]、+Shift で }
+      KEY_COMMA: COMMA          # 記号+N → ,、+Shift で <
+      KEY_DOT: DOT              # 記号+M → .、+Shift で >
+      KEY_SLASH: SLASH          # 記号+− → /、+Shift で ?
+      # 記号を押しているあいだ、A・S・Z〜B・スペース・決定・戻る・矢印は、カーネルが捨てる（Wiki の画像でも空欄）
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": { key: LGUI+S, label: "保存" }
+        "1,0": { key: LGUI+Z, label: "取り消し" }
+        "2,0": { key: LGUI+LSHIFT+Z, label: "やり直し" }
+        "3,0": { key: LGUI+F, label: "検索" }
+        "0,1": { key: LGUI+C, label: "コピー" }
+        "1,1": { key: LGUI+V, label: "貼り付け" }
+        "2,1": { key: LGUI+X, label: "切り取り" }
+        "3,1": { key: LGUI+A, label: "全選択" }
+        "0,2": { layer_toggle: menu, label: "メニュー" }
+        "1,2": { key: LGUI, label: "Cmd\n押す間" }    # 押さえたまま本体のキーを押すと Command+キー
+        "2,2": { key: LGUI+TAB, label: "アプリ\n切替" }
+        "3,2": { key: LGUI+SPACE, label: "Spotlight" }
+
+    # ---- 画面右の帯 ----
+    # 上のレイヤーで書かないので、どのレイヤーからでも同じように使える。
+    # layer_toggle のレイヤーは、同じ区画をもう一度押すと抜ける
+    soft_keys:
+      home: { layer_to: base }          # HOME：どのレイヤーからでも base に戻る
+      up: { layer_toggle: code }        # ▲：コード（VS Code）
+      down: { layer_toggle: browser }   # ▼：ブラウザ（Firefox）
+      right: { layer_toggle: debug }    # ▶：デバッグ
+      left: { layer_toggle: move }      # ◀：移動（本体キーを矢印にする）
+      enter: { layer_toggle: symbol }   # 決定：記号パッド
+      back: { key: LGUI }               # 戻る：押しているあいだ Command
+      menu: { layer_toggle: menu }      # 操作機能：メニュー（レイヤーの一覧）
+
+  # ================================================================
+  # menu：レイヤーの一覧。帯の記号を覚えなくても、ここから選べる
+  # 入り方：帯の「操作機能」、base の「メニュー」セル。もう一度押すと閉じる
+  # ================================================================
+  - name: menu
+    label: "メニュー"
+    touch:
+      cols: 4
+      rows: 2
+      cells:
+        "0,0": { layer_to: code, label: "コード" }
+        "1,0": { layer_to: browser, label: "ブラウザ" }
+        "2,0": { layer_to: debug, label: "デバッグ" }
+        "3,0": { layer_to: move, label: "移動" }
+        "0,1": { layer_to: symbol, label: "記号" }
+        "1,1": { layer_to: window, label: "ウィンドウ" }
+        "3,1": { layer_to: base, label: "基本" }
+
+  # ================================================================
+  # code：VS Code（macOS の既定のキーバインド）
+  # 行の移動（Option+↑/↓）は、本体の 文字切り替え+↑/↓ でそのまま押せる
+  # ================================================================
+  - name: code
+    label: "コード"
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": { key: LGUI+LSHIFT+P, label: "コマンド\nパレット" }
+        "1,0": { key: LGUI+P, label: "ファイル\nを開く" }
+        "2,0": { key: LGUI+LSHIFT+F, label: "全体を\n検索" }
+        "3,0": { key: LGUI+B, label: "サイド\nバー" }
+        "0,1": { key: F12, label: "定義へ" }
+        "1,1": { key: LSHIFT+F12, label: "参照" }
+        "2,1": { key: LCTRL+MINUS, label: "前の\n位置へ" }      # Go Back
+        "3,1": { key: F2, label: "名前の\n変更" }
+        "0,2": { key: LSHIFT+LALT+F, label: "整形" }
+        "1,2": { key: LGUI+SLASH, label: "コメント" }
+        "2,2": { key: LGUI+D, label: "次の一致\nも選択" }
+        "3,2": { key: LGUI+DOT, label: "クイック\n修正" }
+
+  # ================================================================
+  # browser：Firefox と開発ツール（macOS）
+  # ================================================================
+  - name: browser
+    label: "ブラウザ"
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": { key: LGUI+LALT+I, label: "開発\nツール" }
+        "1,0": { key: LGUI+LSHIFT+C, label: "要素を\n選択" }
+        "2,0": { key: LGUI+LALT+K, label: "コン\nソール" }
+        "3,0": { key: LGUI+LALT+M, label: "レスポン\nシブ" }
+        "0,1": { key: LGUI+R, label: "再読み\n込み" }
+        "1,1": { key: LGUI+LSHIFT+R, label: "強制\n再読込" }      # キャッシュを使わない
+        "2,1": { key: LGUI+L, label: "アドレス\nバー" }
+        "3,1": { key: LGUI+LSHIFT+T, label: "閉じた\nタブ" }
+        "0,2": { key: LCTRL+LSHIFT+TAB, label: "前の\nタブ" }
+        "1,2": { key: LCTRL+TAB, label: "次の\nタブ" }
+        "2,2": { key: LGUI+EQUAL, label: "拡大" }                # ANSI 配列にしておくこと
+        "3,2": { key: LGUI+MINUS, label: "縮小" }
+
+  # ================================================================
+  # debug：上の 2 段は VS Code、下の段は Firefox のデバッガ
+  # ステップ（F10、F11、Shift+F11）は両方で同じ
+  # ================================================================
+  - name: debug
+    label: "デバッグ"
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": { key: F5, label: "開始\n続行" }
+        "1,0": { key: F10, label: "ステップ\nオーバー" }
+        "2,0": { key: F11, label: "ステップ\nイン" }            # macOS の「デスクトップを表示」を外しておく
+        "3,0": { key: LSHIFT+F11, label: "ステップ\nアウト" }
+        "0,1": { key: F9, label: "ブレーク\nポイント" }
+        "1,1": { key: LSHIFT+F5, label: "停止" }
+        "2,1": { key: LGUI+LSHIFT+F5, label: "再起動" }
+        "3,1": { key: LGUI+LSHIFT+D, label: "実行と\nデバッグ" } # サイドバーの表示
+        "0,2": { key: F8, label: "FF\n再開" }                   # Firefox：一時停止から再開
+        "1,2": { key: LGUI+B, label: "FF\nブレーク" }            # Firefox：ブレークポイント
+        "2,2": { key: LGUI+LSHIFT+B, label: "FF条件付\nブレーク" } # Firefox：条件付きブレークポイント
+        "3,2": { key: LGUI+LALT+Z, label: "FF\nデバッガ" }       # Firefox：デバッガのパネルを開く
+
+  # ================================================================
+  # move：本体のキーで移動する（vim 風）。シフトを押しながらで選択になる
+  # セルにも同じ操作を並べ、どのキーが何かを画面で見られるようにする
+  # ================================================================
+  - name: move
+    label: "移動"
+    keys:
+      KEY_H: LEFT
+      KEY_J: DOWN
+      KEY_K: UP
+      KEY_L: RIGHT
+      KEY_B: LALT+LEFT        # 前の単語
+      KEY_W: LALT+RIGHT       # 次の単語
+      KEY_A: LGUI+LEFT        # 行頭
+      KEY_E: LGUI+RIGHT       # 行末
+      KEY_U: PAGEUP
+      KEY_D: PAGEDOWN
+      KEY_I: LGUI+UP          # 文書の先頭
+      KEY_M: LGUI+DOWN        # 文書の末尾
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": { key: LALT+LEFT, label: "単語←\n(B)" }
+        "1,0": { key: UP, label: "↑\n(K)" }
+        "2,0": { key: LALT+RIGHT, label: "単語→\n(W)" }
+        "3,0": { key: LGUI+UP, label: "先頭\n(I)" }
+        "0,1": { key: LEFT, label: "←\n(H)" }
+        "1,1": { key: DOWN, label: "↓\n(J)" }
+        "2,1": { key: RIGHT, label: "→\n(L)" }
+        "3,1": { key: LGUI+DOWN, label: "末尾\n(M)" }
+        "0,2": { key: LGUI+LEFT, label: "行頭\n(A)" }
+        "1,2": { key: PAGEUP, label: "PgUp\n(U)" }
+        "2,2": { key: PAGEDOWN, label: "PgDn\n(D)" }
+        "3,2": { key: LGUI+RIGHT, label: "行末\n(E)" }
+
+  # ================================================================
+  # symbol：記号パッド。Wiki の配列で 3 つ押し（記号+シフト+キー）になる記号を、1 回で打つ
+  # 1 回の「記号」で打てる = \ ; ' [ ] ` , . / は入れていない
+  # US 配列の位置で送るので、PC 側をこのキーボードだけ ANSI にしておくこと
+  # ================================================================
+  - name: symbol
+    label: "記号"
+    touch:
+      cols: 5
+      rows: 4
+      cells:
+        "0,0": { key: LSHIFT+9, label: "(" }
+        "1,0": { key: LSHIFT+0, label: ")" }
+        "2,0": { key: LSHIFT+LEFTBRACE, label: "{" }
+        "3,0": { key: LSHIFT+RIGHTBRACE, label: "}" }
+        "4,0": { key: LSHIFT+COMMA, label: "<" }
+        "0,1": { key: LSHIFT+DOT, label: ">" }
+        "1,1": { key: LSHIFT+APOSTROPHE, label: "\"" }
+        "2,1": { key: LSHIFT+SEMICOLON, label: ":" }
+        "3,1": { key: LSHIFT+BACKSLASH, label: "|" }
+        "4,1": { key: LSHIFT+MINUS, label: "_" }
+        "0,2": { key: LSHIFT+1, label: "!" }
+        "1,2": { key: LSHIFT+2, label: "@" }
+        "2,2": { key: LSHIFT+3, label: "#" }
+        "3,2": { key: LSHIFT+4, label: "$" }
+        "4,2": { key: LSHIFT+5, label: "%" }
+        "0,3": { key: LSHIFT+6, label: "^" }
+        "1,3": { key: LSHIFT+7, label: "&" }
+        "2,3": { key: LSHIFT+8, label: "*" }
+        "3,3": { key: LSHIFT+EQUAL, label: "+" }
+        "4,3": { key: LSHIFT+SLASH, label: "?" }
+
+  # ================================================================
+  # window：macOS のウィンドウと操作スペース
+  # 入り方：メニューから（帯の区画が足りないので、帯には置かない）
+  # ================================================================
+  - name: window
+    label: "ウィンドウ"
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": { key: LGUI+TAB, label: "アプリ\n切替" }
+        "1,0": { key: LGUI+GRAVE, label: "同じアプリ\nの次" }    # ANSI 配列にしておくこと
+        "2,0": { key: LCTRL+UP, label: "Mission\nControl" }
+        "3,0": { key: LCTRL+DOWN, label: "アプリの\nウィンドウ" }
+        "0,1": { key: LCTRL+LEFT, label: "左の\nスペース" }
+        "1,1": { key: LCTRL+RIGHT, label: "右の\nスペース" }
+        "2,1": { key: LCTRL+LGUI+F, label: "フル\nスクリーン" }
+        "3,1": { key: LGUI+LSHIFT+5, label: "スクリーン\nショット" }
+        "0,2": { key: LGUI+M, label: "しまう" }
+        "1,2": { key: LGUI+H, label: "隠す" }
+        "2,2": { key: LGUI+W, label: "閉じる" }
+        "3,2": { key: LGUI+SPACE, label: "Spotlight" }
+
+# 画面表示。省略すると、touch があれば /dev/fb0 に描く
+display:
+  enabled: true
+  device: /dev/fb0
+  vt: 0       # 0 なら tty8 以降の空いている VT を使う
+  rotate: 0   # 画面の回転（0, 90, 180, 270）
