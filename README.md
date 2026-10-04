@@ -52,7 +52,7 @@ PC のブラウザ（設定 GUI） ←─ USB シリアル ─→ /dev/ttyGS1（
 
 ## 必要なもの
 
-- **Brain 本体**：Sharp Brain PW-SH2 に Brainux（Debian 13 ベース）を入れたもの。カーネルが USB ガジェットの HID と ACM に対応していること。
+- **Brain 本体**：Sharp Brain PW-SH2 に Brainux（Debian 13 ベース）を入れたもの。カーネルが USB ガジェットの HID と ACM に対応していること。Brainux 標準のカーネルは対応していないので、再ビルドする。手順は [docs/kernel-build.md](docs/kernel-build.md)。
 - **PC**：ビルド用に Go 1.27 以降。cgo は使わない。
 - **USB ケーブル**：Brain と PC をつなぐもの。動作確認は Linux の PC で行った。
 
@@ -414,6 +414,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config.yaml | 設定の例。実機と同じ値 |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
+| docs/kernel-build.md | HID と ACM を有効にしたカーネルのビルドと、SD カードへの差し替え |
+| kernel/brain-deck.config | カーネルの設定の差分（brain_defconfig に重ねる） |
 | docs/protocol.md | 設定 GUI とのプロトコル |
 | gui/ | 設定 GUI（TypeScript、Vite） |
 | REPORT.md | 作業の記録 |
