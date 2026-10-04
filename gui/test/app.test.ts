@@ -59,8 +59,29 @@ describe('接続', () => {
     const silent: Transport = { onData: () => {}, onClose: () => {}, send: async () => {}, close: async () => {} }
     const t = setup({ transport: () => silent })
     t.click('#connect')
-    await vi.waitFor(() => expect(t.root.textContent).toContain('設定用ではないようです'))
+    await vi.waitFor(() => expect(t.root.textContent).toContain('lefthand が答えません'))
     expect(t.app.connected).toBe(false)
+  })
+
+  it('ポートを開けないときは、権限の手順を案内する（「設定用ではない」とは言わない）', async () => {
+    const root = document.createElement('div')
+    document.body.replaceChildren(root)
+    const { serial } = fakeSerial()
+    const app = new App(root, {
+      serial,
+      openTransport: async () => {
+        throw new Error('Failed to open serial port.')
+      },
+      loadFont: async () => testFont(),
+      helloTimeoutMs: 100,
+    })
+    await app.connect()
+    expect(root.textContent).toContain('Failed to open serial port.')
+    expect(root.textContent).toContain('dialout')
+    expect(root.textContent).not.toContain('答えません')
+    // 一度許可したポートでも同じ
+    await app.connect()
+    expect(root.textContent).toContain('dialout')
   })
 
   it('ケーブルが抜けても、編集中の内容は残る', async () => {

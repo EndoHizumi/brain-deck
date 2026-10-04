@@ -48,6 +48,18 @@ const SOFT_TITLES: Record<string, string> = {
   home: 'HOME', up: '▲', down: '▼', right: '▶', left: '◀', enter: '決定', back: '戻る', menu: '操作機能',
 }
 
+type TryResult = { result: 'ok' } | { result: 'no_answer' } | { result: 'open_failed'; error: string }
+
+// openFailedMessage は、ポートを開けなかったときの案内。Linux では権限がないことが多い。
+function openFailedMessage(err: string): string {
+  return (
+    `シリアルポートを開けません（${err}）。` +
+    'Linux では、/dev/ttyACM* を開く権限が要ります。' +
+    '「sudo usermod -aG dialout $USER」のあとログインし直すか、今だけなら「sudo setfacl -m u:$USER:rw /dev/ttyACM1」を実行してください' +
+    '（setfacl はケーブルを抜き差しすると消えます）。ほかのタブやアプリがポートを使っているときも開けません'
+  )
+}
+
 export class App {
   // 接続
   client: Client | null = null
@@ -149,21 +161,27 @@ export class App {
         const i = p.getInfo()
         return i.usbVendorId === BRAIN_FILTER.usbVendorId && i.usbProductId === BRAIN_FILTER.usbProductId
       })
-      for (const p of known) if (await this.tryPort(p)) return
+      let openError = ''
+      for (const p of known) {
+        const r = await this.tryPort(p)
+        if (r.result === 'ok') return
+        if (r.result === 'open_failed') openError = r.error
+      }
       let port: SerialPort
       try {
         port = await serial.requestPort({ filters: [BRAIN_FILTER] })
       } catch {
-        this.say('ポートが選ばれませんでした')
+        this.say(openError ? openFailedMessage(openError) : 'ポートが選ばれませんでした', openError ? 'error' : 'info')
         return
       }
-      if (!(await this.tryPort(port))) {
+      const r = await this.tryPort(port)
+      if (r.result === 'open_failed') this.say(openFailedMessage(r.error), 'error')
+      else if (r.result === 'no_answer')
         this.say(
-          'このポートは設定用ではないようです。Brain のシリアルは 2 つあり、もう一方（コンソール用）を選んだかもしれません。' +
+          'このポートは開けましたが、lefthand が答えません。Brain のシリアルは 2 つあり、もう一方（コンソール用）を選んだかもしれません。' +
             'もう一度「接続」を押して、別のポートを選んでください',
           'error',
         )
-      }
     } finally {
       this.connecting = false
       this.render()
@@ -171,13 +189,12 @@ export class App {
   }
 
   // tryPort はポートを開いて hello を送る。lefthand が答えたら、そのまま使う。
-  private async tryPort(port: SerialPort): Promise<boolean> {
+  private async tryPort(port: SerialPort): Promise<TryResult> {
     let t: Transport
     try {
       t = await this.deps.openTransport(port)
     } catch (e: any) {
-      this.say(`ポートを開けません：${e?.message ?? e}（ほかのタブやアプリが使っていませんか）`, 'error')
-      return false
+      return { result: 'open_failed', error: String(e?.message ?? e) }
     }
     const c = new Client(t)
     try {
@@ -187,16 +204,15 @@ export class App {
       if (hello.protocol !== PROTOCOL_VERSION) {
         this.say(`プロトコルの版が違います（Brain: ${hello.protocol}、GUI: ${PROTOCOL_VERSION}）。どちらかを更新してください`, 'error')
         await c.close()
-        return true // 設定用のポートではあった
+        return { result: 'ok' } // 設定用のポートではあった
       }
       c.maxLine = hello.max_line
       this.attach(c, hello)
       await this.loadFromBrain()
-      return true
-    } catch (e) {
+      return { result: 'ok' }
+    } catch {
       await c.close().catch(() => {})
-      void e
-      return false
+      return { result: 'no_answer' }
     }
   }
 
