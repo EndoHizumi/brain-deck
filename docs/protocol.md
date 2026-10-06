@@ -54,6 +54,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 
 - `protocol` はこの文書の版。互換性のない変更をしたら上げる。GUI は違えば使わない。
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
+- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせる。
 
 ### get_config
 
@@ -142,8 +143,12 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 → {"id":6,"cmd":"get_status"}
 ← {"id":6,"ok":true,"result":{"status":{"layer":"edit","label":"編集","mode":"temp",
    "stack":[{"layer":"edit","kind":"layer_hold"}],"cols":4,"rows":3},
-   "uptime_sec":120,"subscribed":true,"suppressing":true}}
+   "uptime_sec":120,"subscribed":true,"suppressing":true,
+   "time":{"now":"2026-10-06T19:04:27.13+09:00","timezone":"Asia/Tokyo","utc_offset_sec":32400,"synced":true,"ntp_synced":false,
+   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"}}}
 ```
+
+`time` は Brain の時刻の状態（下の `set_time` の結果と同じ形）。
 
 `mode` は `base`（base だけ）、`latched`（layer_toggle か layer_to で切り替えたまま）、`temp`（layer_hold か layer_oneshot で一時的）。画面の右上の札の色と同じ。
 
@@ -173,6 +178,34 @@ Brain のキーとタッチを、通知で知らせる。GUI の学習モード�
 - **key**：押したときだけ（離したときとリピートは知らせない）。「記号」を押しながらのときは、そのコード（KEY_1 など）で届く。
 - **touch**：触れた瞬間の生の座標。`col`、`row` は今の重なりの格子でのセル。`soft` は、ソフトキーの範囲に入っていれば、割り当ての有無によらず、その名前。GUI は、編集中のレイヤーの格子と、割り当ての有無で、セルかソフトキーかを決め直す。
 - **layer**：レイヤーの重なりが変わったとき。購読していれば、学習モードでなくても届く。
+
+### set_time
+
+```json
+→ {"id":9,"cmd":"set_time","unix_ms":1791280847384,"source":"gui"}
+← {"id":9,"ok":true,"result":{"stepped":true,"offset_ms":134715876,
+   "now":"2026-10-06T19:00:47.38+09:00","timezone":"Asia/Tokyo","utc_offset_sec":32400,"synced":true,"ntp_synced":false,
+   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"}}
+```
+
+Brain のシステムの時刻を合わせる。Brain には RTC がないので、電源を切っていたあいだの分だけ時刻が遅れる。設定 GUI は、接続するたびに PC の時刻を送る。
+
+| 引数 | 内容 |
+| --- | --- |
+| `unix_ms` | 合わせる時刻。1970-01-01 UTC からのミリ秒。2024 年から 2100 年まで。範囲の外は `bad_request` |
+| `source` | 送った側の名前（記録とログ用）。省略すると `unknown` |
+
+| 結果 | 内容 |
+| --- | --- |
+| `stepped` | システムの時刻を動かしたか。ずれが 0.5 秒より小さいときは動かさない（合わせたことにはなる） |
+| `offset_ms` | 合わせる前のずれ（送られた時刻 − Brain の時刻）。正なら Brain が遅れていた |
+| `now`、`timezone`、`utc_offset_sec` | 合わせたあとの Brain の時刻と、タイムゾーン（`/etc/localtime`）。タイムゾーンは変えない。GUI は PC と違えば知らせる |
+| `synced` | Brain を起動してから、時刻を合わせたか（`set_time` か NTP）。false のあいだ、時計のウィジェットは「時刻未設定」と出す |
+| `ntp_synced` | NTP で合っているか（カーネルの STA_UNSYNC が消えている） |
+| `last_set`、`last_source` | 最後に `set_time` で合わせた時刻（UTC）と、送った側 |
+
+- **記録**：合わせたことは `/var/lib/lefthand/clock.json` に、起動ごとの ID（boot_id）と一緒に残す。デーモンを再起動しても「合わせ済み」のまま。Brain を再起動すると、ID が変わるので「未設定」に戻る。記録は返事のあとに書く（SD カードの書き込みを待たせない）。
+- **権限**：デーモンは root で動くので、時刻を変えられる。
 
 ## エラーの種類
 

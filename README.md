@@ -6,6 +6,8 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
+- **ウィジェット**：タッチのセルに、キーの代わりに時計などを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI が接続したときに PC の時刻に合わせる。
 - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
 - **PC から見た Brain**：標準の USB キーボードとして見えるので、PC 側に専用のソフトは要らない。同じ USB ケーブルで、設定や保守のためのネットワーク（SSH）とシリアルも使える。
 - **設定 GUI**：PC のブラウザ（Chrome / Edge）から、USB シリアル経由で設定を読み書きできる。保存するとデーモンを止めずにすぐ反映する。
@@ -19,12 +21,13 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 5. [PC との接続](#pc-との接続)
 6. [設定](#設定)
 7. [設定 GUI](#設定-gui)
-8. [タッチのキャリブレーション](#タッチのキャリブレーション)
-9. [日常の操作](#日常の操作)
-10. [画面とコンソール](#画面とコンソール)
-11. [困ったとき](#困ったとき)
-12. [開発](#開発)
-13. [フォントとライセンス](#フォントとライセンス)
+8. [時刻合わせ](#時刻合わせ)
+9. [タッチのキャリブレーション](#タッチのキャリブレーション)
+10. [日常の操作](#日常の操作)
+11. [画面とコンソール](#画面とコンソール)
+12. [困ったとき](#困ったとき)
+13. [開発](#開発)
+14. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -226,6 +229,35 @@ touch:
 - **画面の見た目**：割り当てのないセルは、暗い枠だけを描く。押しているあいだ、そのセルの枠を太い黄色の二重の枠にする（`display.press_style`）。レイヤーを切り替えるセルは紫で描く。
 - **ソフトキー**：画面右の帯（HOME ▲ ▼ ▶ ◀ 決定 戻る 操作機能）はタッチに反応する。レイヤーの `soft_keys` で割り当てられる。帯の座標は画面の右端と重なるので、割り当てた区画だけがセルより優先される。
 
+### ウィジェットとセルの大きさ
+
+タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）。
+また、どのセルも `span: [列数, 行数]` で、右と下のセルにまたがる大きさにできる。
+
+```yaml
+cells:
+  "0,0": { widget: clock, span: [2, 2] }                          # 大きな時計（2 列 × 2 行）
+  "2,0": { widget: clock, format: "15:04:05", label: "秒" }       # 秒まで出す（1 秒ごとに描き直す）
+  "3,0": { widget: clock, tz: America/Los_Angeles, label: LA, key: LGUI+SPACE }  # タップでキーを送る
+  "0,2": { key: ENTER, span: [3, 1], label: "決定" }              # 横に 3 つぶんのキー
+```
+
+- **書式**：`format`（時刻、既定 `15:04`）と `date_format`（日付、既定 `1月2日({wday})`、`none` で出さない）は Go の書き方。`{wday}` は日本語の曜日。詳しくは [docs/config.md](docs/config.md) の「ウィジェット」。
+- **タップしたとき**：`key` や `layer_*` を書けば、ふつうのセルと同じく働く。書かなければ何もしない（枠も光らない）。
+- **描き直し**：時計は 1 分に 1 回（秒を出すときだけ 1 秒に 1 回）、変わったセルだけを描き直す。実機で、秒つきの時計 1 つの描き直しは約 4 ms。
+- **時刻を合わせていないとき**：時刻を橙色で描き、日付の代わりに「時刻未設定」と出す（[時刻合わせ](#時刻合わせ)）。
+- **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」レイヤーを足したもの。
+
+### データの置き場所（/var/lib/lefthand）
+
+ウィジェットのデータは、設定ファイルとは別に `/var/lib/lefthand/` に置く（デーモンが作る。`-data-dir` で変えられる）。設定 GUI で設定を保存しても消えない。
+
+| ファイル | 内容 |
+| --- | --- |
+| clock.json | 最後に時刻を合わせた記録（起動ごとの ID、時刻、ずれ、送った側） |
+
+テキスト、Todo、カレンダーのデータも、ここに置く予定。
+
 ### 今のレイヤーの表示
 
 画面の右上に、今のレイヤーの label を出す。色で入り方がわかる。
@@ -304,8 +336,55 @@ ModemManager が動いている PC では、つないだ直後の数秒、ModemM
 9. **保存**：「Brain に保存…」で、変更点の一覧が出る。確かめて「保存して反映する」を押すと、Brain が検証してから保存し、すぐに反映する。押しているキーはいったん離れる。誤りがあるあいだは保存できない。
 10. **ファイル**：「YAML で書き出す」「JSON で書き出す」で、編集中の設定を PC に保存する。「ファイルを開く」で読み込む。読み込んだだけでは Brain は変わらない。Brain につないでいなくても、ファイルの編集はできる（検証は Brain につないだときに行う）。
 
+- **ウィジェット**：セルを選び、種類を「ウィジェット（時計）」にすると、書式、タイムゾーン、見出し、タップしたときの動きを選べる。プレビューは PC の今の時刻で描き、時刻が変わるたびに描き直す（Brain のタイムゾーンが PC と違うと、`tz` を書いていない時計の表示は Brain と違う）。
+- **セルの大きさ**：セルを選び、「大きさ」の列と行を変える。広げた範囲に、このレイヤーのセルがあれば、消してよいか聞く。
+- **時刻**：接続するたびに、PC の時刻を Brain に送って合わせる。ずれていたときと、Brain のタイムゾーンが PC と違うときは、そのことを出す。
 - **GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`display`（`press_style` を除く）は、デーモンを再起動しないと変えられないので、GUI からの保存では変えられない（変えると誤りになる）。ファイルを直接編集して、サービスを再起動する。
 - **ほかの人が同時に**：ポートは 1 つのタブしか開けない。SSH でファイルを直接編集したときは、GUI で「切断」して接続し直すと読み直す。
+
+## 時刻合わせ
+
+### Brain の時計（実機で調べた結果）
+
+| 項目 | 結果 |
+| --- | --- |
+| タイムゾーン | `/etc/localtime` が Asia/Tokyo（JST）。`/etc/timezone` は Etc/UTC と書いてあるが、使われていない |
+| RTC | なし。カーネルにドライバ（stmp3xxx-rtc）はあるが、デバイスツリーにデバイスがなく、`/dev/rtc0` もない |
+| 起動したときの時刻 | systemd-timesyncd が保存した時刻（`/var/lib/systemd/timesync/clock`）と、fake-hwclock（`/etc/fake-hwclock.data`、1 時間ごとと終了時に保存）から戻す |
+| 電源を切ったあと | 保たれない。最後に保存した時刻から再開するので、切っていたあいだの分だけ遅れる。調べたときは PC より 37 時間 25 分遅れていた |
+| NTP | systemd-timesyncd は動いているが、届くサーバーがなく、一度も同期していない |
+
+### 設定 GUI で合わせる（既定）
+
+設定 GUI は、Brain に接続するたびに PC の時刻を送り（`set_time`）、デーモンがシステムの時刻を合わせる。
+
+- **合わせたかどうか**：Brain を起動してから一度でも合わせれば「合わせ済み」。デーモンを再起動しても覚えている（`/var/lib/lefthand/clock.json`）。Brain を再起動すると「未設定」に戻り、時計に「時刻未設定」と出る。
+- **タイムゾーン**：変えない。Brain と PC で違えば、GUI がそのことを出す。時計ごとに `tz` で変えられる。
+- **確かめ方**：`ssh brain date` か、GUI の接続の知らせ。`ssh brain cat /var/lib/lefthand/clock.json` で最後に合わせた記録が見られる。
+
+### PC を NTP サーバーにする（提案。PC 側の設定はユーザーが行う）
+
+NCM（USB のネットワーク）で、Brain の timesyncd が PC から時刻を取るようにもできる。GUI を開かなくても、つないでいるあいだ時刻が合い続ける。NTP で合っているあいだは、デーモンも「合わせ済み」とみなす。
+
+1. **PC（Linux、chrony の例）**：`/etc/chrony/conf.d/brain.conf`（ディストリビューションによっては `/etc/chrony.conf` に追記）に次を書き、`sudo systemctl restart chronyd`（または `chrony`）。ファイアウォールがあれば、usb のインターフェースで UDP 123 を通す。
+
+   ```
+   allow 192.168.7.0/24
+   # PC がインターネットにつながっていないときも、自分の時計を配る
+   local stratum 10
+   ```
+
+   macOS では、標準の時刻合わせ（timed）は NTP サーバーにならないので、Homebrew の chrony などを使う。
+
+2. **Brain**：timesyncd に PC を教える。
+
+   ```sh
+   ssh brain 'sudo mkdir -p /etc/systemd/timesyncd.conf.d && printf "[Time]\nNTP=192.168.7.1\n" | sudo tee /etc/systemd/timesyncd.conf.d/lefthand.conf && sudo systemctl restart systemd-timesyncd'
+   ssh brain timedatectl     # System clock synchronized: yes になればよい
+   ```
+
+- **どちらがよいか**：まずは設定 GUI の `set_time` で足りる（GUI を開くたびに合う）。GUI を開かない日も時計を使うなら NTP を足す。フェーズ 2 の `brain-deck` コマンドにも時刻合わせを入れれば、PC の cron などから合わせることもできる。
+- **注意**：NTP は、PC の usb のインターフェースに 192.168.7.1 が付いているあいだだけ届く。
 
 ## タッチのキャリブレーション
 
@@ -393,6 +472,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | ラベルの一部が □ になる | フォントにない文字。JIS 第一・第二水準の漢字と、一般的な記号は表示できる。設定 GUI では、入力したときに知らせる |
 | 設定 GUI がつながらない | ポートの一覧に Brain が 2 つあるか（`ls /dev/ttyACM*` で 2 つ）。1 つしかないなら、Brain のガジェットが古い（[インストール](#インストール)の「ガジェットの設定」）。Linux で開けないなら dialout グループ（[設定 GUI](#linux-でシリアルを使う権限)）。ログに `control: listening on /dev/ttyGS1` が出ているか |
 | 設定 GUI で保存できない | 右の「検証」の一覧に誤りがないか。`hid_device` などを変えていないか |
+| 時計に「時刻未設定」と出る | Brain を起動してから、時刻を合わせていない。設定 GUI で接続する（[時刻合わせ](#時刻合わせ)） |
+| 時計の時刻が数時間ずれる | Brain のタイムゾーン（`ssh brain timedatectl`）。時計ごとに `tz` でも変えられる |
 
 ## 開発
 
@@ -403,6 +484,9 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | main.go | 入力の読み取り、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
 | control.go | 設定 GUI とのシリアル通信（/dev/ttyGS1） |
+| widget.go | ウィジェット（時計）の書式、描き直しの間隔、描画 |
+| timesync.go | 時刻合わせ（set_time）と、合わせたかどうかの判断 |
+| store.go | データの置き場所（/var/lib/lefthand）の読み書き |
 | apply.go | 設定の保存と、再起動なしの反映、失敗したときの巻き戻し |
 | keymap_pwsh2.go | 設定 GUI に渡す、本体キーの配置と制約 |
 | version.go | バージョンの文字列 |
@@ -416,6 +500,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | systemd/ | サービスと drop-in |
 | install.sh | Brain 上での配置 |
 | config.yaml | 設定の例。実機と同じ値 |
+| config/current.yaml | Brain で動いている本番の設定の写し（2026-10-06 に退避） |
+| config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」レイヤーを足したもの） |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
 | docs/kernel-build.md | HID と ACM を有効にしたカーネルのビルドと、SD カードへの差し替え |
@@ -440,7 +526,14 @@ go run . -render-png gui/test/fixtures/view.png -render-layer view config.yaml
 go run . -render-png gui/test/fixtures/edit-hold.png -render-layer edit:hold -render-pressed "0,0 3,2" config.yaml
 go run . -render-png gui/test/fixtures/base-pressed.png -render-pressed "0,0 3,0 0,2" config.yaml
 go run . -render-png gui/test/fixtures/base-pressed-fill.png -render-press-style fill -render-pressed "0,0 3,0 0,2" config.yaml
+# ウィジェット。時計の時刻と PC のタイムゾーンを固定する
+T=2026-10-06T09:41:27+09:00; C=config/widgets-example.yaml
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets.png -render-layer info -render-time $T $C
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-unsynced-pressed.png -render-layer info -render-time $T -render-unsynced -render-pressed "3,0 0,2" $C
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-pressed-fill.png -render-layer info -render-time $T -render-press-style fill -render-pressed "3,0 0,2" $C
 ```
+
+時計の書式は、GUI（`gui/src/clock.ts`）でも Go と同じ結果になるよう作り直している。Go の結果の表（`gui/test/fixtures/goformat.json`）と比べるので、書式の処理を変えたら `LEFTHAND_UPDATE_GOFORMAT=1 go test -run GoFormatTable` で書き直す。
 
 本体キーの表（keymap_pwsh2.go）を変えたら、GUI に同梱した表も `LEFTHAND_UPDATE_KEYMAP=1 go test -run KeymapJSON` で書き直す。
 
@@ -464,9 +557,10 @@ ssh brain 'sudo systemctl stop lefthand.service; cd ~/lefthand && sudo LEFTHAND_
 ### コマンドラインのオプション
 
 ```
-lefthand [-v] [-serial /dev/ttyGS1] [config.yaml]
+lefthand [-v] [-serial /dev/ttyGS1] [-data-dir /var/lib/lefthand] [config.yaml]
                                              通常の動作。設定を省略すると /etc/lefthand/config.yaml。
                                              -serial は設定 GUI と通信するシリアル（空なら使わない）
+                                             -data-dir はウィジェットのデータと時刻合わせの記録を置く場所
 lefthand -calibrate [config.yaml]            タッチの座標を測る
 lefthand -check [config.yaml]                設定を検証して終わる
 lefthand -dump-json [config.yaml]            layers の形にそろえた JSON を出力して終わる
@@ -476,6 +570,8 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-pressed "列,行 ..."         押下中として描くセル
          -render-press-style border|fill     設定の display.press_style の代わりに使う見せ方
          -render-size 800x480                画面の大きさ
+         -render-time 2026-10-06T09:41:00+09:00  時計に出す時刻（省略すると今）
+         -render-unsynced                    時刻を合わせていないときの時計を描く
 ```
 
 ## フォントとライセンス
