@@ -78,10 +78,12 @@ func TestReportExitCodes(t *testing.T) {
 
 // fakeBrain は PTY のマスター側で、lefthand の代わりに返事をする。
 type fakeBrain struct {
-	master *os.File
-	slave  string
-	got    chan map[string]any
-	ignore int // 最初のこの数の hello に答えない（デーモンの再起動直後を真似る）
+	master  *os.File
+	slave   string
+	got     chan map[string]any
+	ignore  int // 最初のこの数の hello に答えない（デーモンの再起動直後を真似る）
+	todo    todoList
+	removed int
 }
 
 func newFakeBrain(t *testing.T) *fakeBrain {
@@ -137,6 +139,16 @@ func (f *fakeBrain) serve(commands []string) {
 				continue
 			}
 			res = map[string]any{"name": req["name"], "cleared": false, "shown": true}
+		case "get_todo", "todo_add", "todo_update", "todo_delete", "todo_clear_done":
+			if code := f.todoCmd(req); code != "" {
+				b, _ := json.Marshal(map[string]any{"id": req["id"], "ok": false, "error": map[string]any{"code": code, "message": code}})
+				f.master.Write(append(b, '\n'))
+				continue
+			}
+			res = f.todo
+			if req["cmd"] == "todo_clear_done" {
+				res = map[string]any{"rev": f.todo.Rev, "items": f.todo.Items, "removed": f.removed}
+			}
 		default:
 			res = map[string]any{}
 		}
@@ -279,5 +291,117 @@ func TestNotFound(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	if code, _, errs := runCLI(t, "--port", "/dev/no-such-brain", "status"); code != exitNoBrain || !strings.Contains(errs, "見つかりません") {
 		t.Errorf("exit %d %s", code, errs)
+	}
+}
+
+// todoCmd は、lefthand の Todo のコマンドを簡単に真似る。誤りならエラーの種類を返す。
+func (f *fakeBrain) todoCmd(req map[string]any) string {
+	l := &f.todo
+	find := func() int {
+		for i, it := range l.Items {
+			if it.ID == req["item"] {
+				if rev, ok := req["rev"].(float64); ok && uint64(rev) != it.Rev {
+					return -2
+				}
+				return i
+			}
+		}
+		return -1
+	}
+	switch req["cmd"] {
+	case "get_todo":
+		return ""
+	case "todo_add":
+		l.Rev++
+		it := todoItem{ID: fmt.Sprintf("t%d", l.Rev), Text: req["text"].(string), Rev: l.Rev, Source: fmt.Sprint(req["source"])}
+		if i, ok := req["index"].(float64); ok {
+			l.Items = append(l.Items[:int(i)], append([]todoItem{it}, l.Items[int(i):]...)...)
+		} else {
+			l.Items = append(l.Items, it)
+		}
+	case "todo_update", "todo_delete":
+		i := find()
+		switch i {
+		case -1:
+			return "not_found"
+		case -2:
+			return "conflict"
+		}
+		l.Rev++
+		if req["cmd"] == "todo_delete" {
+			l.Items = append(l.Items[:i], l.Items[i+1:]...)
+			return ""
+		}
+		if d, ok := req["done"].(bool); ok {
+			l.Items[i].Done = d
+		}
+		if t, ok := req["text"].(string); ok {
+			l.Items[i].Text = t
+		}
+		l.Items[i].Rev = l.Rev
+	case "todo_clear_done":
+		var kept []todoItem
+		for _, it := range l.Items {
+			if !it.Done {
+				kept = append(kept, it)
+			}
+		}
+		f.removed = len(l.Items) - len(kept)
+		l.Items = kept
+		l.Rev++
+	}
+	return ""
+}
+
+func TestTodoAgainstFakeBrain(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := newFakeBrain(t)
+	go f.serve([]string{"hello", "get_status", "get_todo", "todo_add", "todo_update", "todo_delete", "todo_clear_done"})
+	cli := func(want int, args ...string) string {
+		t.Helper()
+		code, out, errs := runCLI(t, append([]string{"--port", f.slave, "todo"}, args...)...)
+		if code != want {
+			t.Fatalf("todo %q: exit %d, want %d: %s %s", args, code, want, out, errs)
+		}
+		return out + errs
+	}
+	if out := cli(exitOK, "add", "牛乳を買う"); !strings.Contains(out, "追加しました：牛乳を買う（未完了 1 件、完了 0 件）") {
+		t.Errorf("add: %s", out)
+	}
+	cli(exitOK, "add", "-") // 標準入力の 2 行
+	cli(exitOK, "add", "急ぎ", "--top")
+	if out := cli(exitOK, "list"); !strings.Contains(out, "  1 [ ] 急ぎ\n  2 [ ] 牛乳を買う\n  3 [ ] 標準入力の\n  4 [ ] テキスト\n未完了 4 件") {
+		t.Errorf("list: %s", out)
+	}
+	// 番号は画面の順（完了は下）
+	cli(exitOK, "done", "2", "1")
+	if out := cli(exitOK); !strings.Contains(out, "  1 [ ] 標準入力の\n  2 [ ] テキスト\n  3 [x] 急ぎ\n  4 [x] 牛乳を買う") {
+		t.Errorf("after done: %s", out)
+	}
+	cli(exitOK, "undo", "4") // 牛乳を買う
+	cli(exitOK, "edit", "1", "牛乳と卵")
+	cli(exitOK, "rm", "t2")
+	if out := cli(exitOK, "clear-done"); !strings.Contains(out, "1 件消しました（未完了 2 件") {
+		t.Errorf("clear-done: %s", out)
+	}
+	out := cli(exitOK, "list", "--json")
+	var l todoList
+	if err := json.Unmarshal([]byte(out), &l); err != nil || len(l.Items) != 2 || l.Items[0].Text != "牛乳と卵" || l.Items[1].Text != "テキスト" {
+		t.Errorf("json: %v %s", err, out)
+	}
+	cli(exitUsage, "done", "9")
+	cli(exitUsage, "done", "t99")
+	cli(exitUsage, "nope")
+	cli(exitUsage, "edit", "1")
+	cli(exitUsage, "list", "--top")
+	if code, _, _ := runCLI(t, "--port", f.slave, "text", "--list", "--json"); code != exitUsage {
+		t.Errorf("text --json: exit %d", code)
+	}
+}
+
+func TestTodoConflictMessage(t *testing.T) {
+	var b bytes.Buffer
+	if code := report(&b, &brainError{Code: "conflict", Message: "item t1 was changed"}); code != exitBrainError || !strings.Contains(b.String(), "todo list で確かめて") {
+		t.Errorf("conflict: %d %s", code, b.String())
 	}
 }

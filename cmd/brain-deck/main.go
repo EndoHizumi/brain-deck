@@ -66,6 +66,12 @@ const usage = `使い方：
   brain-deck text <id> -              テキストを標準入力から読む
   brain-deck text <id> --clear        テキストを消す（「未設定」に戻す）
   brain-deck text --list              Brain にあるテキストの一覧
+  brain-deck todo [list] [--json]     Todo の一覧（番号は Brain の画面と同じ順）
+  brain-deck todo add <項目> [--top]  Todo を足す（- なら標準入力の 1 行ごとに足す。--top で先頭に）
+  brain-deck todo done <番号|ID>...   完了にする（undo で未完了に戻す）
+  brain-deck todo edit <番号|ID> <文> 項目の文を書き換える
+  brain-deck todo rm <番号|ID>...     項目を消す
+  brain-deck todo clear-done          完了した項目をまとめて消す
   brain-deck time sync                PC の時刻を Brain に送る
   brain-deck status                   Brain の状態（版、時刻、レイヤー）
   brain-deck version
@@ -90,6 +96,8 @@ type options struct {
 	clear      bool
 	list       bool
 	noTimeSync bool
+	top        bool // todo add：先頭に足す
+	json       bool // todo list：JSON で出す
 	quiet      bool
 	verbose    bool
 	args       []string
@@ -143,6 +151,10 @@ func parseArgs(argv []string) (*options, error) {
 			o.list = true
 		case "no-time-sync":
 			o.noTimeSync = true
+		case "top":
+			o.top = true
+		case "json":
+			o.json = true
 		case "q", "quiet":
 			o.quiet = true
 		case "v", "verbose":
@@ -194,6 +206,10 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	hint := "（使い方は brain-deck --help）"
+	if (o.top || o.json) && o.args[0] != "todo" {
+		fmt.Fprintln(stderr, "brain-deck: --top と --json は todo で使います"+hint)
+		return exitUsage
+	}
 	var cmd func(*Client) (string, error)
 	switch o.args[0] {
 	case "version":
@@ -201,6 +217,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitOK
 	case "text":
 		cmd, err = textCommand(o, stdin)
+	case "todo":
+		cmd, err = todoCommand(o, stdin)
 	case "time":
 		if len(o.args) != 2 || o.args[1] != "sync" {
 			err = usageError("time のあとには sync を書きます（brain-deck time sync）")
@@ -244,7 +262,11 @@ var callTimeout = func() time.Duration { return defaultTimeout }
 func report(w io.Writer, err error) int {
 	var be *busyError
 	var br *brainError
+	var ue usageError
 	switch {
+	case errors.As(err, &ue):
+		fmt.Fprintln(w, "brain-deck: "+ue.Error())
+		return exitUsage
 	case errors.As(err, &be):
 		fmt.Fprintln(w, "brain-deck: "+describeBusy(be))
 		return exitBusy
@@ -259,6 +281,9 @@ func report(w io.Writer, err error) int {
 		return exitNoBrain
 	case errors.As(err, &br):
 		fmt.Fprintf(w, "brain-deck: Brain がエラーを返しました：%s（%s）\n", br.Message, br.Code)
+		if br.Code == "conflict" || br.Code == "not_found" {
+			fmt.Fprintln(w, "読んだあとに Brain で項目が変わりました。brain-deck todo list で確かめてから、もう一度実行してください")
+		}
 		return exitBrainError
 	}
 	fmt.Fprintln(w, "brain-deck: "+err.Error())
