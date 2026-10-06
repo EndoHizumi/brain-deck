@@ -13,16 +13,18 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   layer_toggle: '押すたびに出し入れ（layer_toggle）',
   layer_oneshot: '次の 1 キーだけ（layer_oneshot）',
   layer_to: 'そのレイヤーへ移る（layer_to）',
-  widget: 'ウィジェット（時計）',
+  widget: 'ウィジェット（時計、テキスト）',
 }
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
-export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計' }
+export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト' }
 // widget.go の既定の書式
 export const DEFAULT_CLOCK_FORMAT = '15:04'
 export const DEFAULT_DATE_FORMAT = '1月2日({wday})'
 // ウィジェットにだけ書ける項目
-export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz'] as const
+export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id'] as const
+// ウィジェットの種類ごとの項目
+export const CLOCK_FIELDS = ['format', 'date_format', 'tz'] as const
 
 // 画面に出す、レイヤー切り替えの種類（main.go の layerVerb と同じ）
 export const LAYER_VERB: Record<LayerKind, string> = {
@@ -44,7 +46,7 @@ export function actionKind(a: ActionSpec): ActionKind {
 // isIncomplete は、送るキーや行き先をまだ選んでいない割り当てかどうか。
 export function isIncomplete(a: ActionSpec): boolean {
   const fields = (['key', ...LAYER_KINDS] as const).filter((k) => a[k] !== undefined)
-  if (a.widget !== undefined) return !a.widget || fields.some((k) => a[k] === '')
+  if (a.widget !== undefined) return !a.widget || (a.widget === 'text' && !a.id) || fields.some((k) => a[k] === '')
   return fields.length === 0 || fields.some((k) => a[k] === '')
 }
 
@@ -73,7 +75,7 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   else if (k === 'widget') s = ''
   else s = `${k}: ${actionTarget(a)}`
   if (a.widget !== undefined) {
-    const opts = (['format', 'date_format', 'tz'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
+    const opts = (['format', 'date_format', 'tz', 'id'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
     const w = `widget: ${a.widget}${opts.length ? `（${opts.join(', ')}）` : ''}`
     s = s ? `${w}、タップで ${s}` : w
   }

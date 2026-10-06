@@ -8,7 +8,7 @@ import {
 } from './keys'
 import defaultKeymap from './keymap-pwsh2.json'
 import {
-  DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, WIDGET_FIELDS, WIDGET_LABELS,
+  CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, WIDGET_FIELDS, WIDGET_LABELS,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
   isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
   resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
@@ -16,11 +16,12 @@ import {
 } from './model'
 import { hasSeconds } from './clock'
 import { cellSpan, renderPreview, type Mode } from './preview'
+import { TEXT_ID_PATTERN, TEXT_STYLES, textExpired } from './textwidget'
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import type {
-  ActionSpec, Config, EngineStatus, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, ValidateResult, WidgetKind,
+  ActionSpec, Config, EngineStatus, GetTextResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
+  PressStyle, Problem, SetTimeResult, TextEntry, ValidateResult, WidgetKind,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -58,7 +59,8 @@ function openFailedMessage(err: string): string {
     `シリアルポートを開けません（${err}）。` +
     'Linux では、/dev/ttyACM* を開く権限が要ります。' +
     '「sudo usermod -aG dialout $USER」のあとログインし直すか、今だけなら「sudo setfacl -m u:$USER:rw /dev/ttyACM1」を実行してください' +
-    '（setfacl はケーブルを抜き差しすると消えます）。ほかのタブやアプリがポートを使っているときも開けません'
+    '（setfacl はケーブルを抜き差しすると消えます）。ほかのタブやアプリがポートを使っているときも開けません。' +
+    'brain-deck コマンドが動いているあいだ（ふつうは 1 秒以内）も開けないので、少し待ってからもう一度押してください'
   )
 }
 
@@ -87,6 +89,8 @@ export class App {
   flash: Selection | null = null
   // プレビューで、マウスで押さえているセル（"列,行"）。押したときの見た目で描く
   previewPress: string | null = null
+  // テキストのタイルの中身（接続したときに Brain から読む）。GUI の接続中は brain-deck が書けないので、読み直さない
+  texts: Record<string, TextEntry> = {}
   private keepalive: ReturnType<typeof setInterval> | null = null
   // 時計のプレビューを、時刻が変わるたびに描き直すためのタイマー
   private previewTimer: ReturnType<typeof setTimeout> | null = null
@@ -287,6 +291,7 @@ export class App {
       this.sel = null
     }
     this.brainStatus = (await c.request<{ status: EngineStatus }>('get_status')).status
+    if (this.hello?.commands?.includes('get_text')) this.texts = (await c.request<GetTextResult>('get_text')).texts ?? {}
     this.render()
     this.scheduleValidate(0)
   }
@@ -520,8 +525,32 @@ export class App {
     if (!cur) return
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
-    for (const f of ['format', 'date_format', 'tz'] as const) if (a[f] === '') delete a[f]
+    for (const f of ['format', 'date_format', 'tz', 'id'] as const) if (a[f] === '') delete a[f]
     this.setAction(a)
+  }
+
+  // setWidgetKind は、ウィジェットの種類を変える。ほかの種類の項目は消し、見出し、大きさ、タップの動きは残す。
+  setWidgetKind(w: WidgetKind): void {
+    const cur = this.ownAction()
+    if (!cur?.widget || cur.widget === w) return
+    const a: ActionSpec = { ...cur, widget: w }
+    for (const f of CLOCK_FIELDS) if (w !== 'clock') delete a[f]
+    if (w !== 'text') delete a.id
+    else a.id = cur.id || this.suggestTextId()
+    this.setAction(a)
+  }
+
+  // suggestTextId は、まだ使っていないテキストの id を作る。
+  suggestTextId(): string {
+    const used = new Set(this.textIdsInConfig())
+    for (const id of Object.keys(this.texts).sort()) if (!used.has(id)) return id
+    for (let i = 1; ; i++) if (!used.has(`text${i}`)) return `text${i}`
+  }
+
+  textIdsInConfig(): string[] {
+    const ids = new Set<string>()
+    for (const l of this.cfg?.layers ?? []) for (const a of Object.values(l.touch?.cells ?? {})) if (a.widget === 'text' && a.id) ids.add(a.id)
+    return [...ids].sort()
   }
 
   // ---------- 学習モード ----------
@@ -1170,7 +1199,8 @@ export class App {
     const mode: Mode = li === 0 ? 'base' : refs.some((r) => r.kind === 'layer_toggle' || r.kind === 'layer_to') || !refs.length ? 'latched' : 'temp'
     const pressed = new Set(this.previewPress ? [this.previewPress] : [])
     const now = new Date()
-    const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now })
+    const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
+      texts: this.texts })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
   }
@@ -1181,10 +1211,19 @@ export class App {
     this.previewTimer = null
     const g = resolveGrid(this.cfg!, editStack(this.layer))
     const clocks = g.cells.filter((c) => c?.action.widget === 'clock').map((c) => c!.action)
-    if (!clocks.length) return
-    const sec = clocks.some((a) => hasSeconds(a.format || DEFAULT_CLOCK_FORMAT) || hasSeconds(a.date_format && a.date_format !== 'none' ? a.date_format : ''))
-    const unit = sec ? 1000 : 60000
-    this.previewTimer = setTimeout(() => this.drawPreview(), unit - (now.getTime() % unit) + 5)
+    let wait = Infinity
+    if (clocks.length) {
+      const sec = clocks.some((a) => hasSeconds(a.format || DEFAULT_CLOCK_FORMAT) || hasSeconds(a.date_format && a.date_format !== 'none' ? a.date_format : ''))
+      const unit = sec ? 1000 : 60000
+      wait = unit - (now.getTime() % unit) + 5
+    }
+    // テキストの有効期限が切れたら、薄く描き直す
+    for (const c of g.cells) {
+      const e = c?.action.widget === 'text' && c.action.id ? this.texts[c.action.id] : undefined
+      if (e?.expires_at && !textExpired(e, now)) wait = Math.min(wait, Date.parse(e.expires_at) - now.getTime() + 5)
+    }
+    if (wait === Infinity) return
+    this.previewTimer = setTimeout(() => this.drawPreview(), Math.min(wait, 2 ** 31 - 1))
   }
 
   // ---------- 選んだものの編集 ----------
@@ -1269,14 +1308,45 @@ export class App {
     const missing = this.font ? this.font.missing([own.format, own.date_format].filter(Boolean).join('')) : []
     return h('div', { class: 'widget-editor' },
       h('label', { class: 'row' }, 'ウィジェット ', h('select', { 'data-focus': 'widget', id: 'widget',
-        onchange: (e: Event) => this.patchAction({ widget: (e.target as HTMLSelectElement).value as WidgetKind }) },
+        onchange: (e: Event) => this.setWidgetKind((e.target as HTMLSelectElement).value as WidgetKind) },
         (Object.keys(WIDGET_LABELS) as WidgetKind[]).map((w) => h('option', { value: w, selected: own.widget === w }, WIDGET_LABELS[w])))),
+      own.widget === 'text' ? this.viewTextEditor(own) : this.viewClockEditor(text, missing),
+    )
+  }
+
+  // viewTextEditor は、テキストのタイルの欄。中身は設定ではなく Brain のデータで、PC から brain-deck で書き換える。
+  private viewTextEditor(own: ActionSpec): HTMLElement[] {
+    const id = own.id ?? ''
+    const known = [...new Set([...Object.keys(this.texts), ...this.textIdsInConfig()])].sort()
+    const e = id ? this.texts[id] : undefined
+    const out: HTMLElement[] = [
+      h('label', { class: 'row', title: '英数字と _ . -（32 文字まで）。brain-deck text <id> で中身を書き換えます' }, 'id ',
+        h('input', { value: id, 'data-focus': 'id', id: 'text-id', list: 'text-ids', placeholder: '例：build',
+          onchange: (ev: Event) => this.patchAction({ id: (ev.target as HTMLInputElement).value.trim() }) }),
+        h('datalist', { id: 'text-ids' }, known.map((k) => h('option', { value: k })))),
+    ]
+    if (id && !TEXT_ID_PATTERN.test(id)) out.push(h('div', { class: 'err' }, 'id は、英数字と _ . - の 32 文字までです'))
+    if (this.connected && this.hello?.commands?.includes('get_text')) {
+      out.push(h('p', { class: 'hint text-now' }, e
+        ? `今の中身：「${e.text.replace(/\n/g, '⏎')}」（${TEXT_STYLES[e.style] ?? e.style}${e.expires_at ? `、期限 ${new Date(e.expires_at).toLocaleString()}${textExpired(e, new Date()) ? '（切れています。薄く表示）' : ''}` : ''}）`
+        : '今の中身：まだありません（Brain では「未設定」と出ます）'))
+    } else if (this.connected) {
+      out.push(h('div', { class: 'warn' }, 'Brain の lefthand がテキストに対応していません。lefthand を新しくしてください'))
+    }
+    out.push(h('p', { class: 'hint' },
+      `中身は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。PC で「brain-deck text ${id || '<id>'} "ビルド成功" --style ok --ttl 10m」のように書き換えます。` +
+      '色は通常・成功（ok）・失敗（error）・警告（warn）。有効期限を過ぎると、消さずに薄く表示します。設定 GUI が接続しているあいだは、brain-deck から書き換えられません。'))
+    return out
+  }
+
+  private viewClockEditor(text: (f: 'format' | 'date_format' | 'tz', label: string, placeholder: string, title: string) => HTMLElement, missing: string[]): (HTMLElement | null)[] {
+    return [
       text('format', '時刻の書式 ', DEFAULT_CLOCK_FORMAT, '例：15:04（24 時間）、15:04:05（秒も出す。1 秒ごとに描き直す）、3:04 PM'),
       text('date_format', '日付の書式 ', DEFAULT_DATE_FORMAT, '例：1月2日({wday})、2006/01/02 Mon。none で日付を出さない。{wday} は日本語の曜日'),
       text('tz', 'タイムゾーン ', 'Brain のタイムゾーン', '例：Asia/Tokyo、America/Los_Angeles、UTC。省略すると Brain のタイムゾーン'),
       h('p', { class: 'hint' }, '書式は Go の書き方です（2006=年、01 か 1=月、02 か 2=日、15=時、04=分、05=秒、Mon=曜日、{wday}=日本語の曜日）。時刻を一度も合わせていないあいだは、Brain では「時刻未設定」と橙色で出ます。'),
       missing.length ? h('div', { class: 'warn' }, `Brain のフォントにない文字があります（□ になります）：${missing.join(' ')}`) : null,
-    )
+    ]
   }
 
   // viewSpanEditor は、セルの大きさ（span）の欄。右と下のセルを覆う。

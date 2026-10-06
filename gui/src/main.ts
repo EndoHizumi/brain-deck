@@ -8,6 +8,8 @@ const root = document.getElementById('app')!
 if (new URLSearchParams(location.search).has('demo')) {
   Promise.all([import('./demo'), import('../../config.yaml?raw')]).then(([demo, sample]) => {
     const daemon = new demo.FakeDaemon(parseConfigText(sample.default))
+    // テキストのタイルを試すための中身（brain-deck text build "ビルド成功" --style ok と同じ）
+    daemon.texts = { build: { text: 'ビルド成功', style: 'ok', set_at: new Date().toISOString() } }
     const { serial } = demo.fakeSerial()
     const app = new App(root, { serial, openTransport: async () => new demo.FakeTransport(daemon) })
     document.title = 'lefthand 設定（デモ）'

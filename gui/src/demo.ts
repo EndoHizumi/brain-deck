@@ -6,7 +6,8 @@ import { ALL_KEYS, MODIFIERS } from './keys'
 import keymapJSON from './keymap-pwsh2.json'
 import { LAYER_KINDS, actionKind, actionTarget, parseCellKey, spanOf } from './model'
 import type { Transport } from './protocol'
-import type { ActionSpec, Config, KeymapInfo, Problem } from './types'
+import { TEXT_ID_PATTERN } from './textwidget'
+import type { ActionSpec, Config, KeymapInfo, Problem, TextEntry } from './types'
 
 const keymap = keymapJSON as KeymapInfo
 const SOURCE_KEYS = new Set(keymap.keys.flatMap((k) => [k.code, k.symbol]).filter(Boolean) as string[])
@@ -21,6 +22,7 @@ export class FakeDaemon {
   failApply = false // true なら set_config の反映に失敗したことにする（テスト用）
   clockOffsetMs = 0 // Brain の時計の遅れ（set_time で 0 になる）
   timeSynced = false
+  texts: Record<string, TextEntry> = {} // テキストのタイルの中身
   // 通知を送る先（FakeTransport が設定する）
   emit: (line: string) => void = () => {}
 
@@ -52,7 +54,7 @@ export class FakeDaemon {
     switch (req.cmd) {
       case 'hello':
         return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
-          commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time'] })
+          commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
@@ -66,6 +68,16 @@ export class FakeDaemon {
         this.timeSynced = true
         return ok({ stepped: Math.abs(offset) >= 500, offset_ms: offset, ...this.timeInfo() })
       }
+      case 'get_text': {
+        const ids = [...new Set(this.config.layers.flatMap((l) => Object.values(l.touch?.cells ?? {})).filter((a) => a.widget === 'text' && a.id).map((a) => a.id!))].sort()
+        return ok({ texts: this.texts, ids })
+      }
+      case 'set_text':
+        if (!TEXT_ID_PATTERN.test(req.name ?? '')) return err('bad_request', 'bad name')
+        if (req.clear) delete this.texts[req.name]
+        else this.texts[req.name] = { text: String(req.text), style: req.style ?? 'normal', set_at: new Date().toISOString(),
+          ...(req.ttl_sec ? { expires_at: new Date(Date.now() + req.ttl_sec * 1000).toISOString() } : {}) }
+        return ok({ name: req.name, cleared: !!req.clear, shown: true })
       case 'validate': {
         const p = validate(req.config)
         return ok({ valid: p.length === 0, errors: p, warnings: [], config: p.length ? undefined : req.config })
@@ -122,7 +134,9 @@ export function validate(cfg: Config): Problem[] {
     if (n > 1 || (n === 0 && !a.widget))
       return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to (a widget cell may omit them)` })
     if (!cell && (a.widget || a.span)) return out.push({ path, message: `${where}: widget and span can be used only in touch cells` })
-    if (a.widget && a.widget !== 'clock') out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock)` })
+    if (a.widget && a.widget !== 'clock' && a.widget !== 'text') out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text)` })
+    if (a.widget === 'text' && !TEXT_ID_PATTERN.test(a.id ?? '')) out.push({ path, message: `${where}: widget: text needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
+    if (a.widget !== 'text' && a.id) out.push({ path, message: `${where}: id is for widget: text` })
     if (!a.widget && (a.format || a.date_format || a.tz)) out.push({ path, message: `${where}: format, date_format and tz need widget: clock` })
     if (a.tz) {
       try {

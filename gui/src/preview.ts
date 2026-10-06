@@ -4,7 +4,8 @@ import { FONT_H, type BitmapFont } from './font'
 import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
 import { LAYER_VERB, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
-import type { ActionSpec, Config, PressStyle } from './types'
+import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
+import type { ActionSpec, Config, PressStyle, TextEntry } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
 type RGB = [number, number, number]
@@ -47,7 +48,9 @@ export interface CellView {
   layer: boolean
   label: string // ウィジェットでは上に小さく出す見出し
   sub: string
+  widget?: string // ウィジェットの種類
   clock?: ClockDef // 時計のウィジェット
+  textId?: string // テキストのウィジェットの id
 }
 
 interface Rect {
@@ -67,7 +70,12 @@ export function cellView(cfg: Config, a: ActionSpec | null): CellView {
   if (!a) return { mapped: false, layer: false, label: '', sub: '' }
   const k = actionKind(a)
   let label = a.label ?? ''
-  if (a.widget) return { mapped: true, layer: isLayerAction(a), label, sub: '', clock: clockDef(a) }
+  if (a.widget) {
+    const v: CellView = { mapped: true, layer: isLayerAction(a), label, sub: '', widget: a.widget }
+    if (a.widget === 'clock') v.clock = clockDef(a)
+    if (a.widget === 'text') v.textId = a.id ?? ''
+    return v
+  }
   if (k !== 'key' && k !== 'none') {
     const t = actionTarget(a)
     const dest = cfg.layers.find((l) => l.name === t)
@@ -155,11 +163,13 @@ export interface PreviewParams {
   h?: number
   now?: Date // 時計に出す時刻。省略すると今
   synced?: boolean // false なら、時刻を合わせていないときの時計を描く
+  texts?: Record<string, TextEntry> // テキストのタイルの中身（Brain の get_text）
 }
 
 export interface WidgetEnv {
   now: Date
   synced: boolean
+  texts: Record<string, TextEntry>
 }
 
 export interface PreviewLayout {
@@ -180,7 +190,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   const title = top ? layerTitle(top) : ''
   const fill = (p.pressStyle ?? p.cfg.display?.press_style) === 'fill'
   const px = new Pixels(W, H)
-  const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true }
+  const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {} }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -229,7 +239,7 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
     px.frame(inset(box, pressEdgeW), pressGlowW, colPressed)
   }
   const inner = inset(box, textMargin)
-  if (v.clock) {
+  if (v.widget) {
     drawWidget(font, px, inner, v, env, textC, subC)
     return
   }
@@ -261,6 +271,22 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
     const s = Math.min(fitScale(font, [cap], aw, FONT_H * captionScale), captionScale)
     drawCentered(font, px, area, area.y0, cap, s, subInk)
     area.y0 += FONT_H * s + widgetLineGap
+  }
+  if (v.textId !== undefined) {
+    const e = Object.hasOwn(env.texts, v.textId) ? env.texts[v.textId] : undefined
+    let body = TEXT_NONE
+    let c = subInk
+    if (e) {
+      body = e.text
+      c = ink === colText ? textInk(e.style, textExpired(e, env.now)) : ink // 押したとき（fill）は、押したときの色
+    }
+    const { lines, scale } = textLayout(font, body, aw, area.y1 - area.y0)
+    let y = area.y0 + Math.trunc((area.y1 - area.y0 - lines.length * FONT_H * scale) / 2)
+    for (const ln of lines) {
+      drawCentered(font, px, area, y, ln, scale, c)
+      y += FONT_H * scale
+    }
+    return
   }
   if (!v.clock) return
   const { time, date, unsynced } = clockLines(v.clock, env.now, env.synced)

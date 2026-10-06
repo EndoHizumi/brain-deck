@@ -1,5 +1,5 @@
 # config/widgets-example.yaml
-# ウィジェット（時計）の使い方の例。config/current.yaml（Brain で動いている設定）に、
+# ウィジェット（時計、テキスト）の使い方の例。config/current.yaml（Brain で動いている設定）に、
 # 「情報」レイヤーを足したもの。メニューの「情報」から入り、「基本」で戻る。
 # 書き方は docs/config.md の「ウィジェット」を参照
 hid_device: /dev/hidg0
@@ -266,8 +266,10 @@ layers:
         "2,0": {widget: clock, format: "15:04:05", date_format: "Jan 2 Mon", label: 秒}
         # ほかのタイムゾーン。タップするとキーを送る
         "3,0": {widget: clock, tz: America/Los_Angeles, date_format: "1/2 {wday}", label: LA, key: LGUI+SPACE}
-        "2,1": {key: LGUI+S, label: 保存}
-        "3,1": {key: LGUI+Z, label: 取り消し}
+        # テキストのタイル。中身は PC から `brain-deck text build "ビルド成功" --style ok` で書き換える
+        "2,1": {widget: text, id: build, label: ビルド}
+        # タップするとキーを送るテキストのタイル
+        "3,1": {widget: text, id: deploy, label: デプロイ, key: LGUI+S}
         # span はキーのセルにも使える
         "0,2": {key: ENTER, span: [3, 1], label: 決定}
         "3,2": {layer_to: base, label: 基本}

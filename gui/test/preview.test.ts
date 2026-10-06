@@ -49,16 +49,21 @@ describe('Brain の画面のプレビュー', () => {
   const wcfg = parseConfigText(repoFile('config/widgets-example.yaml').toString('utf8'))
   const info = wcfg.layers.findIndex((l) => l.name === 'info')
   const now = new Date('2026-10-06T09:41:27+09:00')
-  const wcases: { file: string; pressed?: string[]; pressStyle?: PressStyle; synced?: boolean }[] = [
+  // テキストのタイルの中身は fixtures/texts.json（-render-texts）。build は表示中、deploy は期限切れ
+  const texts = JSON.parse(repoFile('gui/test/fixtures/texts.json').toString('utf8')).texts
+  const wcases: { file: string; pressed?: string[]; pressStyle?: PressStyle; synced?: boolean; texts?: Record<string, any> }[] = [
     { file: 'widgets.png' },
     { file: 'widgets-unsynced-pressed.png', pressed: ['3,0', '0,2'], synced: false },
     { file: 'widgets-pressed-fill.png', pressed: ['3,0', '0,2'], pressStyle: 'fill' },
+    { file: 'widgets-texts.png', texts },
+    { file: 'widgets-texts-pressed.png', pressed: ['2,1', '3,1'], texts },
+    { file: 'widgets-texts-pressed-fill.png', pressed: ['2,1', '3,1'], pressStyle: 'fill', texts },
   ]
   for (const c of wcases) {
     it(`ウィジェットも lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
       const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
       const { pixels } = renderPreview(font, { cfg: wcfg, stack: [0, info], mode: 'latched', pressed: new Set(c.pressed),
-        pressStyle: c.pressStyle, now, synced: c.synced })
+        pressStyle: c.pressStyle, now, synced: c.synced, texts: c.texts })
       const got = to565(pixels)
       let diff = 0
       for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++

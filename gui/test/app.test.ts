@@ -327,3 +327,29 @@ describe('時刻とウィジェット', () => {
     expect([...t.root.querySelectorAll('#kind option')].map((o) => (o as HTMLOptionElement).value)).not.toContain('widget')
   })
 })
+
+describe('テキストのタイル', () => {
+  it('セルをテキストにし、id を選ぶと、Brain の中身をプレビューと欄に出す', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.texts = { build: { text: 'ビルド成功', style: 'ok', set_at: '2026-10-06T00:00:00Z' } }
+    const t = await connected(setup({ daemon }))
+    expect(t.cmds()).toContain('get_text')
+    expect(t.app.texts.build.text).toBe('ビルド成功')
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    t.change('#widget', 'text')
+    // 種類を変えると、時計の項目は消え、まだ使っていない id（Brain にあるもの）を選ぶ
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'text', id: 'build', label: '消しゴム' })
+    expect(t.$('.inspector').textContent).toContain('今の中身：「ビルド成功」（成功）')
+    expect(t.$('.inspector').textContent).toContain('brain-deck text build')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.change('#text-id', 'bad id')
+    await vi.waitFor(() => expect(t.app.validation).toBe('invalid'))
+    expect(t.$('.inspector').textContent).toContain('英数字と _ . -')
+    t.change('#text-id', 'deploy')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    expect(t.$('.inspector').textContent).toContain('まだありません')
+    t.change('#widget', 'clock')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
+  })
+})

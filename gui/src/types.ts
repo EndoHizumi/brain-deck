@@ -14,9 +14,10 @@ export interface ActionSpec {
   format?: string // clock：時刻の行（Go の書式）
   date_format?: string // clock：日付の行。none で出さない
   tz?: string // clock：タイムゾーン（IANA の名前）
+  id?: string // text：中身の名前（set_text の name）
 }
 
-export type WidgetKind = 'clock'
+export type WidgetKind = 'clock' | 'text'
 
 export interface SoftArea {
   x: [number, number]
@@ -129,6 +130,23 @@ export interface TimeInfo {
 export interface SetTimeResult extends TimeInfo {
   stepped: boolean
   offset_ms: number
+}
+
+// テキストのタイルの中身（get_text、set_text。text.go の TextEntry）
+export type TextStyle = 'normal' | 'ok' | 'error' | 'warn'
+
+export interface TextEntry {
+  text: string
+  style: TextStyle
+  set_at: string
+  expires_at?: string // これを過ぎたら薄く表示する
+  source?: string
+  expired?: boolean // 読んだときに期限が切れていたか
+}
+
+export interface GetTextResult {
+  texts: Record<string, TextEntry>
+  ids: string[] // 設定で使われている id
 }
 
 export interface ValidateResult {
