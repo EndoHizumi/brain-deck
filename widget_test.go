@@ -155,11 +155,11 @@ func TestFormatClock(t *testing.T) {
 	}
 	w := &WidgetDef{Kind: widgetClock}
 	v := &CellView{Widget: w}
-	if got := widgetNext(v, tm); !got.Equal(time.Date(2026, 10, 6, 9, 6, 0, 0, time.UTC)) {
+	if got := widgetNext(v, WidgetEnv{Now: tm}); !got.Equal(time.Date(2026, 10, 6, 9, 6, 0, 0, time.UTC)) {
 		t.Errorf("next minute = %v", got)
 	}
 	w.Seconds = true
-	if got := widgetNext(v, tm.Add(300*time.Millisecond)); !got.Equal(tm.Add(time.Second)) {
+	if got := widgetNext(v, WidgetEnv{Now: tm.Add(300 * time.Millisecond)}); !got.Equal(tm.Add(time.Second)) {
 		t.Errorf("next second = %v", got)
 	}
 }

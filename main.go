@@ -693,6 +693,7 @@ func main() {
 	pngSize := flag.String("render-size", "800x480", "-render-png の画面サイズ")
 	pngTime := flag.String("render-time", "", "-render-png で時計に出す時刻（RFC 3339。例: 2026-10-06T09:41:00+09:00）。省略すると今")
 	pngUnsynced := flag.Bool("render-unsynced", false, "-render-png で、時刻を一度も合わせていないときの時計を描く")
+	pngTexts := flag.String("render-texts", "", "-render-png で、テキストのタイルに出す中身（text.json の形のファイル）")
 	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータと時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	flag.Usage = func() {
@@ -766,6 +767,17 @@ func main() {
 			}
 			env.Now = t
 		}
+		if *pngTexts != "" {
+			b, err := os.ReadFile(*pngTexts)
+			if err != nil {
+				log.Fatal(err)
+			}
+			var f textFile
+			if err := json.Unmarshal(b, &f); err != nil {
+				log.Fatalf("%s: %v", *pngTexts, err)
+			}
+			env.Texts = f.Texts
+		}
 		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, env); err != nil {
 			log.Fatal(err)
 		}
@@ -797,6 +809,12 @@ func main() {
 	if !clock.Synced() {
 		log.Printf("time: not set since boot (the clock widget shows %q until the settings GUI connects)", unsyncedText)
 	}
+	texts := NewTextService(store)
+	widgetEnv := func() WidgetEnv {
+		env := clock.Env()
+		env.Texts = texts.Snapshot()
+		return env
+	}
 
 	// 終了時に押しっぱなしを防ぐ
 	sig := make(chan os.Signal, 1)
@@ -825,13 +843,14 @@ func main() {
 		// 画面が使えなくても入力は動かす
 		if cfg.displayEnabled() {
 			first := buildLayout(km, e.View())
-			d, err := StartDisplay(cfg.Display, first, clock.Env)
+			d, err := StartDisplay(cfg.Display, first, widgetEnv)
 			if err != nil {
 				log.Printf("display disabled: %v", err)
 			} else {
 				disp = d
 				addAtExit(d.Close)
 				clock.SetOnChange(d.Poke)
+				texts.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
 			}
@@ -847,6 +866,7 @@ func main() {
 			engine:  e,
 			monitor: mon,
 			clock:   clock,
+			texts:   texts,
 			started: time.Now(),
 		}
 		go ctl.runSerial(*serialPath)

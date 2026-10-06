@@ -17,6 +17,7 @@ import (
 
 const (
 	widgetClock = "clock"
+	widgetText  = "text"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -31,7 +32,7 @@ const (
 	unsyncedText = "時刻未設定"
 )
 
-var widgetKinds = []string{widgetClock}
+var widgetKinds = []string{widgetClock, widgetText}
 
 var jaWeekdays = [...]string{"日", "月", "火", "水", "木", "金", "土"}
 
@@ -45,6 +46,7 @@ type WidgetDef struct {
 	DateFormat string         // clock：日付の行。空なら出さない
 	Loc        *time.Location // clock：nil なら Brain のタイムゾーン
 	Seconds    bool           // clock：秒を出す（1 秒ごとに描き直す）
+	ID         string         // text：中身の名前
 	// tap は、key や layer_* を書いていないセルをタップしたときの動き。nil なら何もしない（光らせない）。
 	// 入力の goroutine から呼ばれるので、待たずに返ること
 	tap func(*WidgetDef)
@@ -53,14 +55,29 @@ type WidgetDef struct {
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
 type WidgetEnv struct {
 	Now        time.Time
-	TimeSynced bool // この起動のあいだに時刻を合わせた（set_time か NTP）
+	TimeSynced bool                 // この起動のあいだに時刻を合わせた（set_time か NTP）
+	Texts      map[string]TextEntry // text：id ごとの中身（写し）
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
 func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	switch s.Widget {
 	case widgetClock:
+		if s.ID != "" {
+			return nil, fmt.Errorf("id is for widget: text")
+		}
+	case widgetText:
+		if s.Format != "" || s.DateFormat != "" || s.TZ != "" {
+			return nil, fmt.Errorf("format, date_format and tz are for widget: clock")
+		}
+		if !validTextID(s.ID) {
+			return nil, fmt.Errorf("widget: text needs id (1-32 characters of A-Z a-z 0-9 _ . -), got %q", s.ID)
+		}
+		return &WidgetDef{Kind: widgetText, ID: s.ID}, nil
 	case "":
+		if s.ID != "" {
+			return nil, fmt.Errorf("id needs widget: text")
+		}
 		return nil, fmt.Errorf("format, date_format and tz need widget: clock")
 	default:
 		return nil, fmt.Errorf("unknown widget %q (%s)", s.Widget, strings.Join(widgetKinds, ", "))
@@ -137,12 +154,19 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 	case widgetClock:
 		a, b, u := clockLines(w, env)
 		return fmt.Sprintf("%s\x00%s\x00%v", a, b, u)
+	case widgetText:
+		e, ok := env.Texts[w.ID]
+		if !ok {
+			return "\x00none"
+		}
+		return fmt.Sprintf("%s\x00%s\x00%v", e.Text, e.Style, e.Expired(env.Now))
 	}
 	return ""
 }
 
-// widgetNext は、セルの中身が次に変わる時刻を返す。
-func widgetNext(v *CellView, now time.Time) time.Time {
+// widgetNext は、セルの中身が次に変わる時刻を返す。ゼロなら、時間では変わらない。
+func widgetNext(v *CellView, env WidgetEnv) time.Time {
+	now := env.Now
 	switch v.Widget.Kind {
 	case widgetClock:
 		if v.Widget.Seconds {
@@ -150,6 +174,10 @@ func widgetNext(v *CellView, now time.Time) time.Time {
 		}
 		// 分の切り替わり。どのタイムゾーンも分単位でずれているので、UTC で切ってよい
 		return now.Truncate(time.Minute).Add(time.Minute)
+	case widgetText:
+		if e, ok := env.Texts[v.Widget.ID]; ok && e.ExpiresAt != nil && now.Before(*e.ExpiresAt) {
+			return *e.ExpiresAt // 期限が切れたら薄く描き直す
+		}
 	}
 	return time.Time{}
 }
@@ -181,7 +209,115 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		if b != "" {
 			drawCentered(cv, area, y+fontH*ts+widgetLineGap, b, ds, subInk)
 		}
+	case widgetText:
+		e, ok := env.Texts[v.Widget.ID]
+		body, c := textNoneText, subInk
+		if ok {
+			body, c = e.Text, textInk(e.Style, e.Expired(env.Now))
+			if ink != colText { // 押したとき（fill）は、押したときの色
+				c = ink
+			}
+		}
+		lines, s := textLayout(body, area.Dx(), area.Dy())
+		y := area.Min.Y + (area.Dy()-len(lines)*fontH*s)/2
+		for _, ln := range lines {
+			drawCentered(cv, area, y, ln, s, c)
+			y += fontH * s
+		}
 	}
+}
+
+// ---------- text ----------
+
+const (
+	textMaxScale = 6
+	textNoneText = "未設定" // まだ一度も set_text していない
+	textEllipsis = "…"
+)
+
+// テキストの色。種類ごとに、ふつうのときと、有効期限が切れたとき（薄く）の色
+var (
+	textColors = map[string][2]RGB{
+		textNormal: {colText, {0x6a, 0x74, 0x80}},
+		textOK:     {{0x50, 0xd8, 0x80}, {0x2e, 0x5a, 0x44}},
+		textError:  {{0xff, 0x58, 0x58}, {0x6a, 0x34, 0x3a}},
+		textWarn:   {{0xff, 0xc0, 0x30}, {0x6a, 0x58, 0x2c}},
+	}
+)
+
+func textInk(style string, expired bool) RGB {
+	c, ok := textColors[style]
+	if !ok {
+		c = textColors[textNormal]
+	}
+	if expired {
+		return c[1]
+	}
+	return c[0]
+}
+
+// textLayout は、テキストを w×h に収まるように折り返し、行と倍率を返す。
+// いちばん大きく描ける倍率（textMaxScale まで）を選ぶ。等倍でも収まらなければ、入るところまでで切り、最後に … を付ける。
+// gui/src/textwidget.ts の textLayout と同じ結果にする。
+func textLayout(s string, w, h int) ([]string, int) {
+	paras := strings.Split(s, "\n")
+	for sc := textMaxScale; sc >= 1; sc-- {
+		lines := wrapText(paras, w/sc)
+		if len(lines)*fontH*sc <= h {
+			return lines, sc
+		}
+	}
+	lines := wrapText(paras, w)
+	n := max(h/fontH, 1)
+	if len(lines) <= n {
+		return lines, 1
+	}
+	lines = lines[:n]
+	last := []rune(lines[n-1])
+	for len(last) > 0 && font.textWidth(string(last)+textEllipsis) > w {
+		last = last[:len(last)-1]
+	}
+	lines[n-1] = string(last) + textEllipsis
+	return lines, 1
+}
+
+// wrapText は、段落を幅 w（等倍のドット）で折り返す。
+// 空白があれば最後の空白で折り返し（空白は捨てる）、なければ文字の境目で折り返す。
+func wrapText(paras []string, w int) []string {
+	var out []string
+	for _, p := range paras {
+		line := []rune{}
+		lw := 0
+		for _, r := range p {
+			gw, _ := font.glyphOrBox(r)
+			if lw+gw > w && len(line) > 0 {
+				if sp := lastSpace(line); sp > 0 {
+					out = append(out, string(line[:sp]))
+					line = append([]rune{}, line[sp+1:]...)
+				} else {
+					out = append(out, string(line))
+					line = line[:0]
+				}
+				lw = font.textWidth(string(line))
+				if r == ' ' && len(line) == 0 {
+					continue // 行の頭の空白は描かない
+				}
+			}
+			line = append(line, r)
+			lw += gw
+		}
+		out = append(out, string(line))
+	}
+	return out
+}
+
+func lastSpace(line []rune) int {
+	for i := len(line) - 1; i > 0; i-- {
+		if line[i] == ' ' {
+			return i
+		}
+	}
+	return -1
 }
 
 // drawCentered は、1 行を area の中で左右の中央に描く。

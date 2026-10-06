@@ -467,13 +467,13 @@ func (d *Display) drawAllLocked(l *Layout) {
 	for i := range l.Cells {
 		if v := &l.Cells[i]; v.Widget != nil && !v.Covered {
 			d.wkeys[i] = widgetKey(v, l.Env)
-			d.scheduleWidget(v, l.Env.Now)
+			d.scheduleWidget(v, l.Env)
 		}
 	}
 }
 
-func (d *Display) scheduleWidget(v *CellView, now time.Time) {
-	if t := widgetNext(v, now); !t.IsZero() && (d.wakeAt.IsZero() || t.Before(d.wakeAt)) {
+func (d *Display) scheduleWidget(v *CellView, env WidgetEnv) {
+	if t := widgetNext(v, env); !t.IsZero() && (d.wakeAt.IsZero() || t.Before(d.wakeAt)) {
 		d.wakeAt = t
 	}
 }
@@ -488,7 +488,7 @@ func (d *Display) redrawWidgets() {
 		if v.Widget == nil || v.Covered {
 			continue
 		}
-		d.scheduleWidget(v, l.Env.Now)
+		d.scheduleWidget(v, l.Env)
 		k := widgetKey(v, l.Env)
 		if k == d.wkeys[i] {
 			continue

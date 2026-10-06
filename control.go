@@ -114,7 +114,12 @@ type request struct {
 	Enable   *bool           `json:"enable,omitempty"` // subscribe_input
 	Suppress bool            `json:"suppress,omitempty"`
 	UnixMS   *int64          `json:"unix_ms,omitempty"` // set_time：合わせる時刻（UNIX 時間のミリ秒）
-	Source   string          `json:"source,omitempty"`  // set_time：送った側の名前（記録用）
+	Source   string          `json:"source,omitempty"`  // set_time、set_text：送った側の名前（記録用）
+	Name     string          `json:"name,omitempty"`    // set_text：テキストの名前（セルの id）
+	Style    string          `json:"style,omitempty"`   // set_text：色の種類
+	TTLSec   *float64        `json:"ttl_sec,omitempty"` // set_text：有効期限（秒）
+	Clear    bool            `json:"clear,omitempty"`   // set_text：消す
+	Client   string          `json:"client,omitempty"`  // hello：つないだ側の名前（ログ用）
 }
 
 type response struct {
@@ -258,6 +263,7 @@ type Controller struct {
 	engine  *Engine
 	monitor *Monitor
 	clock   *TimeService
+	texts   *TextService
 	started time.Time
 }
 
@@ -278,10 +284,13 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 
 	switch req.Cmd {
 	case "hello":
+		if req.Client != "" {
+			vlogf("control: hello from %s", req.Client)
+		}
 		return ok(map[string]any{
 			"protocol": protocolVersion, "daemon": "lefthand", "version": daemonVersion(),
 			"max_line": maxLineBytes, "config_path": c.store.path,
-			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time"},
+			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text"},
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -339,7 +348,16 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		case err != nil:
 			return errResp(id, errInternal, "setting the system clock failed: "+err.Error(), nil)
 		}
+		if res.Stepped {
+			c.texts.ClockStepped(time.Duration(res.OffsetMS) * time.Millisecond)
+		} else {
+			c.texts.ClockSynced()
+		}
 		return ok(res)
+	case "set_text":
+		return c.setText(id, req)
+	case "get_text":
+		return ok(map[string]any{"texts": c.texts.List(time.Now()), "ids": textIDs(c.store.Current())})
 	case "subscribe_input":
 		on := req.Enable == nil || *req.Enable
 		if on {
@@ -354,6 +372,41 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 	default:
 		return errResp(id, errUnknownCmd, fmt.Sprintf("unknown command %q", req.Cmd), nil)
 	}
+}
+
+// setText は set_text を処理する。保存（SD カードへの書き込み）は待たずに返す。
+func (c *Controller) setText(id json.RawMessage, req request) response {
+	if req.Name == "" {
+		return errResp(id, errBadRequest, `"name" (the id of the text cell) is required`, nil)
+	}
+	if req.Text == nil && !req.Clear {
+		return errResp(id, errBadRequest, `"text" (a string) or "clear": true is required`, nil)
+	}
+	tr := TextRequest{Name: req.Name, Style: req.Style, Clear: req.Clear, Source: req.Source}
+	if req.Text != nil {
+		tr.Text = *req.Text
+	}
+	if req.TTLSec != nil {
+		if *req.TTLSec <= 0 {
+			return errResp(id, errBadRequest, `"ttl_sec" must be positive (omit it for no expiry)`, nil)
+		}
+		tr.TTL = time.Duration(*req.TTLSec * float64(time.Second))
+	}
+	now := time.Now()
+	e, set, err := c.texts.Set(tr, now, c.clock.Synced())
+	if err != nil {
+		return errResp(id, errBadRequest, err.Error(), nil)
+	}
+	shown := false
+	for _, x := range textIDs(c.store.Current()) {
+		shown = shown || x == req.Name
+	}
+	res := map[string]any{"name": req.Name, "cleared": !set, "shown": shown}
+	if set {
+		res["entry"] = TextInfo{TextEntry: e, Expired: e.Expired(now)}
+		vlogf("control: set_text %s (%s, %d chars) by %s", req.Name, e.Style, len([]rune(e.Text)), req.Source)
+	}
+	return response{ID: id, OK: true, Result: res}
 }
 
 func configArg(req request) ([]byte, error) {
