@@ -152,7 +152,16 @@ type DisplayConfig struct {
 	Device  string `yaml:"device,omitempty" json:"device,omitempty"`   // フレームバッファ
 	VT      int    `yaml:"vt,omitempty" json:"vt,omitempty"`           // 使う VT の番号。0 なら tty8 以降の空きを使う
 	Rotate  int    `yaml:"rotate,omitempty" json:"rotate,omitempty"`   // 画面の回転（0, 90, 180, 270）
+	// 押しているセルの見せ方。border（既定）は枠を光らせ、fill はセルを塗りつぶす。
+	// 動いているデーモンにも、設定 GUI からの保存ですぐ反映する
+	PressStyle string `yaml:"press_style,omitempty" json:"press_style,omitempty"`
 }
+
+// 押しているセルの見せ方（display.press_style）
+const (
+	pressBorder = "border"
+	pressFill   = "fill"
+)
 
 const (
 	defaultHID      = "/dev/hidg0"
@@ -201,6 +210,11 @@ func parseConfig(raw []byte) (*Config, error) {
 	case 0, 90, 180, 270:
 	default:
 		return nil, Problems{{Path: "/display/rotate", Message: "display.rotate must be 0, 90, 180 or 270"}}
+	}
+	switch cfg.Display.PressStyle {
+	case "", pressBorder, pressFill:
+	default:
+		return nil, Problems{{Path: "/display/press_style", Message: "display.press_style must be border or fill"}}
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
@@ -325,6 +339,7 @@ type Keymap struct {
 	Layers []*Layer
 	Areas  []namedArea // 名前順。重なったときは先のものを使う
 	Touch  *TouchConfig
+	Press  string // display.press_style。空なら border
 }
 
 func (km *Keymap) area(name string) (SoftArea, bool) {
@@ -340,6 +355,9 @@ func (km *Keymap) area(name string) (SoftArea, bool) {
 // warns は動作には差し支えないが、気づいてほしいこと（使われないレイヤーなど）。
 func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	km = &Keymap{Touch: cfg.Touch}
+	if cfg.Display != nil {
+		km.Press = cfg.Display.PressStyle
+	}
 	if len(cfg.Layers) == 0 {
 		return nil, nil, Problems{{Path: "/layers", Message: "no layers"}}
 	}

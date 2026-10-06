@@ -604,7 +604,7 @@ func cellView(km *Keymap, a *Action) CellView {
 // buildLayout は今の重なりから、画面に描くセルの内容を作る。
 func buildLayout(km *Keymap, v *View) *Layout {
 	l := &Layout{Cols: v.Cols, Rows: v.Rows, Cells: make([]CellView, len(v.Cells)),
-		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode}
+		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode, Press: km.Press}
 	for i, a := range v.Cells {
 		l.Cells[i] = cellView(km, a)
 	}
@@ -613,9 +613,16 @@ func buildLayout(km *Keymap, v *View) *Layout {
 
 // renderPNG は実機なしで画面の見た目を PNG に書き出す（確認用）。
 // layer を指定すると、そのレイヤーを base の上に重ねた画面を描く（hold なら一時的な色）。
-func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec string, w, h int) error {
+func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h int) error {
 	if cfg.Touch == nil {
 		return errors.New("config has no touch section")
+	}
+	switch pressStyle {
+	case "":
+	case pressBorder, pressFill:
+		km.Press = pressStyle
+	default:
+		return fmt.Errorf("-render-press-style %q: must be border or fill", pressStyle)
 	}
 	e := NewEngine(km, &State{hid: NewHIDWriter(os.DevNull), active: map[string]Combo{}})
 	if layer != "" {
@@ -671,6 +678,7 @@ func main() {
 	pngOut := flag.String("render-png", "", "画面の見た目を PNG に書き出して終わる（実機不要）")
 	pngLayer := flag.String("render-layer", "", "-render-png で base に重ねるレイヤー（例: edit、edit:hold）")
 	pngPressed := flag.String("render-pressed", "", "-render-png で押下中として描くセル（例: \"0,0 2,1\"）")
+	pngPress := flag.String("render-press-style", "", "-render-png で、設定の display.press_style の代わりに使う見せ方（border、fill）")
 	pngSize := flag.String("render-size", "800x480", "-render-png の画面サイズ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	flag.Usage = func() {
@@ -736,7 +744,7 @@ func main() {
 		if _, err := fmt.Sscanf(*pngSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 			log.Fatalf("bad -render-size %q", *pngSize)
 		}
-		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, w, h); err != nil {
+		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h); err != nil {
 			log.Fatal(err)
 		}
 		return

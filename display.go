@@ -37,6 +37,16 @@ type Layout struct {
 	Gen        uint64     // View.Gen。古い格子への SetPressed を捨てるのに使う
 	Title      string     // 隅に出すレイヤー名
 	Mode       LayerMode
+	Press      string // 押したときの見せ方。pressFill 以外は枠を光らせる
+}
+
+func (l *Layout) pressFill() bool { return l.Press == pressFill }
+
+func pressName(l *Layout) string {
+	if l.pressFill() {
+		return pressFill
+	}
+	return pressBorder
 }
 
 // badgeRect は、レイヤー名を出す右上の札の範囲を返す。
@@ -61,9 +71,10 @@ var (
 	colBorder      = RGB{0x8c, 0xa0, 0xbc}
 	colText        = RGB{0xff, 0xff, 0xff}
 	colSub         = RGB{0x96, 0xa4, 0xb4}
-	colPressed     = RGB{0xff, 0xd0, 0x40}
+	colPressed     = RGB{0xff, 0xd0, 0x40} // 押したときの色（fill の塗り、border の明るい線）
 	colPressedText = RGB{0, 0, 0}
 	colPressedSub  = RGB{0x50, 0x40, 0x00}
+	colPressEdge   = RGB{0, 0, 0} // border の外側の暗い線
 	colEmptyBorder = RGB{0x30, 0x34, 0x3a}
 	colLayerCell   = RGB{0x2a, 0x22, 0x3c} // レイヤーを切り替えるセル
 
@@ -92,6 +103,14 @@ const (
 	subScale   = 2
 	badgeScale = 2
 	badgePad   = 5
+
+	borderW = 2 // ふだんの枠の太さ
+	// press_style: border で押したときの二重の枠。セルの内側に描く。
+	// 外側の暗い線で、明るい背景や画像の上でも縁が分かる。
+	// 合わせて textMargin より細くし、ラベルには重ならないようにする
+	pressEdgeW = 2 // 外側の暗い線
+	pressGlowW = 5 // 内側の明るい線
+	pressRingW = pressEdgeW + pressGlowW
 )
 
 // fitScale は、行の集まりが w×h に収まる最大の倍率を返す（最小 1）。
@@ -118,15 +137,15 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 		cv.frame(box, 1, colEmptyBorder)
 		return cell.Union(redrawBadge(cv, l, cell))
 	}
-	fillC, textC, subC := colCell, colText, colSub
-	if v.Layer {
-		fillC = colLayerCell
-	}
-	if pressed {
+	fillC, textC, subC := cellFill(v), colText, colSub
+	if pressed && l.pressFill() {
 		fillC, textC, subC = colPressed, colPressedText, colPressedSub
 	}
 	cv.fill(box, fillC)
-	cv.frame(box, 2, modeBorder[l.Mode])
+	cv.frame(box, borderW, modeBorder[l.Mode])
+	if pressed && !l.pressFill() {
+		drawRing(cv, box, true, fillC, l.Mode)
+	}
 
 	inner := box.Inset(textMargin)
 	subH := 0
@@ -149,6 +168,54 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 		cv.text(max(x, inner.Min.X), inner.Max.Y-fontH*ss, v.Sub, ss, subC, inner)
 	}
 	return cell.Union(redrawBadge(cv, l, cell))
+}
+
+// cellFill は割り当てのあるセルの、ふだんの塗りの色。
+// 背景の画像に対応するときは、ここを画像の画素に置き換える。
+func cellFill(v CellView) RGB {
+	if v.Layer {
+		return colLayerCell
+	}
+	return colCell
+}
+
+// drawRing は、box の内側 pressRingW の帯を描く。
+// on なら押したときの二重の枠、そうでなければふだんの枠と塗りに戻す。
+func drawRing(cv *Canvas, box image.Rectangle, on bool, fillC RGB, mode LayerMode) {
+	if on {
+		cv.frame(box, pressEdgeW, colPressEdge)
+		cv.frame(box.Inset(pressEdgeW), pressGlowW, colPressed)
+		return
+	}
+	cv.frame(box, borderW, modeBorder[mode])
+	cv.frame(box.Inset(borderW), pressRingW-borderW, fillC)
+}
+
+// ringRects は、box の内側 t の帯を、重ならない 4 つの矩形で返す。
+func ringRects(box image.Rectangle, t int) []image.Rectangle {
+	return []image.Rectangle{
+		image.Rect(box.Min.X, box.Min.Y, box.Max.X, box.Min.Y+t),
+		image.Rect(box.Min.X, box.Max.Y-t, box.Max.X, box.Max.Y),
+		image.Rect(box.Min.X, box.Min.Y+t, box.Min.X+t, box.Max.Y-t),
+		image.Rect(box.Max.X-t, box.Min.Y+t, box.Max.X, box.Max.Y-t),
+	}
+}
+
+// drawPress は press_style: border で、押したとき・離したときに枠の帯だけを描き直し、
+// 書き換えた論理矩形を返す。ラベルは帯の内側にあるので描き直さない。
+// 札に重なれば札も描き直す。割り当てのないセルは押しても変わらない。
+func drawPress(cv *Canvas, l *Layout, col, row int, on bool) []image.Rectangle {
+	v := l.Cells[row*l.Cols+col]
+	if !v.Mapped {
+		return nil
+	}
+	box := l.rect(col, row).Inset(cellGap)
+	drawRing(cv, box, on, cellFill(v), l.Mode)
+	rs := ringRects(box, pressRingW)
+	if b := redrawBadge(cv, l, box); !b.Empty() {
+		rs = append(rs, b)
+	}
+	return rs
 }
 
 // redrawBadge は、描き直したセルが札に重なっていれば札を描き直し、その範囲を返す。
@@ -396,12 +463,19 @@ func (d *Display) redraw() bool {
 		}
 		t := time.Now()
 		col, row := i%d.layout.Cols, i/d.layout.Cols
-		r := drawCell(d.cv, d.layout, col, row, want[i])
+		var rs []image.Rectangle
+		if d.layout.pressFill() {
+			rs = []image.Rectangle{drawCell(d.cv, d.layout, col, row, want[i])}
+		} else {
+			rs = drawPress(d.cv, d.layout, col, row, want[i])
+		}
 		d.drawn[i] = want[i]
 		if d.active {
-			d.fb.Blit(d.cv, d.cv.physRect(r))
+			for _, r := range rs {
+				d.fb.Blit(d.cv, d.cv.physRect(r))
+			}
 		}
-		vlogf("display: cell %d,%d pressed=%v redraw %v", col, row, want[i], time.Since(t))
+		vlogf("display: cell %d,%d pressed=%v %s redraw %v", col, row, want[i], pressName(d.layout), time.Since(t))
 	}
 	return true
 }

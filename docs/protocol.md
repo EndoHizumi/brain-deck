@@ -107,8 +107,9 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 - `config` だけを受け付ける（`text` は不可）。
 - **保存の形式**：YAML。手で編集できるよう、割り当ては 1 行（キーだけなら `KEY_A: LCTRL+Z`、ほかは `{key: B, label: ブラシ}`）、セルの番号は `"0,0"` と書く。**元のファイルのコメントは消える**。先頭に、GUI が書いたことを示すコメントを付ける。
 - **押したまま保存したとき**：保存の前に押していたキーやタッチは、離しても何も送らない。
-- **動作中には変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`touch` の有無、`display`。開いているデバイスにかかわるため。変えると `/hid_device` などの場所付きで `invalid_config` になる。変えるときは、ファイルを直接編集してサービスを再起動する。
+- **動作中には変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`touch` の有無、`display`（`press_style` を除く）。開いているデバイスにかかわるため。変えると `/hid_device` などの場所付きで `invalid_config` になる。変えるときは、ファイルを直接編集してサービスを再起動する。
 - **キャリブレーション**：`touch` の min_x などと `soft_areas` は、動作中に変えられる。
+- **押したときの見せ方**：`display.press_style` は、動作中に変えられる。画面全体を描き直す。
 
 ### get_keymap
 

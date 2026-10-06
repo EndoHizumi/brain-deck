@@ -71,6 +71,29 @@ func TestHWDisplay(t *testing.T) {
 	t.Logf("release redraw: %v / %v", waitDrawn(0, false), waitDrawn(11, false))
 	snap("released")
 
+	// press_style ごとに、押す・離すを繰り返す。1 回ごとの描き直しの時間は -v のログ
+	// （display: cell ... redraw）に出る。3,0 は右上の札に重なるセル
+	cycle := func(gen uint64) {
+		for n := 0; n < 5; n++ {
+			for _, c := range [][2]int{{1, 1}, {3, 0}} {
+				i := c[1]*l.Cols + c[0]
+				d.SetPressed(gen, c[0], c[1], true)
+				waitDrawn(i, true)
+				d.SetPressed(gen, c[0], c[1], false)
+				waitDrawn(i, false)
+			}
+		}
+	}
+	cycle(l.Gen)
+	fl := *l
+	fl.Gen, fl.Press = l.Gen+100, pressFill
+	d.SetLayout(&fl)
+	cycle(fl.Gen)
+	bl := *l
+	bl.Gen = l.Gen + 101
+	d.SetLayout(&bl)
+	l = &bl
+
 	// 連打しても入力側は止まらず、最後の状態が描かれる
 	t0 = time.Now()
 	for i := 0; i < 1000; i++ {
