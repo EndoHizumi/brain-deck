@@ -6,6 +6,92 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：テキストのタイルと PC のコマンド brain-deck（2026-10-06、フェーズ 2）
+
+PC から書き換えるテキストのタイル（`widget: text`）と、PC のコマンド `brain-deck` を作った。
+デーモンは実機のサービスに反映済み（76762be）。本番の設定（`/etc/lefthand/config.yaml`）は変えていないので、今の画面にテキストのタイルは出ていない。
+
+### 作ったもの
+
+| 項目 | 内容 |
+| --- | --- |
+| テキストのタイル | `{ widget: text, id: build, label: ビルド }`。色は normal・ok・error・warn。期限が切れたら薄い色で描く。折り返し、最大 6 倍、入りきらなければ「…」 |
+| データ | `/var/lib/lefthand/text.json`。デーモンも Brain も再起動しても残る。保存は返事を待たせない（1 つの goroutine がまとめて書く）。64 個まで |
+| プロトコル | `set_text`（書く、消す）、`get_text`（一覧と、設定で使っている id）。`hello` に `client`（ログ用） |
+| 時刻のずれ | 時刻を合わせる前に書いたテキストは、`set_time` で時刻が動いたら、期限も同じだけ動かす |
+| brain-deck | `text <id> <テキスト> [--style] [--ttl]`、`text <id> --clear`、`text --list`、`time sync`、`status`。Linux と macOS 用。Go の標準ライブラリだけ |
+| 終了コード | 0 成功、1 予期しない、2 使い方、3 見つからない・返事なし、4 GUI が接続中、5 Brain のエラー、6 権限 |
+| 設定 GUI | ウィジェットに「テキスト」を足し、id を選べる。接続したときに `get_text` で読んだ中身で、プレビューを描く |
+| 設定の例 | `config/widgets-example.yaml` の「情報」レイヤーに、テキストのタイルを 2 つ足した（保存、取り消しのセルと入れ替え） |
+
+### 設定 GUI と同時に使えない仕組み
+
+| 仕組み | 内容 |
+| --- | --- |
+| TIOCEXCL | brain-deck は開いたらすぐ排他モードにする。Chrome の WebSerial も、Linux と macOS では開くと TIOCEXCL にする（Chromium の `services/device/serial/serial_io_handler_posix.cc` の `PostOpen` を読んで確かめた）。どちらかが開いていると、もう一方の open は EBUSY |
+| /proc（Linux） | 開けたときも、ほかにポートを開いているプロセスがいれば使わない。TIOCEXCL を使わないプログラムと、root のプログラムへの備え |
+| flock | brain-deck どうしは、ロックファイルで順番を待つ |
+
+デーモン側で接続相手を管理する方法は採らなかった。Brain 側からは、PC で何個のプロセスがポートを開いているか分からない（ACM のガジェットは PC が閉じたことを伝えない）うえ、2 つのプロセスが開いた時点で返事が分かれて届くので、デーモン側では防げないため。
+
+**確かめた結果**
+
+| OS | 確かめたこと | 結果 |
+| --- | --- | --- |
+| Linux（Ubuntu 22.04、6.8、Chromium 147） | Chromium の WebSerial で ttyACM0、ttyACM1 を開いたまま、ほかのプロセスで開く | どちらも EBUSY。brain-deck は「設定 GUI が接続中です（chromium (pid 30869) が …-if05 を開いています）」、終了コード 4。`--port /dev/ttyACM1` でも同じ |
+| 〃 | TIOCEXCL で開いたまま、Chromium で開く | Chromium は `NetworkError: Failed to open serial port` |
+| 〃 | Chromium を閉じたあと | brain-deck は成功 |
+| 〃 | brain-deck を 6 つ同時に | flock で順に、6 つとも成功 |
+| macOS | 実機では試していない（Mac がない） | Chromium のソースでは同じ処理で TIOCEXCL にする。README に確かめ方を書いた |
+
+- **Chromium を自動で動かした方法**：ヘッドレスの Chromium のプロファイル（`Preferences` の `serial_chooser_data`）に、Brain（1d6b:0104、シリアル番号 0123456789）への許可を書いておき、`navigator.serial.getPorts()` と `open()` を Playwright から呼んだ。ポートを選ぶ画面を出さずに、本物の WebSerial でポートを開ける。
+
+### 確認
+
+- **ホスト側のテスト**：Go（デーモンと brain-deck、race 検出つきも）と設定 GUI（70 件）がすべて通った。brain-deck は macOS（arm64、amd64）向けにもビルドできた。
+- **プレビュー**：テキストのタイルの PNG 3 枚（表示中と期限切れ、border の押下、fill の押下）と、作り直したウィジェットの PNG 3 枚が、`-render-png` と画素単位で一致した。折り返しは、Go が書いた 66 通りの結果と一致した。
+- **brain-deck のテスト**：PTY を Brain の代わりにして、書き込み、標準入力、Brain のエラー、古いデーモン、開き直し、タイムアウト、TIOCEXCL での排他、TIOCEXCL なしで開いているプロセスの検出、を確かめた。
+- **実機（手動起動、時間制限付き、データは /tmp）**：テキストのセル 6 つの設定で、PC から brain-deck で書いた。
+  - コマンドは 37〜82 ms で終わった。描き直しは 1 セル 5〜22 ms。6 つを続けて書いたときだけ、91 ms と 163 ms があった（SD への保存と重なった）。
+  - 5 秒と 2 秒の期限は、期限の時刻に薄い色に描き直された。
+  - デーモンを起動し直したあとも中身が残り、フレームバッファは、`get_text` の中身で描いた `-render-png` と画素単位で一致した（0 画素の違い）。期限切れの状態でも一致した。
+- **反映**：`/usr/local/bin/lefthand` を 76762be の版にし、サービスを再起動した。前の版は `/usr/local/bin/lefthand.prev`（20e93df、フェーズ 1）。`config.yaml` のハッシュは前後で同じ。本番のデータ（`/var/lib/lefthand/`）には、試験のテキストを書いていない。
+
+### 既知の問題（デーモンの再起動直後の最初の接続）
+
+- **調べたこと**：デーモンを 6 回再起動し、直後に brain-deck で接続した → 6 回とも 1 回目で成功（69〜108 ms）。PC でポートを開いたままデーモンを 3 回再起動した → どれも 1 回目の要求に答えた。
+- **分かったこと**：デーモンが ttyGS1 を開く前（止まっているあいだ、起動の途中）に PC が送った行は、Brain 側で捨てられ、デーモンが起動したあとも返事は来ない。次の要求からは答える。フェーズ 1 の症状は、サービスの起動中（数秒かかる）に開いたためと考えられる。
+- **対策**：brain-deck は返事がなければ一度だけ開き直して送り直す。デーモンは変えていない。設定 GUI は今までどおり（「接続」を押し直せばつながる）。
+
+### 変更したファイル
+
+| ファイル | 内容 |
+| --- | --- |
+| text.go、text_test.go（新規） | テキストの中身、保存、時刻のずれの補正、折り返しの表 |
+| widget.go | `text` の組み立て、描画、折り返し、期限での描き直し |
+| config.go | セルの `id` |
+| control.go | `set_text`、`get_text`、`hello` の `client`。`set_time` のあとに期限を補正 |
+| display.go、main.go | ウィジェットの状態にテキストを入れる。`-render-texts` |
+| cmd/brain-deck/（新規） | PC のコマンドと、そのテスト |
+| gui/src/textwidget.ts（新規）、preview.ts、app.ts、model.ts、types.ts、demo.ts、main.ts | テキストの編集とプレビュー |
+| gui/test/ | PNG 6 枚（3 枚は作り直し）、texts.json、textlayout.json、テスト |
+| config/widgets-example.yaml | 「情報」レイヤーにテキストのタイル |
+| README.md、docs/config.md、docs/protocol.md | 使い方、終了コード、排他の仕組み、cron とスクリプトの例、プロトコル |
+
+| コミット | 内容 |
+| --- | --- |
+| 62ec087 | テキストのタイル（widget: text）と、set_text、get_text を追加する |
+| 18a7dcd | PC のコマンド brain-deck を追加する（text、time sync、status） |
+| eb33867 | 設定 GUI：テキストのタイルを編集し、Brain の中身でプレビューに描く |
+| 76762be | テキストのタイル、brain-deck、set_text の使い方とプロトコルを書く |
+
+### 残っている課題
+
+- **macOS の実機**：TIOCEXCL での排他、`/dev/cu.usbmodem*` での探し方、kqueue でのタイムアウトを、Mac で確かめていない。
+- **macOS で root や TIOCEXCL なしのプログラム**：Linux の `/proc` のような検出がないので、気づけない（README に注意を書いた）。
+- **ユーザーの目視での確認**：まだ。
+- **本番の設定**：テキストのタイルは本番の設定に入れていない（反映はユーザーが決める）。
+
 ## 追記：ウィジェットの土台と時計、時刻合わせ（2026-10-06、フェーズ 1）
 
 タッチのセルに、キーの代わりにウィジェットを置けるようにし、最初のウィジェットとして時計を作った。
