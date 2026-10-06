@@ -6,7 +6,8 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
-- **ウィジェット**：タッチのセルに、キーの代わりに時計などを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **ウィジェット**：タッチのセルに、キーの代わりに時計やテキストを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Brain の時刻を合わせたりする。
 - **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI が接続したときに PC の時刻に合わせる。
 - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
 - **PC から見た Brain**：標準の USB キーボードとして見えるので、PC 側に専用のソフトは要らない。同じ USB ケーブルで、設定や保守のためのネットワーク（SSH）とシリアルも使える。
@@ -21,13 +22,14 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 5. [PC との接続](#pc-との接続)
 6. [設定](#設定)
 7. [設定 GUI](#設定-gui)
-8. [時刻合わせ](#時刻合わせ)
-9. [タッチのキャリブレーション](#タッチのキャリブレーション)
-10. [日常の操作](#日常の操作)
-11. [画面とコンソール](#画面とコンソール)
-12. [困ったとき](#困ったとき)
-13. [開発](#開発)
-14. [フォントとライセンス](#フォントとライセンス)
+8. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
+9. [時刻合わせ](#時刻合わせ)
+10. [タッチのキャリブレーション](#タッチのキャリブレーション)
+11. [日常の操作](#日常の操作)
+12. [画面とコンソール](#画面とコンソール)
+13. [困ったとき](#困ったとき)
+14. [開発](#開発)
+15. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -231,7 +233,7 @@ touch:
 
 ### ウィジェットとセルの大きさ
 
-タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）。
+タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）とテキスト（`text`）。
 また、どのセルも `span: [列数, 行数]` で、右と下のセルにまたがる大きさにできる。
 
 ```yaml
@@ -240,12 +242,14 @@ cells:
   "2,0": { widget: clock, format: "15:04:05", label: "秒" }       # 秒まで出す（1 秒ごとに描き直す）
   "3,0": { widget: clock, tz: America/Los_Angeles, label: LA, key: LGUI+SPACE }  # タップでキーを送る
   "0,2": { key: ENTER, span: [3, 1], label: "決定" }              # 横に 3 つぶんのキー
+  "2,1": { widget: text, id: build, label: "ビルド" }             # テキスト。中身は PC から brain-deck で書き換える
 ```
 
 - **書式**：`format`（時刻、既定 `15:04`）と `date_format`（日付、既定 `1月2日({wday})`、`none` で出さない）は Go の書き方。`{wday}` は日本語の曜日。詳しくは [docs/config.md](docs/config.md) の「ウィジェット」。
 - **タップしたとき**：`key` や `layer_*` を書けば、ふつうのセルと同じく働く。書かなければ何もしない（枠も光らない）。
 - **描き直し**：時計は 1 分に 1 回（秒を出すときだけ 1 秒に 1 回）、変わったセルだけを描き直す。実機で、秒つきの時計 1 つの描き直しは約 4 ms。
 - **時刻を合わせていないとき**：時刻を橙色で描き、日付の代わりに「時刻未設定」と出す（[時刻合わせ](#時刻合わせ)）。
+- **テキスト**：中身は設定ファイルではなく Brain のデータ（`/var/lib/lefthand/text.json`）で、PC の [brain-deck](#brain-deckpc-のコマンド) から書き換える。色は通常・成功・失敗・警告の 4 種類。有効期限を過ぎると、消さずに薄く表示する。一度も書いていない id は「未設定」と出る。長い文は折り返し、入りきらなければ「…」で切る。
 - **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」レイヤーを足したもの。
 
 ### データの置き場所（/var/lib/lefthand）
@@ -255,8 +259,12 @@ cells:
 | ファイル | 内容 |
 | --- | --- |
 | clock.json | 最後に時刻を合わせた記録（起動ごとの ID、時刻、ずれ、送った側） |
+| text.json | テキストのタイルの中身（id ごとに、テキスト、色、書いた時刻、有効期限、送った側）。64 個まで覚え、超えたら古いものから捨てる |
 
-テキスト、Todo、カレンダーのデータも、ここに置く予定。
+- **書き込み**：一時ファイルに書いて rename する。SD カードへの書き込みは数秒かかることがあるので、通信の返事は書き込みを待たずに返す。続けて書き換えたときは、まとめて 1 回書く。
+- **消すとき**：`brain-deck text <id> --clear`。全部消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/text.json`。
+
+Todo とカレンダーのデータも、ここに置く予定。
 
 ### 今のレイヤーの表示
 
@@ -336,11 +344,140 @@ ModemManager が動いている PC では、つないだ直後の数秒、ModemM
 9. **保存**：「Brain に保存…」で、変更点の一覧が出る。確かめて「保存して反映する」を押すと、Brain が検証してから保存し、すぐに反映する。押しているキーはいったん離れる。誤りがあるあいだは保存できない。
 10. **ファイル**：「YAML で書き出す」「JSON で書き出す」で、編集中の設定を PC に保存する。「ファイルを開く」で読み込む。読み込んだだけでは Brain は変わらない。Brain につないでいなくても、ファイルの編集はできる（検証は Brain につないだときに行う）。
 
-- **ウィジェット**：セルを選び、種類を「ウィジェット（時計）」にすると、書式、タイムゾーン、見出し、タップしたときの動きを選べる。プレビューは PC の今の時刻で描き、時刻が変わるたびに描き直す（Brain のタイムゾーンが PC と違うと、`tz` を書いていない時計の表示は Brain と違う）。
+- **ウィジェット**：セルを選び、種類を「ウィジェット（時計、テキスト）」にすると、時計の書式とタイムゾーン、テキストの id、見出し、タップしたときの動きを選べる。テキストは、接続したときに Brain から読んだ中身でプレビューに出る（GUI の接続中は brain-deck が書けないので、中身は変わらない）。プレビューは PC の今の時刻で描き、時刻が変わるたびに描き直す（Brain のタイムゾーンが PC と違うと、`tz` を書いていない時計の表示は Brain と違う）。
 - **セルの大きさ**：セルを選び、「大きさ」の列と行を変える。広げた範囲に、このレイヤーのセルがあれば、消してよいか聞く。
 - **時刻**：接続するたびに、PC の時刻を Brain に送って合わせる。ずれていたときと、Brain のタイムゾーンが PC と違うときは、そのことを出す。
 - **GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`display`（`press_style` を除く）は、デーモンを再起動しないと変えられないので、GUI からの保存では変えられない（変えると誤りになる）。ファイルを直接編集して、サービスを再起動する。
-- **ほかの人が同時に**：ポートは 1 つのタブしか開けない。SSH でファイルを直接編集したときは、GUI で「切断」して接続し直すと読み直す。
+- **ほかの人が同時に**：ポートは 1 つのタブしか開けない。GUI が接続しているあいだは、brain-deck も使えない（[同時に使えない仕組み](#設定-gui-と同時に使えない仕組み)）。SSH でファイルを直接編集したときは、GUI で「切断」して接続し直すと読み直す。
+
+## brain-deck（PC のコマンド）
+
+PC から、Brain のウィジェットを書き換えるコマンド（Linux と macOS 用）。設定 GUI と同じ USB シリアル（Brain 側 `/dev/ttyGS1`）と、同じプロトコル（[docs/protocol.md](docs/protocol.md)）を使う。ネットワークのポートは使わない。
+
+```sh
+brain-deck text build "ビルド成功" --style ok --ttl 10m   # テキストのタイル（id: build）を書き換える
+brain-deck text build --clear                              # 消す（「未設定」に戻す）
+printf "複数行も\n書ける" | brain-deck text note -          # 標準入力から読む
+brain-deck text --list                                     # Brain にあるテキストの一覧
+brain-deck time sync                                       # PC の時刻を Brain に送る
+brain-deck status                                          # 版、レイヤー、Brain の時刻
+```
+
+### 入れ方
+
+PC で、リポジトリの中でビルドする（Go 1.27 以降。cgo は使わない）。
+
+```sh
+go build -o ~/.local/bin/brain-deck ./cmd/brain-deck          # Linux
+GOOS=darwin GOARCH=arm64 go build -o brain-deck ./cmd/brain-deck   # Apple シリコンの Mac 用（Intel の Mac は amd64）
+```
+
+- **Linux**：実行するユーザーが **dialout グループ**に入っている必要がある（設定 GUI と同じ。[権限](#linux-でシリアルを使う権限)）。入っていなければ、終了コード 6 で手順を出す。
+- **macOS**：権限の設定は要らない。署名していないので、ほかの Mac にコピーしたときは `xattr -d com.apple.quarantine brain-deck` が要ることがある。
+
+### テキスト
+
+| 引数 | 内容 |
+| --- | --- |
+| `<id>` | セルの `id`（`{ widget: text, id: build }`）。英数字と `_ . -` の 32 文字まで。設定にない id でも保存はし、注意を出す |
+| `<テキスト>` | 200 文字、8 行まで。`-` なら標準入力から読む（最後の改行は除く）。`-` で始まる文は `--` のあとに書く |
+| `--style` | `normal`（白、既定）、`ok`（緑）、`error`（赤）、`warn`（黄） |
+| `--ttl` | 有効期限（`90s`、`10m`、`2h`、`1d`。30 日まで）。過ぎると、消さずに薄く表示する。書かなければ期限なし |
+| `--clear` | 消す |
+
+- **時刻**：有効期限を正しくするため、Brain の時刻がずれていれば（合わせていない、または 2 秒以上違う）、書く前に PC の時刻に合わせる。`--no-time-sync` で合わせない。時刻を合わせる前に書いたテキストは、あとで時刻を合わせたときに、期限も同じだけずらす（書いてから `--ttl` の時間で切れる）。
+- **書き換えの速さ**：コマンド全体で 40〜100 ms、Brain での描き直しは 1 セル 5〜20 ms（実機）。続けて何度も書いたときは、SD カードへの保存と重なって 100 ms を超えることがあった。入力の処理は待たせない。
+
+### 終了コード
+
+| コード | 意味 | 例 |
+| --- | --- | --- |
+| 0 | 成功 | |
+| 1 | 予期しないエラー | |
+| 2 | 使い方の誤り | 知らないコマンド、`--ttl` の書き方 |
+| 3 | Brain が見つからない、返事がない | ケーブルが抜けている、lefthand.service が止まっている |
+| 4 | 設定 GUI が接続中（ほかのプログラムがポートを使っている） | 「設定 GUI が接続中です（chromium (pid 1234) が … を開いています）」。ほかの brain-deck が 5 秒以内に終わらないときも |
+| 5 | Brain がエラーを返した | `--style` の誤り、古い lefthand（`set_text` がない） |
+| 6 | ポートを開く権限がない | Linux で dialout に入っていない |
+
+- **待つ時間**：全体で 5 秒（`--timeout` で変える）。Brain が見つからない、GUI が接続中のときは、すぐに終わる。ビルドのスクリプトから呼んでも止まらない。
+- **出力**：成功したときは 1 行を標準出力に、エラーは標準エラーに出す。`-q` で成功の出力を消す。`-v` で通信の中身を出す。
+
+### ポートの探し方
+
+| OS | 探す場所 | 順番 |
+| --- | --- | --- |
+| Linux | `/dev/serial/by-id/*Brain*`（`usb-SHARP_Brain_<シリアル番号>-if03` と `-if05`） | 名前の逆順（設定用の `-if05` が先） |
+| macOS | `/dev/cu.usbmodem*` | 名前の逆順 |
+
+- `/dev/ttyACM1` などの番号は、つなぎ直すと変わることがあるので使わない。
+- 候補を順に開いて `hello` を送り、`lefthand` が答えたものを使う。もう一方（コンソール用）は答えない。
+- **`--port`** で直接指定できる（環境変数 `BRAIN_DECK_PORT` でも）。macOS で Brain のほかに USB シリアルの機器をつないでいるときは、指定しておくと、ほかの機器に `hello` を送らない。
+- **開き直し**：返事がなければ、一度だけ開き直して試す。デーモンの再起動の直後など、Brain 側のデーモンがまだポートを開いていないうちに送った行は、Brain で捨てられて返事が来ないため（実機で確かめた）。
+
+### 設定 GUI と同時に使えない仕組み
+
+同じシリアルポートを 2 つのプロセスが同時に開くと、Brain からの返事がどちらかのプロセスに分かれて届き、両方の通信が壊れる。そこで、設定 GUI が接続しているあいだは、brain-deck は書かずに終了コード 4 で終わる。
+
+| 仕組み | 内容 |
+| --- | --- |
+| TIOCEXCL | brain-deck はポートを開いたらすぐ TIOCEXCL（排他モード）にする。以後、ほかのプロセスがそのポートを開くと EBUSY になる。Chrome の WebSerial も、Linux と macOS ではポートを開くと TIOCEXCL にする（Chromium の `serial_io_handler_posix.cc` の `PostOpen`）。そのため、GUI の接続中に brain-deck が開くと EBUSY になり、「設定 GUI が接続中」とすぐ分かる。逆に、brain-deck が動いているあいだに GUI で接続すると、GUI は「シリアルポートを開けません」になる（brain-deck はふつう 0.1 秒で終わるので、押し直せばつながる） |
+| ほかの開き手を調べる（Linux） | 開けたときも `/proc/*/fd` を見て、ほかにそのポートを開いているプロセス（TIOCEXCL を使わないプログラム、root で動くプログラム）がいれば、使わずに終了コード 4 で終わる。エラーには、開いているプロセスの名前と pid を出す |
+| flock | brain-deck どうし（cron とビルドのスクリプトが重なったなど）は、ロックファイル（`$XDG_RUNTIME_DIR/brain-deck.lock`、なければ `/tmp/brain-deck-<uid>.lock`）で順番を待つ（最長 `--timeout`）。TIOCEXCL だけでは、相手が GUI か brain-deck か区別できないため |
+
+**確かめた結果**
+
+| 環境 | 確かめたこと | 結果 |
+| --- | --- | --- |
+| Linux（Ubuntu 22.04、カーネル 6.8、Chromium 147） | Chromium の WebSerial で ttyACM0 と ttyACM1 を開いたまま、ほかのプロセスが開く | どちらも EBUSY。brain-deck は「設定 GUI が接続中です（chromium (pid …) が … を開いています）」で終了コード 4 |
+| 〃 | TIOCEXCL で開いたまま、Chromium の WebSerial で開く | Chromium は「Failed to open serial port」 |
+| 〃 | brain-deck を 6 つ同時に実行 | flock で順に実行し、6 つとも成功 |
+| macOS | 実機は試していない（手元に Mac がない） | Chromium のソースでは、macOS でも同じ `PostOpen` で TIOCEXCL にする。macOS（BSD）の TIOCEXCL も、root 以外の open を EBUSY にする。確かめ方は下 |
+
+macOS での確かめ方（Mac をお持ちなら）：Chrome で設定 GUI を開いて接続したまま、ターミナルで `brain-deck status; echo $?` を実行する。「設定 GUI が接続中です」と出て 4 になればよい。GUI で「切断」してからもう一度実行し、0 になることも確かめる。
+
+- **root で実行しない**：root は TIOCEXCL を無視して開ける。Linux では `/proc` で GUI に気づいて止まるが、macOS では気づけない。`sudo brain-deck` は使わない。
+- **ほかのブラウザやツール**：TIOCEXCL を使わない端末ソフト（`screen`、`minicom` など）がポートを開いていると、Linux では `/proc` で気づいて止まる。macOS では気づけないので、使い終わったら閉じる。
+
+### ビルドやテストのスクリプトから呼ぶ
+
+Brain がつながっていない、GUI が接続中などで失敗しても、ビルドそのものは止めたくないので、`|| true` を付ける。
+
+```sh
+#!/bin/sh
+# ビルドの結果を Brain の「build」のタイルに出す
+brain-deck -q text build "ビルド中…" --style warn || true
+if make test > build.log 2>&1; then
+  brain-deck -q text build "成功 $(date +%H:%M)" --style ok --ttl 2h || true
+else
+  brain-deck -q text build "失敗 $(tail -1 build.log)" --style error || true
+  exit 1
+fi
+```
+
+npm の例（`package.json`）：
+
+```json
+"scripts": {
+  "test": "vitest run && (brain-deck -q text test \"テスト OK\" --style ok --ttl 1h || true) || (brain-deck -q text test \"テスト失敗\" --style error || true; exit 1)"
+}
+```
+
+### cron で時刻を合わせる
+
+Brain には RTC がないので、電源を切ると時刻が遅れる（[時刻合わせ](#時刻合わせ)）。PC の cron から定期的に合わせられる。設定はユーザーが行う（`crontab -e`）。
+
+```cron
+# 10 分ごとに Brain の時刻を合わせる。Brain がつながっていないとき（終了コード 3）や、
+# 設定 GUI の接続中（4）は何もしないで終わるので、エラーのメールを出さないよう出力を捨てる
+*/10 * * * * $HOME/.local/bin/brain-deck -q time sync >/dev/null 2>&1
+```
+
+- **パス**：cron の PATH は狭いので、brain-deck は絶対パスで書く。
+- **dialout（Linux）**：cron のジョブは、cron のデーモンが起動したときのグループで動くことがある。dialout に入れたあとは、ログインし直すだけでなく、PC を再起動する（または `sudo systemctl restart cron`）。届かないときは、`*/10 * * * * $HOME/.local/bin/brain-deck time sync >> /tmp/brain-deck.log 2>&1` で一度ログを取り、終了コード 6（権限）が出ていないかを見る。
+- **ユーザー**：自分の crontab に書く（root の crontab や `/etc/cron.d` で root として動かさない）。root は TIOCEXCL を無視するので、GUI の接続中に割り込んでしまうことがある。
+- **macOS**：cron も使えるが、launchd（`~/Library/LaunchAgents/` の plist で `StartInterval` 600）のほうが、スリープから戻ったあとも動く。
+- **NTP との比較**：PC を NTP サーバーにする方法（下）は、つないでいるあいだずっと合い続けるが、PC の設定が要る。brain-deck は cron に 1 行足すだけでよい。
 
 ## 時刻合わせ
 
@@ -354,9 +491,9 @@ ModemManager が動いている PC では、つないだ直後の数秒、ModemM
 | 電源を切ったあと | 保たれない。最後に保存した時刻から再開するので、切っていたあいだの分だけ遅れる。調べたときは PC より 37 時間 25 分遅れていた |
 | NTP | systemd-timesyncd は動いているが、届くサーバーがなく、一度も同期していない |
 
-### 設定 GUI で合わせる（既定）
+### 設定 GUI と brain-deck で合わせる（既定）
 
-設定 GUI は、Brain に接続するたびに PC の時刻を送り（`set_time`）、デーモンがシステムの時刻を合わせる。
+設定 GUI は、Brain に接続するたびに PC の時刻を送り（`set_time`）、デーモンがシステムの時刻を合わせる。PC の `brain-deck time sync` でも同じことをする（`brain-deck text` も、ずれていれば先に合わせる）。
 
 - **合わせたかどうか**：Brain を起動してから一度でも合わせれば「合わせ済み」。デーモンを再起動しても覚えている（`/var/lib/lefthand/clock.json`）。Brain を再起動すると「未設定」に戻り、時計に「時刻未設定」と出る。
 - **タイムゾーン**：変えない。Brain と PC で違えば、GUI がそのことを出す。時計ごとに `tz` で変えられる。
@@ -383,7 +520,7 @@ NCM（USB のネットワーク）で、Brain の timesyncd が PC から時刻�
    ssh brain timedatectl     # System clock synchronized: yes になればよい
    ```
 
-- **どちらがよいか**：まずは設定 GUI の `set_time` で足りる（GUI を開くたびに合う）。GUI を開かない日も時計を使うなら NTP を足す。フェーズ 2 の `brain-deck` コマンドにも時刻合わせを入れれば、PC の cron などから合わせることもできる。
+- **どちらがよいか**：まずは設定 GUI の `set_time` で足りる（GUI を開くたびに合う）。GUI を開かない日も時計を使うなら、[cron で brain-deck time sync](#cron-で時刻を合わせる) を実行するか、NTP を足す。
 - **注意**：NTP は、PC の usb のインターフェースに 192.168.7.1 が付いているあいだだけ届く。
 
 ## タッチのキャリブレーション
@@ -474,6 +611,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | 設定 GUI で保存できない | 右の「検証」の一覧に誤りがないか。`hid_device` などを変えていないか |
 | 時計に「時刻未設定」と出る | Brain を起動してから、時刻を合わせていない。設定 GUI で接続する（[時刻合わせ](#時刻合わせ)） |
 | 時計の時刻が数時間ずれる | Brain のタイムゾーン（`ssh brain timedatectl`）。時計ごとに `tz` でも変えられる |
+| brain-deck が「設定 GUI が接続中です」で終わる | 設定 GUI で「切断」するか、タブを閉じる。出ている pid のプロセスがブラウザでなければ、そのプログラムを閉じる |
+| brain-deck が「Brain から返事がありません」で終わる | `ssh brain systemctl status lefthand`。`brain-deck -v status` で、どのポートに送ったかを見る |
+| brain-deck が「Brain が見つかりません」で終わる | Linux は `ls /dev/serial/by-id/`、macOS は `ls /dev/cu.usbmodem*` に Brain があるか。`--port` で指定もできる |
+| テキストのタイルに「未設定」と出る | その id に一度も書いていない。`brain-deck text --list` で、Brain にある id を見る |
 
 ## 開発
 
@@ -484,7 +625,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | main.go | 入力の読み取り、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
 | control.go | 設定 GUI とのシリアル通信（/dev/ttyGS1） |
-| widget.go | ウィジェット（時計）の書式、描き直しの間隔、描画 |
+| widget.go | ウィジェット（時計、テキスト）の書式、折り返し、描き直しの間隔、描画 |
+| text.go | テキストのタイルの中身（set_text、get_text）と、その保存 |
 | timesync.go | 時刻合わせ（set_time）と、合わせたかどうかの判断 |
 | store.go | データの置き場所（/var/lib/lefthand）の読み書き |
 | apply.go | 設定の保存と、再起動なしの反映、失敗したときの巻き戻し |
@@ -508,12 +650,13 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | kernel/brain-deck.config | カーネルの設定の差分（brain_defconfig に重ねる） |
 | docs/protocol.md | 設定 GUI とのプロトコル |
 | gui/ | 設定 GUI（TypeScript、Vite） |
+| cmd/brain-deck/ | PC のコマンド brain-deck（Linux、macOS）。ポートを探す、排他、終了コード |
 | REPORT.md | 作業の記録 |
 
 ### テスト
 
 ```sh
-go test ./...
+go test ./...            # デーモンと brain-deck
 cd gui && npm test      # 設定 GUI（シリアルはモック）
 ```
 
@@ -531,9 +674,17 @@ T=2026-10-06T09:41:27+09:00; C=config/widgets-example.yaml
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets.png -render-layer info -render-time $T $C
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-unsynced-pressed.png -render-layer info -render-time $T -render-unsynced -render-pressed "3,0 0,2" $C
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-pressed-fill.png -render-layer info -render-time $T -render-press-style fill -render-pressed "3,0 0,2" $C
+# テキストのタイル。中身は gui/test/fixtures/texts.json（build は表示中、deploy は期限切れ）
+X=gui/test/fixtures/texts.json
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-texts.png -render-layer info -render-time $T -render-texts $X $C
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-texts-pressed.png -render-layer info -render-time $T -render-texts $X -render-pressed "2,1 3,1" $C
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-texts-pressed-fill.png -render-layer info -render-time $T -render-texts $X -render-press-style fill -render-pressed "2,1 3,1" $C
 ```
 
 時計の書式は、GUI（`gui/src/clock.ts`）でも Go と同じ結果になるよう作り直している。Go の結果の表（`gui/test/fixtures/goformat.json`）と比べるので、書式の処理を変えたら `LEFTHAND_UPDATE_GOFORMAT=1 go test -run GoFormatTable` で書き直す。
+テキストの折り返し（`gui/src/textwidget.ts`）も同じく、Go の結果の表（`gui/test/fixtures/textlayout.json`）と比べる。折り返し方を変えたら `LEFTHAND_UPDATE_TEXTLAYOUT=1 go test -run TextLayoutTable` で書き直す。
+
+brain-deck のテストは、PTY を Brain の代わりにして、ポートの排他、開き直し、終了コードを確かめる（Linux だけ）。macOS 向けは `GOOS=darwin go vet ./cmd/brain-deck` でビルドできることだけを確かめている。
 
 本体キーの表（keymap_pwsh2.go）を変えたら、GUI に同梱した表も `LEFTHAND_UPDATE_KEYMAP=1 go test -run KeymapJSON` で書き直す。
 
@@ -572,6 +723,7 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-size 800x480                画面の大きさ
          -render-time 2026-10-06T09:41:00+09:00  時計に出す時刻（省略すると今）
          -render-unsynced                    時刻を合わせていないときの時計を描く
+         -render-texts texts.json            テキストのタイルの中身（text.json と同じ形）
 ```
 
 ## フォントとライセンス

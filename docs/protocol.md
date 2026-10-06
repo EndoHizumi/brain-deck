@@ -1,7 +1,7 @@
 # 設定 GUI とのプロトコル
 
-設定 GUI（`gui/`）と、Brain 上のデーモン `lefthand` が、USB シリアルでやりとりする形式。
-実装はデーモン側が `control.go`、GUI 側が `gui/src/protocol.ts`。
+設定 GUI（`gui/`）と PC のコマンド `brain-deck`（`cmd/brain-deck/`）が、Brain 上のデーモン `lefthand` と USB シリアルでやりとりする形式。
+実装はデーモン側が `control.go`、GUI 側が `gui/src/protocol.ts`、brain-deck 側が `cmd/brain-deck/client.go`。
 
 ## 通信路
 
@@ -18,6 +18,8 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 - **ポートの見分け方**：2 つの ACM は、USB の ID（1d6b:0104）も説明の文字列も同じで、ブラウザからは区別できない。GUI は `hello` を送って、答えたほうを使う。
 - **デバイスの指定**：デーモンの `-serial` オプション（既定 `/dev/ttyGS1`）。空にすると使わない。
 - **端末の設定**：デーモンは ttyGS1 を生のモード（エコーなし、行の編集なし、改行の変換なし）にして使う。
+- **1 つの接続だけ**：Brain 側からは、PC で何個のプロセスがポートを開いているか分からない。PC で 2 つのプロセスが同時に開くと、返事がどちらかに分かれて届き、両方の通信が壊れる。そこで PC 側で、同時には開かないようにする。設定 GUI（Chrome の WebSerial）は開くと TIOCEXCL（排他モード）にし、brain-deck も同じようにするので、片方が開いているあいだ、もう片方の open は EBUSY になる。brain-deck は、EBUSY を「設定 GUI が接続中」として、書かずに終わる（README の「設定 GUI と同時に使えない仕組み」）。
+- **デーモンが開く前に送った行**：デーモンが ttyGS1 を開いていないあいだ（再起動の途中など）に PC が送った行は、Brain 側で捨てられ、返事は来ない（実機で確かめた）。返事がなければ、開き直してもう一度送る。
 
 ## 形式
 
@@ -47,14 +49,15 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 ### hello
 
 ```json
-→ {"id":1,"cmd":"hello"}
+→ {"id":1,"cmd":"hello","client":"brain-deck/0123456789ab"}
 ← {"id":1,"ok":true,"result":{"protocol":1,"daemon":"lefthand","version":"eb6e67e0a1b2","max_line":262144,
    "config_path":"/etc/lefthand/config.yaml","commands":["hello","get_config",...]}}
 ```
 
 - `protocol` はこの文書の版。互換性のない変更をしたら上げる。GUI は違えば使わない。
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
-- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせる。
+- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
+- `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
 
 ### get_config
 
@@ -207,6 +210,52 @@ Brain のシステムの時刻を合わせる。Brain には RTC がないので
 - **記録**：合わせたことは `/var/lib/lefthand/clock.json` に、起動ごとの ID（boot_id）と一緒に残す。デーモンを再起動しても「合わせ済み」のまま。Brain を再起動すると、ID が変わるので「未設定」に戻る。記録は返事のあとに書く（SD カードの書き込みを待たせない）。
 - **権限**：デーモンは root で動くので、時刻を変えられる。
 
+### set_text
+
+```json
+→ {"id":10,"cmd":"set_text","name":"build","text":"ビルド成功","style":"ok","ttl_sec":600,"source":"brain-deck"}
+← {"id":10,"ok":true,"result":{"name":"build","cleared":false,"shown":true,
+   "entry":{"text":"ビルド成功","style":"ok","set_at":"2026-10-06T13:03:34.5Z","expires_at":"2026-10-06T13:13:34.5Z",
+   "source":"brain-deck","expired":false}}}
+→ {"id":11,"cmd":"set_text","name":"build","clear":true}
+← {"id":11,"ok":true,"result":{"name":"build","cleared":true,"shown":true}}
+```
+
+テキストのタイル（`{ widget: text, id: build }`）の中身を書き換える。
+
+| 引数 | 内容 |
+| --- | --- |
+| `name` | 必須。セルの `id`。英数字と `_ . -` の 32 文字まで（リクエストの `id` と区別するため、`name` にした） |
+| `text` | 中身。200 文字、8 行（改行 `\n`）まで。`\r\n` と `\r` は改行に、タブは空白にする。そのほかの制御文字は誤り。空の文字列も書ける（何も描かない） |
+| `style` | `normal`（既定）、`ok`、`error`、`warn` |
+| `ttl_sec` | 有効期限（秒、正の数）。省略すると期限なし。30 日まで |
+| `clear` | `true` なら消す（`text` は要らない）。セルは「未設定」に戻る |
+| `source` | 送った側の名前（記録とログ用） |
+
+| 結果 | 内容 |
+| --- | --- |
+| `shown` | 今の設定に、この `name` のテキストのセルがあるか。なくても保存はする（あとで設定にセルを足せば出る） |
+| `cleared` | 消したか |
+| `entry` | 保存した中身。`expires_at` は Brain の時刻での有効期限 |
+
+- **保存**：`/var/lib/lefthand/text.json` に書く。返事は書き込みを待たない（SD カードの書き込みは数秒かかることがある）。続けて書き換えたときは、まとめて書く。
+- **数**：64 個まで。超えたら、いちばん前に書いたものを捨てる。
+- **時刻を合わせる前に書いたとき**：Brain の時刻が合っていない（`synced: false`）ときに書いたものは `clock_unset: true` を付けておき、あとで `set_time` が時刻を動かしたら、`set_at` と `expires_at` も同じだけ動かす。期限は「書いてから `ttl_sec` 秒」のまま保たれる。brain-deck は、Brain の時刻がずれていれば、`set_text` の前に `set_time` を送る。
+- **誤り**：`name`、`style`、`ttl_sec`、`text` がおかしいと `bad_request`。何も変えない。
+
+### get_text
+
+```json
+→ {"id":12,"cmd":"get_text"}
+← {"id":12,"ok":true,"result":{"texts":{"build":{"text":"ビルド成功","style":"ok","set_at":"...","expires_at":"...","expired":true}},
+   "ids":["build","deploy"]}}
+```
+
+| 結果 | 内容 |
+| --- | --- |
+| `texts` | Brain にあるすべてのテキスト。形は `set_text` の `entry` と同じ。`expired` は、今の時刻で期限が切れているか |
+| `ids` | 今の設定で、テキストのセルに使われている id（名前の順） |
+
 ## エラーの種類
 
 | code | 意味 |
@@ -219,5 +268,7 @@ Brain のシステムの時刻を合わせる。Brain には RTC がないので
 | `invalid_config` | 設定の誤り。`problems` に場所付きで入る。何も変えていない |
 | `apply_failed` | 保存したが反映に失敗し、ファイルも動作も前の設定に戻した |
 | `internal_error` | そのほか（ファイルを書けないなど）。何も変えていないか、前の設定に戻せなかったことを message に書く |
+
+brain-deck は、エラーの種類によって終了コードを変える（README の「終了コード」）。
 
 GUI 側だけのエラー：`timeout`（返事が来ない。既定 5 秒、保存は 15 秒）、`closed`（切れた）、`write_failed`。
