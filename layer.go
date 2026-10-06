@@ -22,10 +22,25 @@ type View struct {
 	Top        int    // 今のレイヤー
 	Mode       LayerMode
 	Cols, Rows int
-	Cells      []*Action // row*Cols+col。nil は割り当てなし
-	Soft       map[string]*Action
-	km         *Keymap // この View を作った割り当て（設定を差し替えると変わる）
-	stackKey   string
+	Cells      []*Action // row*Cols+col。割り当ての左上のセルにだけ入る。nil は割り当てなし
+	// Anchor は、セルを覆う割り当ての左上のセルの番号（row*Cols+col）。覆うものがなければ -1。
+	// span のないセルでは自分自身を指す
+	Anchor   []int
+	Soft     map[string]*Action
+	km       *Keymap // この View を作った割り当て（設定を差し替えると変わる）
+	stackKey string
+}
+
+// at は、セル (col, row) を覆う割り当てと、その左上のセルを返す。
+func (v *View) at(col, row int) (a *Action, ac, ar int) {
+	if col < 0 || row < 0 || col >= v.Cols || row >= v.Rows {
+		return nil, col, row
+	}
+	i := v.Anchor[row*v.Cols+col]
+	if i < 0 {
+		return nil, col, row
+	}
+	return v.Cells[i], i % v.Cols, i / v.Cols
 }
 
 // LayerMode は今のレイヤーの入り方。画面の色を変えるのに使う。
@@ -40,30 +55,60 @@ const (
 // view は、レイヤーの番号を下から並べた stack について、透過を解決した格子を作る。
 // 格子の大きさは、上から見て最初に touch を持つレイヤーで決まる。
 // セルが下のレイヤーに透過するのは、格子の大きさが同じあいだだけ。
+//
+// span のあるセルは、覆う範囲がすべて上のレイヤーで空いているときだけ使う。
+// 一部でも上のレイヤーのセル（none を含む）に隠れると、そのセルは出さず、隠れていない範囲は空になる。
 func (km *Keymap) view(stack []int) *View {
 	v := &View{Top: stack[len(stack)-1], Soft: map[string]*Action{}, km: km}
-	var cells map[cellPos]*Action
+	var taken []bool // 上のレイヤーまでで、だれかが書いた（覆った）位置
+	var anchors map[cellPos]*Action
 	for i := len(stack) - 1; i >= 0; i-- {
 		g := km.Layers[stack[i]].Grid
 		if g == nil {
 			continue
 		}
-		if cells == nil {
+		if taken == nil {
 			v.Cols, v.Rows = g.Cols, g.Rows
-			cells = map[cellPos]*Action{}
+			taken = make([]bool, g.Cols*g.Rows)
+			anchors = map[cellPos]*Action{}
 		} else if g.Cols != v.Cols || g.Rows != v.Rows {
 			break
 		}
+		var claim []int
 		for p, a := range g.Cells {
-			if _, ok := cells[p]; !ok {
-				cells[p] = a
+			free := true
+			var cover []int
+			for r := p.Row; r < p.Row+a.SpanH; r++ {
+				for c := p.Col; c < p.Col+a.SpanW; c++ {
+					j := r*v.Cols + c
+					free = free && !taken[j]
+					cover = append(cover, j)
+				}
 			}
+			if free {
+				anchors[p] = a
+			}
+			claim = append(claim, cover...)
+		}
+		for _, j := range claim { // 同じレイヤーのセルどうしは重ならない（検証済み）
+			taken[j] = true
 		}
 	}
 	v.Cells = make([]*Action, v.Cols*v.Rows)
-	for p, a := range cells {
-		if a.Kind != actNone {
-			v.Cells[p.Row*v.Cols+p.Col] = a
+	v.Anchor = make([]int, v.Cols*v.Rows)
+	for i := range v.Anchor {
+		v.Anchor[i] = -1
+	}
+	for p, a := range anchors {
+		if a.Kind == actNone {
+			continue
+		}
+		i := p.Row*v.Cols + p.Col
+		v.Cells[i] = a
+		for r := p.Row; r < p.Row+a.SpanH; r++ {
+			for c := p.Col; c < p.Col+a.SpanW; c++ {
+				v.Anchor[r*v.Cols+c] = i
+			}
 		}
 	}
 	for i := len(stack) - 1; i >= 0; i-- {
@@ -176,10 +221,10 @@ func (e *Engine) PressTouch(x, y int32) TouchHit {
 	if name, ok := e.km.hitSoft(x, y); ok && v.Soft[name] != nil {
 		h.Soft, a = name, v.Soft[name]
 	} else if v.Cols > 0 {
-		h.Col, h.Row = touchCell(e.km.Touch, v.Cols, v.Rows, x, y)
-		a = v.Cells[h.Row*v.Cols+h.Col]
+		c, r := touchCell(e.km.Touch, v.Cols, v.Rows, x, y)
+		a, h.Col, h.Row = v.at(c, r) // span のセルは、左上のセルとして扱う
 	}
-	h.Mapped = a != nil
+	h.Mapped = a.tappable()
 	e.press("t", a)
 	return h
 }
@@ -239,6 +284,11 @@ func (e *Engine) press(id string, a *Action) {
 				e.stack = append(e.stack, stackEntry{layer: a.Layer, kind: actTo})
 			}
 			consumeOneshot = false
+		case actWidget:
+			// ウィジェットに任せる。待たずに返ること
+			if a.Widget != nil && a.Widget.tap != nil {
+				a.Widget.tap(a.Widget)
+			}
 		}
 	}
 	// layer_* 以外を押したら（割り当てのないキーでも）、oneshot は使い終わる

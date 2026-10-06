@@ -582,6 +582,10 @@ func cellView(km *Keymap, a *Action) CellView {
 		return CellView{}
 	}
 	label := a.Spec.Label
+	if a.Widget != nil {
+		// ウィジェットのセル。label は上に小さく出す見出し。タップで送るキーは出さない
+		return CellView{Mapped: true, Layer: a.Kind.isLayer(), Label: label, Widget: a.Widget}
+	}
 	var sub string
 	if a.Kind.isLayer() {
 		dest := km.Layers[a.Layer].title()
@@ -606,14 +610,21 @@ func buildLayout(km *Keymap, v *View) *Layout {
 	l := &Layout{Cols: v.Cols, Rows: v.Rows, Cells: make([]CellView, len(v.Cells)),
 		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode, Press: km.Press}
 	for i, a := range v.Cells {
-		l.Cells[i] = cellView(km, a)
+		switch anc := v.Anchor[i]; {
+		case anc == i:
+			l.Cells[i] = cellView(km, a)
+			l.Cells[i].SpanW, l.Cells[i].SpanH = a.SpanW, a.SpanH
+		case anc >= 0:
+			l.Cells[i] = CellView{Covered: true}
+		}
 	}
 	return l
 }
 
 // renderPNG は実機なしで画面の見た目を PNG に書き出す（確認用）。
 // layer を指定すると、そのレイヤーを base の上に重ねた画面を描く（hold なら一時的な色）。
-func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h int) error {
+// env はウィジェットを描くときの時刻など（-render-time、-render-unsynced）。
+func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h int, env WidgetEnv) error {
 	if cfg.Touch == nil {
 		return errors.New("config has no touch section")
 	}
@@ -650,7 +661,7 @@ func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle stri
 	}
 	l := buildLayout(km, e.View())
 	cv := NewCanvas(w, h, w*rgb565.Bpp, rgb565, cfg.Display.Rotate)
-	l.W, l.H = cv.W, cv.H
+	l.W, l.H, l.Env = cv.W, cv.H, env
 	pressed := make([]bool, len(l.Cells))
 	for _, p := range strings.Fields(strings.ReplaceAll(pressedSpec, ";", " ")) {
 		var c, r int
@@ -680,6 +691,9 @@ func main() {
 	pngPressed := flag.String("render-pressed", "", "-render-png で押下中として描くセル（例: \"0,0 2,1\"）")
 	pngPress := flag.String("render-press-style", "", "-render-png で、設定の display.press_style の代わりに使う見せ方（border、fill）")
 	pngSize := flag.String("render-size", "800x480", "-render-png の画面サイズ")
+	pngTime := flag.String("render-time", "", "-render-png で時計に出す時刻（RFC 3339。例: 2026-10-06T09:41:00+09:00）。省略すると今")
+	pngUnsynced := flag.Bool("render-unsynced", false, "-render-png で、時刻を一度も合わせていないときの時計を描く")
+	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータと時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [-check] [-dump-json] [-restore-console] [-render-png out.png] [config.yaml]\n", os.Args[0])
@@ -744,7 +758,15 @@ func main() {
 		if _, err := fmt.Sscanf(*pngSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 			log.Fatalf("bad -render-size %q", *pngSize)
 		}
-		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h); err != nil {
+		env := WidgetEnv{Now: time.Now(), TimeSynced: !*pngUnsynced}
+		if *pngTime != "" {
+			t, err := time.Parse(time.RFC3339, *pngTime)
+			if err != nil {
+				log.Fatalf("bad -render-time %q: %v", *pngTime, err)
+			}
+			env.Now = t
+		}
+		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, env); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -770,6 +792,11 @@ func main() {
 
 	s := &State{hid: NewHIDWriter(cfg.HIDDevice), active: map[string]Combo{}}
 	e := NewEngine(km, s)
+	store := OpenStore(*dataDir)
+	clock := NewTimeService(store)
+	if !clock.Synced() {
+		log.Printf("time: not set since boot (the clock widget shows %q until the settings GUI connects)", unsyncedText)
+	}
 
 	// 終了時に押しっぱなしを防ぐ
 	sig := make(chan os.Signal, 1)
@@ -798,12 +825,13 @@ func main() {
 		// 画面が使えなくても入力は動かす
 		if cfg.displayEnabled() {
 			first := buildLayout(km, e.View())
-			d, err := StartDisplay(cfg.Display, first)
+			d, err := StartDisplay(cfg.Display, first, clock.Env)
 			if err != nil {
 				log.Printf("display disabled: %v", err)
 			} else {
 				disp = d
 				addAtExit(d.Close)
+				clock.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
 			}
@@ -818,6 +846,7 @@ func main() {
 			store:   &configStore{path: cfgPath, cfg: cfg, km: km, apply: reloader(e)},
 			engine:  e,
 			monitor: mon,
+			clock:   clock,
 			started: time.Now(),
 		}
 		go ctl.runSerial(*serialPath)

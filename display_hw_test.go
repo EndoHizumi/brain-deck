@@ -27,7 +27,7 @@ func TestHWDisplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := buildLayout(km, km.view([]int{0}))
-	d, err := StartDisplay(cfg.Display, l)
+	d, err := StartDisplay(cfg.Display, l, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -113,6 +113,8 @@ type request struct {
 	Text     *string         `json:"text,omitempty"`   // validate：YAML か JSON の文字列（ファイルの読み込み）
 	Enable   *bool           `json:"enable,omitempty"` // subscribe_input
 	Suppress bool            `json:"suppress,omitempty"`
+	UnixMS   *int64          `json:"unix_ms,omitempty"` // set_time：合わせる時刻（UNIX 時間のミリ秒）
+	Source   string          `json:"source,omitempty"`  // set_time：送った側の名前（記録用）
 }
 
 type response struct {
@@ -255,6 +257,7 @@ type Controller struct {
 	store   *configStore
 	engine  *Engine
 	monitor *Monitor
+	clock   *TimeService
 	started time.Time
 }
 
@@ -278,7 +281,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{
 			"protocol": protocolVersion, "daemon": "lefthand", "version": daemonVersion(),
 			"max_line": maxLineBytes, "config_path": c.store.path,
-			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input"},
+			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time"},
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -320,7 +323,23 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(pwsh2Keymap())
 	case "get_status":
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
-			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing()})
+			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info()})
+	case "set_time":
+		if req.UnixMS == nil {
+			return errResp(id, errBadRequest, `"unix_ms" (milliseconds since 1970-01-01 UTC) is required`, nil)
+		}
+		src := req.Source
+		if src == "" {
+			src = "unknown"
+		}
+		res, err := c.clock.Set(time.UnixMilli(*req.UnixMS), src)
+		switch {
+		case errors.Is(err, errBadTime):
+			return errResp(id, errBadRequest, err.Error(), nil)
+		case err != nil:
+			return errResp(id, errInternal, "setting the system clock failed: "+err.Error(), nil)
+		}
+		return ok(res)
 	case "subscribe_input":
 		on := req.Enable == nil || *req.Enable
 		if on {

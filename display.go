@@ -19,8 +19,12 @@ import (
 type CellView struct {
 	Mapped bool
 	Layer  bool   // レイヤーを切り替えるセル
-	Label  string // 大きく描く文字（改行で複数行）
+	Label  string // 大きく描く文字（改行で複数行）。ウィジェットでは上に小さく出す見出し
 	Sub    string // 下に小さく描く送信キー（Label と同じなら空）
+	// SpanW、SpanH はセルの大きさ（列数、行数）。0 は 1 とみなす
+	SpanW, SpanH int
+	Covered      bool       // 左上以外の、span のセルに覆われた位置。描かない
+	Widget       *WidgetDef // ウィジェットのセル
 }
 
 // cellSpan は、セル i の画面上の範囲 [lo, hi) を返す。
@@ -37,7 +41,8 @@ type Layout struct {
 	Gen        uint64     // View.Gen。古い格子への SetPressed を捨てるのに使う
 	Title      string     // 隅に出すレイヤー名
 	Mode       LayerMode
-	Press      string // 押したときの見せ方。pressFill 以外は枠を光らせる
+	Press      string    // 押したときの見せ方。pressFill 以外は枠を光らせる
+	Env        WidgetEnv // ウィジェットを描くときの状態。描く側が描く前に入れる
 }
 
 func (l *Layout) pressFill() bool { return l.Press == pressFill }
@@ -59,9 +64,16 @@ func (l *Layout) badgeRect() image.Rectangle {
 	return image.Rect(l.W-w, 0, l.W, h)
 }
 
+// rect は、セルの画面上の範囲を返す。span のセルは、覆う範囲全体になる。
 func (l *Layout) rect(col, row int) image.Rectangle {
-	x0, x1 := cellSpan(col, l.Cols, l.W)
-	y0, y1 := cellSpan(row, l.Rows, l.H)
+	w, h := 1, 1
+	if i := row*l.Cols + col; i < len(l.Cells) {
+		w, h = max(l.Cells[i].SpanW, 1), max(l.Cells[i].SpanH, 1)
+	}
+	x0, _ := cellSpan(col, l.Cols, l.W)
+	_, x1 := cellSpan(col+w-1, l.Cols, l.W)
+	y0, _ := cellSpan(row, l.Rows, l.H)
+	_, y1 := cellSpan(row+h-1, l.Rows, l.H)
 	return image.Rect(x0, y0, x1, y1)
 }
 
@@ -114,13 +126,16 @@ const (
 )
 
 // fitScale は、行の集まりが w×h に収まる最大の倍率を返す（最小 1）。
-func fitScale(lines []string, w, h int) int {
+func fitScale(lines []string, w, h int) int { return fitScaleMax(lines, w, h, maxScale) }
+
+// fitScaleMax は、倍率の上限を指定する fitScale。
+func fitScaleMax(lines []string, w, h, most int) int {
 	tw := 0
 	for _, s := range lines {
 		tw = max(tw, font.textWidth(s))
 	}
 	th := len(lines) * fontH
-	s := maxScale
+	s := most
 	for s > 1 && (tw*s > w || th*s > h) {
 		s--
 	}
@@ -148,6 +163,10 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 	}
 
 	inner := box.Inset(textMargin)
+	if v.Widget != nil {
+		drawWidget(cv, inner, &v, l.Env, textC, subC)
+		return cell.Union(redrawBadge(cv, l, cell))
+	}
 	subH := 0
 	if v.Sub != "" {
 		subH = fontH*subScale + 4
@@ -242,7 +261,9 @@ func drawAll(cv *Canvas, l *Layout, pressed []bool) {
 	cv.fill(image.Rect(0, 0, cv.W, cv.H), colBG)
 	for r := 0; r < l.Rows; r++ {
 		for c := 0; c < l.Cols; c++ {
-			drawCell(cv, l, c, r, pressed[r*l.Cols+c])
+			if !l.Cells[r*l.Cols+c].Covered {
+				drawCell(cv, l, c, r, pressed[r*l.Cols+c])
+			}
 		}
 	}
 	drawBadge(cv, l)
@@ -270,10 +291,16 @@ type Display struct {
 	layout     *Layout // 描画側だけが触る
 	layoutCols int     // 描いている格子の列数（d.mu で守る）
 	vtSig      chan os.Signal
+
+	// ウィジェット（描画の goroutine だけが触る）
+	env    func() WidgetEnv // 今の時刻など。nil なら時刻だけ
+	wkeys  []string         // セルごとに、前に描いたウィジェットの中身（widgetKey）
+	wakeAt time.Time        // 次にウィジェットの中身が変わる時刻。ゼロなら起きなくてよい
 }
 
 // StartDisplay はフレームバッファと専用 VT を開き、描画 goroutine を起動する。
-func StartDisplay(dc *DisplayConfig, l *Layout) (*Display, error) {
+// env は、ウィジェットを描くときの状態を返す関数（nil なら時刻だけ使う）。
+func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv) (*Display, error) {
 	fb, err := OpenFramebuffer(dc.Device)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", dc.Device, err)
@@ -285,7 +312,7 @@ func StartDisplay(dc *DisplayConfig, l *Layout) (*Display, error) {
 	d := &Display{
 		want: make([]bool, len(l.Cells)), wantGen: l.Gen, drawn: make([]bool, len(l.Cells)),
 		wake: make(chan struct{}, 1), fb: fb, cv: cv, layout: l, layoutCols: l.Cols,
-		vtSig: make(chan os.Signal, 4),
+		vtSig: make(chan os.Signal, 4), env: env,
 	}
 	// VT_PROCESS のシグナルは VT を設定する前に受けられるようにしておく
 	signal.Notify(d.vtSig, syscall.SIGUSR1, syscall.SIGUSR2)
@@ -298,7 +325,7 @@ func StartDisplay(dc *DisplayConfig, l *Layout) (*Display, error) {
 	d.vt = vt
 
 	t := time.Now()
-	drawAll(cv, l, d.drawn)
+	d.drawAllLocked(l)
 	vlogf("display: initial render %v", time.Since(t))
 	if err := vt.Activate(); err != nil {
 		log.Printf("display: %v", err)
@@ -348,6 +375,13 @@ func (d *Display) cols() int {
 	return d.layoutCols
 }
 
+// Poke は、ウィジェットの中身を確かめ直させる（時刻を合わせた、データが変わったなど）。描画は待たない。
+func (d *Display) Poke() {
+	if d != nil {
+		d.poke()
+	}
+}
+
 func (d *Display) poke() {
 	select {
 	case d.wake <- struct{}{}:
@@ -381,17 +415,92 @@ func (d *Display) loop() {
 			d.Close()
 		}
 	}()
+	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
 	for {
+		timer.Reset(d.untilWake())
 		var ok bool
 		select {
 		case sig := <-d.vtSig:
 			ok = d.handleVTSignal(sig)
 		case <-d.wake:
 			ok = d.redraw()
+		case <-timer.C:
+			ok = d.redraw()
 		}
 		if !ok {
 			return
 		}
+	}
+}
+
+// widgetWakeMax は、ウィジェットがあるときに眠る最長の時間。
+// 壁時計が NTP などで飛んでも、これより長くは古い表示のままにならない。
+const widgetWakeMax = time.Minute
+
+// widgetWakeSlack は、切り替わりの時刻を確実に過ぎてから起きるための余裕。
+const widgetWakeSlack = 5 * time.Millisecond
+
+func (d *Display) untilWake() time.Duration {
+	d.drawMu.Lock()
+	at := d.wakeAt
+	d.drawMu.Unlock()
+	if at.IsZero() {
+		return time.Hour
+	}
+	return min(max(time.Until(at)+widgetWakeSlack, 0), widgetWakeMax)
+}
+
+func (d *Display) widgetEnv() WidgetEnv {
+	if d.env != nil {
+		return d.env()
+	}
+	return WidgetEnv{Now: time.Now()}
+}
+
+// drawAllLocked は格子 l の全体を裏画面に描き、ウィジェットの中身を覚える。drawMu を持って呼ぶ。
+func (d *Display) drawAllLocked(l *Layout) {
+	l.Env = d.widgetEnv()
+	drawAll(d.cv, l, d.drawn)
+	d.wkeys = make([]string, len(l.Cells))
+	d.wakeAt = time.Time{}
+	for i := range l.Cells {
+		if v := &l.Cells[i]; v.Widget != nil && !v.Covered {
+			d.wkeys[i] = widgetKey(v, l.Env)
+			d.scheduleWidget(v, l.Env.Now)
+		}
+	}
+}
+
+func (d *Display) scheduleWidget(v *CellView, now time.Time) {
+	if t := widgetNext(v, now); !t.IsZero() && (d.wakeAt.IsZero() || t.Before(d.wakeAt)) {
+		d.wakeAt = t
+	}
+}
+
+// redrawWidgets は、中身が変わったウィジェットのセルだけを描き直す。drawMu を持って呼ぶ。
+func (d *Display) redrawWidgets() {
+	l := d.layout
+	l.Env = d.widgetEnv()
+	d.wakeAt = time.Time{}
+	for i := range l.Cells {
+		v := &l.Cells[i]
+		if v.Widget == nil || v.Covered {
+			continue
+		}
+		d.scheduleWidget(v, l.Env.Now)
+		k := widgetKey(v, l.Env)
+		if k == d.wkeys[i] {
+			continue
+		}
+		t := time.Now()
+		col, row := i%l.Cols, i/l.Cols
+		r := drawCell(d.cv, l, col, row, d.drawn[i])
+		d.wkeys[i] = k
+		if d.active {
+			d.fb.Blit(d.cv, d.cv.physRect(r))
+		}
+		vlogf("display: widget %s at %d,%d redraw %v", v.Widget.Kind, col, row, time.Since(t))
 	}
 }
 
@@ -451,7 +560,7 @@ func (d *Display) redraw() bool {
 		next.W, next.H = d.cv.W, d.cv.H
 		d.layout = next
 		d.drawn = make([]bool, len(next.Cells))
-		drawAll(d.cv, next, d.drawn)
+		d.drawAllLocked(next)
 		if d.active {
 			d.fb.Blit(d.cv, image.Rect(0, 0, d.cv.pw, d.cv.ph))
 		}
@@ -465,7 +574,11 @@ func (d *Display) redraw() bool {
 		col, row := i%d.layout.Cols, i/d.layout.Cols
 		var rs []image.Rectangle
 		if d.layout.pressFill() {
+			d.layout.Env = d.widgetEnv()
 			rs = []image.Rectangle{drawCell(d.cv, d.layout, col, row, want[i])}
+			if v := &d.layout.Cells[i]; v.Widget != nil {
+				d.wkeys[i] = widgetKey(v, d.layout.Env)
+			}
 		} else {
 			rs = drawPress(d.cv, d.layout, col, row, want[i])
 		}
@@ -477,6 +590,7 @@ func (d *Display) redraw() bool {
 		}
 		vlogf("display: cell %d,%d pressed=%v %s redraw %v", col, row, want[i], pressName(d.layout), time.Since(t))
 	}
+	d.redrawWidgets()
 	return true
 }
 

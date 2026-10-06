@@ -72,6 +72,10 @@ type GridConfig struct {
 // ActionSpec はキー・セル・ソフトキー 1 つの割り当て。
 // `B`、`none`、`{ key: B, label: "ブラシ" }`、`{ layer_hold: edit }` のように書ける。
 // key と layer_* のうち、ちょうど 1 つを書く。
+//
+// タッチのセルには、ウィジェット（`{ widget: clock, format: "15:04" }`）も書ける。
+// ウィジェットのセルでは key と layer_* は省略でき、書けばタップしたときにそれが働く。
+// span はセルの大きさ（列数、行数）で、どのセルにも書ける。
 type ActionSpec struct {
 	Key          string `yaml:"key,omitempty" json:"key,omitempty"` // 送るキー。"none" で無効（下のレイヤーを使わない）
 	LayerHold    string `yaml:"layer_hold,omitempty" json:"layer_hold,omitempty"`
@@ -79,10 +83,33 @@ type ActionSpec struct {
 	LayerOneshot string `yaml:"layer_oneshot,omitempty" json:"layer_oneshot,omitempty"`
 	LayerTo      string `yaml:"layer_to,omitempty" json:"layer_to,omitempty"`
 	Label        string `yaml:"label,omitempty" json:"label,omitempty"`
+	Span         Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
+
+	// ウィジェット（タッチのセルだけ）。項目の意味は widget.go と docs/config.md
+	Widget     string `yaml:"widget,omitempty" json:"widget,omitempty"`
+	Format     string `yaml:"format,omitempty" json:"format,omitempty"`           // clock：時刻の行の書式（Go の書式）
+	DateFormat string `yaml:"date_format,omitempty" json:"date_format,omitempty"` // clock：日付の行の書式。none で出さない
+	TZ         string `yaml:"tz,omitempty" json:"tz,omitempty"`                   // clock：タイムゾーン（IANA の名前）
+}
+
+// Span はセルの大きさ [列数, 行数]。書かなければ [1, 1]。
+type Span [2]int
+
+func (s Span) IsZero() bool { return s == Span{} }
+
+// MarshalYAML は `[2, 1]` の 1 行で書き出す。
+func (s Span) MarshalYAML() (any, error) {
+	var n yaml.Node
+	if err := n.Encode([2]int(s)); err != nil {
+		return nil, err
+	}
+	n.Style = yaml.FlowStyle
+	return &n, nil
 }
 
 var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
+	"span": true, "widget": true, "format": true, "date_format": true, "tz": true,
 }
 
 func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
@@ -96,7 +123,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, label)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, label, span, widget, format, date_format, tz)", k.Line, k.Value)
 			}
 		}
 	}
@@ -104,8 +131,8 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if err := n.Decode((*plain)(a)); err != nil {
 		return err
 	}
-	if a.count() != 1 {
-		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to", n.Line)
+	if c := a.count(); c > 1 || (c == 0 && a.Widget == "") {
+		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to (a widget cell may omit them)", n.Line)
 	}
 	return nil
 }
@@ -113,7 +140,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 // MarshalYAML は、手で読み書きしやすい形で書き出す。
 // キーだけなら `LCTRL+Z`、それ以外は 1 行のフロー形式 `{ key: B, label: ブラシ }` にする。
 func (a ActionSpec) MarshalYAML() (any, error) {
-	if a.Key != "" && a.count() == 1 && a.Label == "" {
+	if a.Key != "" && a.count() == 1 && a.Label == "" && a.Widget == "" && a.Span.IsZero() {
 		return a.Key, nil
 	}
 	type plain ActionSpec
@@ -292,20 +319,34 @@ const (
 	actToggle                 // 押すたびにレイヤーを重ねる・外す
 	actOneshot                // 次の 1 キーだけレイヤーを重ねる
 	actTo                     // base とそのレイヤーだけにする
+	actWidget                 // ウィジェットのセルで、key も layer_* も書いていない（タップはウィジェットに任せる）
 )
 
-var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to"}
+var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget"}
 
 func (k ActKind) String() string { return actNames[k] }
 
-func (k ActKind) isLayer() bool { return k >= actHold }
+func (k ActKind) isLayer() bool { return k >= actHold && k <= actTo }
 
 // Action は組み立て済みの割り当て。
 type Action struct {
-	Kind  ActKind
-	Combo Combo // actKey のとき
-	Layer int   // layer_* の行き先
-	Spec  ActionSpec
+	Kind         ActKind
+	Combo        Combo // actKey のとき
+	Layer        int   // layer_* の行き先
+	Spec         ActionSpec
+	SpanW, SpanH int        // セルの大きさ（タッチのセル）。1 以上
+	Widget       *WidgetDef // ウィジェットのセルなら、その中身
+}
+
+// tappable は、押したときに何かが起きるかどうか（押したセルを光らせるかどうか）。
+func (a *Action) tappable() bool {
+	if a == nil {
+		return false
+	}
+	if a.Kind == actWidget {
+		return a.Widget != nil && a.Widget.tap != nil
+	}
+	return a.Kind != actNone
 }
 
 type cellPos struct{ Col, Row int }
@@ -394,10 +435,32 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		errs = append(errs, Problem{Path: path, Message: fmt.Sprintf(format, args...)})
 	}
 
-	action := func(path, where string, self int, s ActionSpec) *Action {
-		a := &Action{Spec: s}
+	action := func(path, where string, self int, s ActionSpec, cell bool) *Action {
+		a := &Action{Spec: s, SpanW: 1, SpanH: 1}
 		target := ""
+		if !cell && (s.Widget != "" || !s.Span.IsZero()) {
+			fail(path, "%s: widget and span can be used only in touch cells", where)
+		}
+		if s.Widget != "" || s.Format != "" || s.DateFormat != "" || s.TZ != "" {
+			w, err := compileWidget(s)
+			if err != nil {
+				fail(path, "%s: %v", where, err)
+			}
+			a.Widget = w
+			if strings.EqualFold(s.Key, "none") {
+				fail(path, "%s: a widget cell cannot be none (omit key to show the widget without a tap action)", where)
+			}
+		}
+		if !s.Span.IsZero() {
+			if s.Span[0] < 1 || s.Span[1] < 1 || s.Span[0] > 16 || s.Span[1] > 16 {
+				fail(path, "%s: span must be [cols, rows], each 1..16", where)
+			} else {
+				a.SpanW, a.SpanH = s.Span[0], s.Span[1]
+			}
+		}
 		switch {
+		case s.count() == 0 && s.Widget != "":
+			a.Kind = actWidget
 		case strings.EqualFold(s.Key, "none"):
 			a.Kind = actNone
 		case s.Key != "":
@@ -443,7 +506,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 				fail(path, "%s: unknown source key (use Linux names such as KEY_A)", where)
 				continue
 			}
-			l.Keys[code] = action(path, where, li, s)
+			l.Keys[code] = action(path, where, li, s, false)
 		}
 		if lc.Touch != nil {
 			tp := lp + "/touch"
@@ -473,8 +536,14 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 				if _, dup := g.Cells[p]; dup {
 					fail(path, "%s: defined twice", where)
 				}
-				g.Cells[p] = action(path, where, li, s)
+				a := action(path, where, li, s, true)
+				if p.Col+a.SpanW > g.Cols || p.Row+a.SpanH > g.Rows {
+					fail(path, "%s: span %dx%d goes out of the %dx%d grid", where, a.SpanW, a.SpanH, g.Cols, g.Rows)
+					a.SpanW, a.SpanH = 1, 1
+				}
+				g.Cells[p] = a
 			}
+			checkOverlaps(g, tp, lc.Name, fail)
 			l.Grid = g
 			if li == 0 {
 				baseGrid = g
@@ -488,7 +557,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			if _, ok := km.area(name); !ok {
 				fail(path, "%s: not defined in touch.soft_areas", where)
 			}
-			l.Soft[name] = action(path, where, li, s)
+			l.Soft[name] = action(path, where, li, s, false)
 		}
 		km.Layers = append(km.Layers, l)
 	}
@@ -502,6 +571,31 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	}
 	warns = km.unreachable()
 	return km, warns, nil
+}
+
+// checkOverlaps は、同じレイヤーの中で span のセルが重なっていないことを確かめる。
+func checkOverlaps(g *Grid, tp, layer string, fail func(path, format string, args ...any)) {
+	ps := make([]cellPos, 0, len(g.Cells))
+	for p := range g.Cells {
+		ps = append(ps, p)
+	}
+	sort.Slice(ps, func(i, j int) bool { return ps[i].Row < ps[j].Row || ps[i].Row == ps[j].Row && ps[i].Col < ps[j].Col })
+	owner := map[cellPos]cellPos{}
+	for _, p := range ps {
+		a := g.Cells[p]
+		for r := p.Row; r < p.Row+a.SpanH; r++ {
+			for c := p.Col; c < p.Col+a.SpanW; c++ {
+				if o, ok := owner[cellPos{c, r}]; ok {
+					// 両方のセルに誤りを付ける（設定 GUI では、覆われた側のセルは選べないため）
+					pk, ok := fmt.Sprintf("%d,%d", p.Col, p.Row), fmt.Sprintf("%d,%d", o.Col, o.Row)
+					fail(tp+"/cells/"+pk, "layer %q touch cell %q: overlaps cell %q (check span)", layer, pk, ok)
+					fail(tp+"/cells/"+ok, "layer %q touch cell %q: overlaps cell %q (check span)", layer, ok, pk)
+					return
+				}
+				owner[cellPos{c, r}] = p
+			}
+		}
+	}
 }
 
 // actionsOn は、stack を重ねたときに使える割り当てをすべて返す（透過を解決したもの）。
