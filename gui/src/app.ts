@@ -8,17 +8,19 @@ import {
 } from './keys'
 import defaultKeymap from './keymap-pwsh2.json'
 import {
-  KIND_LABELS, LAYER_KINDS, LAYER_VERB, actionKind, actionTarget, addLayer, cellKey, cellsOutside, clean,
-  deleteLayer, describeAction, editStack, isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references,
-  renameLayer, resolveCell, resolveGrid, resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction,
-  touchCell, type ActionKind, type LayerKind, type Location, type ResolvedAction,
+  DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, WIDGET_FIELDS, WIDGET_LABELS,
+  actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
+  isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
+  resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
+  type Location, type ResolvedAction,
 } from './model'
+import { hasSeconds } from './clock'
 import { cellSpan, renderPreview, type Mode } from './preview'
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import type {
   ActionSpec, Config, EngineStatus, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, ValidateResult,
+  PressStyle, Problem, SetTimeResult, ValidateResult, WidgetKind,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -86,6 +88,8 @@ export class App {
   // プレビューで、マウスで押さえているセル（"列,行"）。押したときの見た目で描く
   previewPress: string | null = null
   private keepalive: ReturnType<typeof setInterval> | null = null
+  // 時計のプレビューを、時刻が変わるたびに描き直すためのタイマー
+  private previewTimer: ReturnType<typeof setTimeout> | null = null
   // そのほか
   capturing = false
   private capture: ComboCapture | null = null
@@ -210,6 +214,7 @@ export class App {
       }
       c.maxLine = hello.max_line
       this.attach(c, hello)
+      await this.syncTime()
       await this.loadFromBrain()
       return { result: 'ok' }
     } catch {
@@ -234,6 +239,25 @@ export class App {
       this.render()
     }
     this.say(`接続しました：lefthand ${hello.version}`, 'ok')
+  }
+
+  // syncTime は、Brain の時刻を PC の時刻に合わせる（Brain には RTC がないので、電源を切ると遅れる）。
+  // 失敗しても、設定の編集はそのまま続けられる。
+  async syncTime(): Promise<void> {
+    if (!this.hello?.commands?.includes('set_time')) return
+    try {
+      const r = await this.client!.request<SetTimeResult>('set_time', { unix_ms: Date.now(), source: 'gui' })
+      if (r.stepped) this.say(`Brain の時刻を PC に合わせました（${formatOffset(r.offset_ms)}ずれていました）`, 'ok')
+      const pc = -new Date().getTimezoneOffset() * 60
+      if (r.utc_offset_sec !== pc)
+        this.say(
+          `Brain のタイムゾーン（${r.timezone || '不明'}、${utcOffset(r.utc_offset_sec)}）が PC（${utcOffset(pc)}）と違います。` +
+            '時計のウィジェットは、tz を書かなければ Brain のタイムゾーンで表示します',
+          'error',
+        )
+    } catch (e: any) {
+      this.say(`Brain の時刻を合わせられませんでした：${e?.message ?? e}`, 'error')
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -434,6 +458,9 @@ export class App {
       case 'none':
         a = { key: 'none' }
         break
+      case 'widget':
+        a = { widget: 'clock' }
+        break
       case 'key':
         a = { key: cur && actionKind(cur) === 'key' ? cur.key : '' }
         break
@@ -444,6 +471,47 @@ export class App {
       }
     }
     if (a && label) a.label = label
+    if (a && cur?.span && kind !== 'none') a.span = cur.span
+    this.setAction(a)
+  }
+
+  // setTap は、ウィジェットのセルをタップしたときの動きを変える（ウィジェットの項目と大きさは残す）。
+  setTap(kind: ActionKind): void {
+    const cur = this.ownAction()
+    if (!cur?.widget) return
+    const a: ActionSpec = {}
+    for (const f of [...WIDGET_FIELDS, 'label', 'span'] as const) if (cur[f] !== undefined) (a as any)[f] = cur[f]
+    if (kind === 'key') a.key = cur.key && cur.key.toLowerCase() !== 'none' ? cur.key : ''
+    else if (LAYER_KINDS.includes(kind as LayerKind)) {
+      const others = this.cfg!.layers.filter((_, i) => i !== this.layer && !(kind === 'layer_toggle' && i === 0))
+      a[kind as LayerKind] = actionTarget(cur) || others[0]?.name || ''
+    }
+    this.setAction(a)
+  }
+
+  // setSpan はセルの大きさを変える。[1, 1] なら span を書かない。
+  setSpan(w: number, h: number): void {
+    const cur = this.ownAction()
+    const s = this.sel
+    if (!cur || s?.kind !== 'cell') return
+    const g = resolveGrid(this.cfg!, editStack(this.layer))
+    w = Math.max(1, Math.min(Math.trunc(w) || 1, g.cols - s.col))
+    h = Math.max(1, Math.min(Math.trunc(h) || 1, g.rows - s.row))
+    // 広げた範囲にある、このレイヤーのセルは覆われて使えなくなる（デーモンの検証で誤りになる）ので消す
+    const l = this.layerCfg!
+    const covered = Object.keys(l.touch?.cells ?? {}).filter((k) => {
+      const m = k.match(/^(\d+),(\d+)$/)
+      if (!m || (+m[1] === s.col && +m[2] === s.row)) return false
+      return +m[1] >= s.col && +m[1] < s.col + w && +m[2] >= s.row && +m[2] < s.row + h
+    })
+    if (covered.length && !this.deps.confirm(`広げた範囲にあるセル ${covered.length} 個（${covered.join('、')}）の割り当てを消します。よいですか？`)) {
+      this.render()
+      return
+    }
+    for (const k of covered) delete l.touch!.cells![k]
+    const a = { ...cur }
+    if (w === 1 && h === 1) delete a.span
+    else a.span = [w, h]
     this.setAction(a)
   }
 
@@ -452,6 +520,7 @@ export class App {
     if (!cur) return
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
+    for (const f of ['format', 'date_format', 'tz'] as const) if (a[f] === '') delete a[f]
     this.setAction(a)
   }
 
@@ -513,7 +582,8 @@ export class App {
       } else {
         const g = resolveGrid(this.cfg, st)
         if (g.cols === 0) return
-        const [col, row] = touchCell(this.cfg.touch, g.cols, g.rows, ev.x, ev.y)
+        const [c, r] = touchCell(this.cfg.touch, g.cols, g.rows, ev.x, ev.y)
+        const [col, row] = anchorOf(g, c, r) // span のセルは左上のセルとして選ぶ
         this.sel = { kind: 'cell', col, row }
       }
     } else {
@@ -886,8 +956,13 @@ export class App {
     const cells: HTMLElement[] = []
     for (let r = 0; r < g.rows; r++) {
       for (let c = 0; c < g.cols; c++) {
-        const [x0, x1] = cellSpan(c, g.cols, W)
-        const [y0, y1] = cellSpan(r, g.rows, H)
+        const i = r * g.cols + c
+        if (g.anchor[i] >= 0 && g.anchor[i] !== i) continue // span のセルに覆われている
+        const [w, hh] = g.anchor[i] === i ? spanOf(g.cells[i]?.action) : [1, 1]
+        const [x0] = cellSpan(c, g.cols, W)
+        const [, x1] = cellSpan(Math.min(c + w, g.cols) - 1, g.cols, W)
+        const [y0] = cellSpan(r, g.rows, H)
+        const [, y1] = cellSpan(Math.min(r + hh, g.rows) - 1, g.rows, H)
         const sel: Selection = { kind: 'cell', col: c, row: r }
         const selected = this.sel?.kind === 'cell' && this.sel.col === c && this.sel.row === r
         const flash = this.flash?.kind === 'cell' && this.flash.col === c && this.flash.row === r
@@ -1094,8 +1169,22 @@ export class App {
     // 入り方で枠の色を変える（切り替えたままなら緑、一時的なら橙）
     const mode: Mode = li === 0 ? 'base' : refs.some((r) => r.kind === 'layer_toggle' || r.kind === 'layer_to') || !refs.length ? 'latched' : 'temp'
     const pressed = new Set(this.previewPress ? [this.previewPress] : [])
-    const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height })
+    const now = new Date()
+    const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
+    this.schedulePreviewTick(now)
+  }
+
+  // schedulePreviewTick は、時計が出ていれば、表示が変わる時刻（次の秒か分）にプレビューを描き直す。
+  private schedulePreviewTick(now: Date): void {
+    if (this.previewTimer) clearTimeout(this.previewTimer)
+    this.previewTimer = null
+    const g = resolveGrid(this.cfg!, editStack(this.layer))
+    const clocks = g.cells.filter((c) => c?.action.widget === 'clock').map((c) => c!.action)
+    if (!clocks.length) return
+    const sec = clocks.some((a) => hasSeconds(a.format || DEFAULT_CLOCK_FORMAT) || hasSeconds(a.date_format && a.date_format !== 'none' ? a.date_format : ''))
+    const unit = sec ? 1000 : 60000
+    this.previewTimer = setTimeout(() => this.drawPreview(), unit - (now.getTime() % unit) + 5)
   }
 
   // ---------- 選んだものの編集 ----------
@@ -1121,7 +1210,9 @@ export class App {
     const own = this.ownAction()
     const r = this.resolved()
     const errs = this.problemsAt((loc) => this.selMatches(loc, sel, this.layer))
-    const kind: ActionKind | 'inherit' = own ? actionKind(own) : 'inherit'
+    const kind: ActionKind | 'inherit' = own ? (own.widget !== undefined ? 'widget' : actionKind(own)) : 'inherit'
+    // ウィジェットのセルで、タップしたときに働くもの
+    const tap: ActionKind | null = own?.widget !== undefined ? actionKind(own) : null
     const inheritLabel = this.layer === 0 ? '割り当てなし' : '透過（下のレイヤーのものを使う）'
     const notes = sel.kind === 'key' ? this.keymap.keys.filter((k) => k.code === sel.code || k.symbol === sel.code).map((k) => k.note).filter(Boolean) : []
 
@@ -1131,11 +1222,20 @@ export class App {
     body.push(h('label', { class: 'row' }, '種類 ', h('select', { 'data-focus': 'kind', id: 'kind',
       onchange: (e: Event) => this.setKind((e.target as HTMLSelectElement).value as ActionKind | 'inherit') },
       h('option', { value: 'inherit', selected: kind === 'inherit' }, inheritLabel),
-      (Object.keys(KIND_LABELS) as ActionKind[]).map((k) => h('option', { value: k, selected: kind === k }, KIND_LABELS[k])))))
+      (Object.keys(KIND_LABELS) as ActionKind[]).filter((k) => k !== 'widget' || sel.kind === 'cell')
+        .map((k) => h('option', { value: k, selected: kind === k }, KIND_LABELS[k])))))
 
-    if (own && kind === 'key') body.push(this.viewComboEditor(own))
-    if (own && LAYER_KINDS.includes(kind as LayerKind)) {
-      const lk = kind as LayerKind
+    if (own && kind === 'widget') body.push(this.viewWidgetEditor(own))
+    if (tap) {
+      body.push(h('label', { class: 'row' }, 'タップしたとき ', h('select', { 'data-focus': 'tap', id: 'tap',
+        onchange: (e: Event) => this.setTap((e.target as HTMLSelectElement).value as ActionKind) },
+        h('option', { value: 'widget', selected: tap === 'widget' }, '何もしない'),
+        (['key', ...LAYER_KINDS] as ActionKind[]).map((k) => h('option', { value: k, selected: tap === k }, KIND_LABELS[k])))))
+    }
+    const act = tap ?? kind
+    if (own && act === 'key') body.push(this.viewComboEditor(own))
+    if (own && LAYER_KINDS.includes(act as LayerKind)) {
+      const lk = act as LayerKind
       body.push(h('label', { class: 'row' }, '行き先 ', h('select', { 'data-focus': 'target', id: 'target',
         onchange: (e: Event) => this.patchAction({ [lk]: (e.target as HTMLSelectElement).value }) },
         h('option', { value: '', selected: !own[lk] }, '（選んでください）'),
@@ -1145,11 +1245,13 @@ export class App {
     }
     if (own && kind !== 'inherit') {
       const missing = own.label && this.font ? this.font.missing(own.label) : []
-      body.push(h('label', { class: 'row' }, sel.kind === 'key' ? '表示名（画面には出ません） ' : '表示名 ',
-        h('textarea', { rows: 2, 'data-focus': 'label', id: 'label', placeholder: '省略するとキーの名前を出します',
+      body.push(h('label', { class: 'row' }, sel.kind === 'key' ? '表示名（画面には出ません） ' : kind === 'widget' ? '見出し ' : '表示名 ',
+        h('textarea', { rows: 2, 'data-focus': 'label', id: 'label',
+          placeholder: kind === 'widget' ? '省略可。セルの上に小さく出します' : '省略するとキーの名前を出します',
           value: own.label ?? '', oninput: (e: Event) => this.patchAction({ label: (e.target as HTMLTextAreaElement).value }) })))
       if (missing.length) body.push(h('div', { class: 'warn' }, `Brain のフォントにない文字があります（□ になります）：${missing.join(' ')}`))
     }
+    if (own && kind !== 'inherit' && kind !== 'none' && sel.kind === 'cell') body.push(this.viewSpanEditor(own))
     for (const n of notes) body.push(h('p', { class: 'hint' }, n!))
     for (const p of errs) body.push(h('div', { class: 'err' }, p.message))
 
@@ -1157,6 +1259,34 @@ export class App {
       h('h2', null, '割り当て'),
       h('div', { class: 'sel-title' }, `レイヤー「${layerTitle(l)}」/ ${this.selTitle(sel)}`),
       body)
+  }
+
+  // viewWidgetEditor は、ウィジェットの種類と書式の欄。書式は Go の time.Format の形。
+  private viewWidgetEditor(own: ActionSpec): HTMLElement {
+    const text = (f: 'format' | 'date_format' | 'tz', label: string, placeholder: string, title: string) =>
+      h('label', { class: 'row', title }, label, h('input', { value: own[f] ?? '', 'data-focus': f, id: f, placeholder,
+        onchange: (e: Event) => this.patchAction({ [f]: (e.target as HTMLInputElement).value.trim() }) }))
+    const missing = this.font ? this.font.missing([own.format, own.date_format].filter(Boolean).join('')) : []
+    return h('div', { class: 'widget-editor' },
+      h('label', { class: 'row' }, 'ウィジェット ', h('select', { 'data-focus': 'widget', id: 'widget',
+        onchange: (e: Event) => this.patchAction({ widget: (e.target as HTMLSelectElement).value as WidgetKind }) },
+        (Object.keys(WIDGET_LABELS) as WidgetKind[]).map((w) => h('option', { value: w, selected: own.widget === w }, WIDGET_LABELS[w])))),
+      text('format', '時刻の書式 ', DEFAULT_CLOCK_FORMAT, '例：15:04（24 時間）、15:04:05（秒も出す。1 秒ごとに描き直す）、3:04 PM'),
+      text('date_format', '日付の書式 ', DEFAULT_DATE_FORMAT, '例：1月2日({wday})、2006/01/02 Mon。none で日付を出さない。{wday} は日本語の曜日'),
+      text('tz', 'タイムゾーン ', 'Brain のタイムゾーン', '例：Asia/Tokyo、America/Los_Angeles、UTC。省略すると Brain のタイムゾーン'),
+      h('p', { class: 'hint' }, '書式は Go の書き方です（2006=年、01 か 1=月、02 か 2=日、15=時、04=分、05=秒、Mon=曜日、{wday}=日本語の曜日）。時刻を一度も合わせていないあいだは、Brain では「時刻未設定」と橙色で出ます。'),
+      missing.length ? h('div', { class: 'warn' }, `Brain のフォントにない文字があります（□ になります）：${missing.join(' ')}`) : null,
+    )
+  }
+
+  // viewSpanEditor は、セルの大きさ（span）の欄。右と下のセルを覆う。
+  private viewSpanEditor(own: ActionSpec): HTMLElement {
+    const [w, hh] = spanOf(own)
+    const num = (v: number, f: (n: number) => void, id: string) =>
+      h('input', { type: 'number', min: 1, max: 16, value: v, 'data-focus': id, id, class: 'num',
+        onchange: (e: Event) => f(Number((e.target as HTMLInputElement).value)) })
+    return h('div', { class: 'row span-editor', title: 'セルを右と下に広げます。覆ったセルの割り当ては、このレイヤーに書いてあると誤りになります' },
+      '大きさ ', h('label', null, '列 ', num(w, (n) => this.setSpan(n, hh), 'span-w')), h('label', null, ' 行 ', num(hh, (n) => this.setSpan(w, n), 'span-h')))
   }
 
   private viewComboEditor(own: ActionSpec): HTMLElement {
@@ -1253,6 +1383,7 @@ export class App {
 // shortAction はキーやセルに小さく出す割り当ての説明。
 export function shortAction(cfg: Config, a: ActionSpec | null): string {
   if (!a) return ''
+  if (a.widget) return a.label ? `${WIDGET_LABELS[a.widget] ?? a.widget}：${a.label.replace(/\n/g, ' ')}` : (WIDGET_LABELS[a.widget] ?? a.widget)
   const k = actionKind(a)
   if (k === 'none') return '✕'
   if (k === 'key') return a.label ? a.label.replace(/\n/g, ' ') : prettyCombo(a.key ?? '')
@@ -1265,4 +1396,25 @@ export function shortAction(cfg: Config, a: ActionSpec | null): string {
 function symbolName(code: string): string {
   const n = code.replace(/^KEY_/, '')
   return PRETTY[n] ?? n
+}
+
+// formatOffset は、時刻のずれを「1 日 13 時間」のように書く。
+export function formatOffset(ms: number): string {
+  let s = Math.round(Math.abs(ms) / 1000)
+  const parts: string[] = []
+  for (const [n, u] of [[86400, '日'], [3600, '時間'], [60, '分']] as const) {
+    if (s >= n) {
+      parts.push(`${Math.floor(s / n)} ${u}`)
+      s %= n
+    }
+  }
+  if (!parts.length || (parts.length === 1 && s)) parts.push(`${s} 秒`)
+  return parts.slice(0, 2).join(' ')
+}
+
+// utcOffset は、UTC からのずれを「UTC+9」「UTC-7」「UTC+5:30」のように書く。
+export function utcOffset(sec: number): string {
+  const a = Math.abs(sec)
+  const m = Math.floor(a / 60) % 60
+  return `UTC${sec < 0 ? '-' : '+'}${Math.floor(a / 3600)}${m ? `:${String(m).padStart(2, '0')}` : ''}`
 }

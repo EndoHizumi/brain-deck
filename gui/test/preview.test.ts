@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+// 時計の既定は PC のタイムゾーン。fixtures は TZ=Asia/Tokyo で書き出した
+process.env.TZ = 'Asia/Tokyo'
 import { cellSpan, cellView, renderPreview, type Mode } from '../src/preview'
 import type { PressStyle } from '../src/types'
+import { parseConfigText } from '../src/yamlio'
 import { decodePNG, repoFile, sampleConfig, testFont } from './helpers'
 
 // Brain の画面は RGB565。Go の -render-png は、その丸めた色で書き出す（fb.go の pack / unpack）
@@ -35,6 +38,28 @@ describe('Brain の画面のプレビュー', () => {
       const { pixels } = renderPreview(font, { cfg, stack: c.stack, mode: c.mode, pressed: new Set(c.pressed), pressStyle: c.pressStyle })
       const got = to565(pixels)
       expect(want.w * want.h * 4).toBe(got.length)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
+  // ウィジェット（時計）と span のセル。config/widgets-example.yaml の「情報」レイヤー
+  // TZ=Asia/Tokyo go run . -render-png ... -render-layer info -render-time 2026-10-06T09:41:27+09:00 config/widgets-example.yaml
+  const wcfg = parseConfigText(repoFile('config/widgets-example.yaml').toString('utf8'))
+  const info = wcfg.layers.findIndex((l) => l.name === 'info')
+  const now = new Date('2026-10-06T09:41:27+09:00')
+  const wcases: { file: string; pressed?: string[]; pressStyle?: PressStyle; synced?: boolean }[] = [
+    { file: 'widgets.png' },
+    { file: 'widgets-unsynced-pressed.png', pressed: ['3,0', '0,2'], synced: false },
+    { file: 'widgets-pressed-fill.png', pressed: ['3,0', '0,2'], pressStyle: 'fill' },
+  ]
+  for (const c of wcases) {
+    it(`ウィジェットも lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: wcfg, stack: [0, info], mode: 'latched', pressed: new Set(c.pressed),
+        pressStyle: c.pressStyle, now, synced: c.synced })
+      const got = to565(pixels)
       let diff = 0
       for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
       expect(diff).toBe(0)

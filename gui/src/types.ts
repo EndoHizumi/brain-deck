@@ -8,7 +8,15 @@ export interface ActionSpec {
   layer_oneshot?: string
   layer_to?: string
   label?: string
+  span?: [number, number] // セルの大きさ [列数, 行数]。タッチのセルだけ
+  // ウィジェット（タッチのセルだけ）。key と layer_* は省略でき、書けばタップしたときに働く
+  widget?: WidgetKind
+  format?: string // clock：時刻の行（Go の書式）
+  date_format?: string // clock：日付の行。none で出さない
+  tz?: string // clock：タイムゾーン（IANA の名前）
 }
+
+export type WidgetKind = 'clock'
 
 export interface SoftArea {
   x: [number, number]
@@ -105,6 +113,22 @@ export interface HelloResult {
   max_line: number
   config_path: string
   commands: string[]
+}
+
+// Brain の時刻の状態（get_status の time、set_time の結果）
+export interface TimeInfo {
+  now: string
+  timezone: string
+  utc_offset_sec: number
+  synced: boolean
+  ntp_synced: boolean
+  last_set?: string
+  last_source?: string
+}
+
+export interface SetTimeResult extends TimeInfo {
+  stepped: boolean
+  offset_ms: number
 }
 
 export interface ValidateResult {

@@ -4,7 +4,7 @@
 
 import { ALL_KEYS, MODIFIERS } from './keys'
 import keymapJSON from './keymap-pwsh2.json'
-import { LAYER_KINDS, actionKind, actionTarget, parseCellKey } from './model'
+import { LAYER_KINDS, actionKind, actionTarget, parseCellKey, spanOf } from './model'
 import type { Transport } from './protocol'
 import type { ActionSpec, Config, KeymapInfo, Problem } from './types'
 
@@ -19,6 +19,8 @@ export class FakeDaemon {
   suppress = false
   received: any[] = [] // 受け取ったリクエスト（テスト用）
   failApply = false // true なら set_config の反映に失敗したことにする（テスト用）
+  clockOffsetMs = 0 // Brain の時計の遅れ（set_time で 0 になる）
+  timeSynced = false
   // 通知を送る先（FakeTransport が設定する）
   emit: (line: string) => void = () => {}
 
@@ -49,13 +51,21 @@ export class FakeDaemon {
       JSON.stringify({ id, ok: false, error: { code, message, problems } })
     switch (req.cmd) {
       case 'hello':
-        return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path, commands: [] })
+        return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
+          commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
         return ok(keymap)
       case 'get_status':
-        return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress })
+        return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress, time: this.timeInfo() })
+      case 'set_time': {
+        if (typeof req.unix_ms !== 'number') return err('bad_request', '"unix_ms" is required')
+        const offset = req.unix_ms - (Date.now() - this.clockOffsetMs)
+        this.clockOffsetMs = 0
+        this.timeSynced = true
+        return ok({ stepped: Math.abs(offset) >= 500, offset_ms: offset, ...this.timeInfo() })
+      }
       case 'validate': {
         const p = validate(req.config)
         return ok({ valid: p.length === 0, errors: p, warnings: [], config: p.length ? undefined : req.config })
@@ -75,6 +85,11 @@ export class FakeDaemon {
       default:
         return err('unknown_command', `unknown command ${JSON.stringify(req.cmd)}`)
     }
+  }
+
+  timeInfo() {
+    return { now: new Date(Date.now() - this.clockOffsetMs).toISOString(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      utc_offset_sec: -new Date().getTimezoneOffset() * 60, synced: this.timeSynced, ntp_synced: false }
   }
 
   // pressKey / touch は、Brain で押したことにする（学習モードの通知）。
@@ -102,9 +117,20 @@ export function validate(cfg: Config): Problem[] {
     else if (names.has(l.name)) out.push({ path: `/layers/${i}/name`, message: `layer "${l.name}" is defined twice` })
     names.add(l.name)
   })
-  const action = (path: string, where: string, a: ActionSpec) => {
+  const action = (path: string, where: string, a: ActionSpec, cell = false) => {
     const n = (['key', ...LAYER_KINDS] as const).filter((k) => a[k]).length
-    if (n !== 1) return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to` })
+    if (n > 1 || (n === 0 && !a.widget))
+      return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to (a widget cell may omit them)` })
+    if (!cell && (a.widget || a.span)) return out.push({ path, message: `${where}: widget and span can be used only in touch cells` })
+    if (a.widget && a.widget !== 'clock') out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock)` })
+    if (!a.widget && (a.format || a.date_format || a.tz)) out.push({ path, message: `${where}: format, date_format and tz need widget: clock` })
+    if (a.tz) {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: a.tz })
+      } catch {
+        out.push({ path, message: `${where}: unknown tz "${a.tz}" (use an IANA name such as Asia/Tokyo)` })
+      }
+    }
     const k = actionKind(a)
     if (k === 'key') {
       for (const p of a.key!.split('+')) {
@@ -112,7 +138,7 @@ export function validate(cfg: Config): Problem[] {
         if (!ALL_KEYS.has(u) && !(MODIFIERS as readonly string[]).includes(u))
           out.push({ path, message: `${where}: unknown key "${u}" in "${a.key}"` })
       }
-    } else if (k !== 'none') {
+    } else if (k !== 'none' && k !== 'widget') {
       const t = actionTarget(a)!
       if (!names.has(t)) out.push({ path, message: `${where}: ${k} refers to unknown layer "${t}"` })
       else if (k === 'layer_toggle' && t === cfg.layers[0].name)
@@ -134,8 +160,11 @@ export function validate(cfg: Config): Problem[] {
       for (const [k, a] of Object.entries(l.touch.cells ?? {})) {
         const p = parseCellKey(k)
         const where = `layer "${l.name}" touch cell "${k}"`
+        const [w, h] = spanOf(a)
         if (!p || p[0] >= cols || p[1] >= rows) out.push({ path: `/layers/${i}/touch/cells/${k}`, message: `${where}: out of the ${cols}x${rows} grid` })
-        else action(`/layers/${i}/touch/cells/${k}`, where, a)
+        else if (p[0] + w > cols || p[1] + h > rows)
+          out.push({ path: `/layers/${i}/touch/cells/${k}`, message: `${where}: span ${w}x${h} goes out of the ${cols}x${rows} grid` })
+        else action(`/layers/${i}/touch/cells/${k}`, where, a, true)
       }
     }
     for (const [n, a] of Object.entries(l.soft_keys ?? {})) {

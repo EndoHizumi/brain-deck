@@ -1,8 +1,8 @@
 // 設定の操作。透過の解決は layer.go の view / lookupKey と同じ規則にする。
 
-import type { ActionSpec, Config, GridConfig, LayerConfig, TouchConfig } from './types'
+import type { ActionSpec, Config, GridConfig, LayerConfig, TouchConfig, WidgetKind } from './types'
 
-export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to'
+export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'widget'
 export const LAYER_KINDS = ['layer_hold', 'layer_toggle', 'layer_oneshot', 'layer_to'] as const
 export type LayerKind = (typeof LAYER_KINDS)[number]
 
@@ -13,7 +13,16 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   layer_toggle: '押すたびに出し入れ（layer_toggle）',
   layer_oneshot: '次の 1 キーだけ（layer_oneshot）',
   layer_to: 'そのレイヤーへ移る（layer_to）',
+  widget: 'ウィジェット（時計）',
 }
+
+// ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
+export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計' }
+// widget.go の既定の書式
+export const DEFAULT_CLOCK_FORMAT = '15:04'
+export const DEFAULT_DATE_FORMAT = '1月2日({wday})'
+// ウィジェットにだけ書ける項目
+export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz'] as const
 
 // 画面に出す、レイヤー切り替えの種類（main.go の layerVerb と同じ）
 export const LAYER_VERB: Record<LayerKind, string> = {
@@ -24,16 +33,25 @@ export const LAYER_VERB: Record<LayerKind, string> = {
 }
 
 // actionKind は割り当ての種類を返す。選びかけ（key や行き先が空文字）でも、書いてある項目で決める。
+// ウィジェットのセルでも key や layer_* があれば、その種類（タップしたときの動き）を返す。
 export function actionKind(a: ActionSpec): ActionKind {
   if (a.key !== undefined) return a.key.toLowerCase() === 'none' ? 'none' : 'key'
   for (const k of LAYER_KINDS) if (a[k] !== undefined) return k
+  if (a.widget !== undefined) return 'widget'
   return 'none'
 }
 
 // isIncomplete は、送るキーや行き先をまだ選んでいない割り当てかどうか。
 export function isIncomplete(a: ActionSpec): boolean {
   const fields = (['key', ...LAYER_KINDS] as const).filter((k) => a[k] !== undefined)
+  if (a.widget !== undefined) return !a.widget || fields.some((k) => a[k] === '')
   return fields.length === 0 || fields.some((k) => a[k] === '')
+}
+
+// spanOf はセルの大きさ [列数, 行数]。書いていない、おかしいときは [1, 1]。
+export function spanOf(a: ActionSpec | null | undefined): [number, number] {
+  const s = a?.span
+  return Array.isArray(s) && s[0] >= 1 && s[1] >= 1 ? [s[0], s[1]] : [1, 1]
 }
 
 export function actionTarget(a: ActionSpec): string | undefined {
@@ -52,7 +70,15 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   let s: string
   if (k === 'key') s = a.key!
   else if (k === 'none') s = 'none'
+  else if (k === 'widget') s = ''
   else s = `${k}: ${actionTarget(a)}`
+  if (a.widget !== undefined) {
+    const opts = (['format', 'date_format', 'tz'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
+    const w = `widget: ${a.widget}${opts.length ? `（${opts.join(', ')}）` : ''}`
+    s = s ? `${w}、タップで ${s}` : w
+  }
+  const [w, h] = spanOf(a)
+  if (w !== 1 || h !== 1) s += ` [${w}×${h}]`
   return a.label ? `${s}「${a.label.replace(/\n/g, '⏎')}」` : s
 }
 
@@ -128,7 +154,9 @@ export function clean(cfg: Config): Config {
 export interface ResolvedGrid {
   cols: number
   rows: number
-  cells: (ResolvedAction | null)[] // row*cols+col。null は割り当てなし
+  cells: (ResolvedAction | null)[] // row*cols+col。割り当ての左上のセルにだけ入る。null は割り当てなし
+  // anchor は、セルを覆う割り当ての左上のセルの番号。覆うものがなければ -1（span のないセルは自分自身）
+  anchor: number[]
   owner: number // 格子の大きさを決めたレイヤー
 }
 
@@ -158,11 +186,13 @@ export function gridSize(cfg: Config, li: number): { cols: number; rows: number 
 
 // resolveGrid は、レイヤーの番号を下から並べた stack について、透過を解決した格子を返す。
 // none は「割り当てなし」になる（下のレイヤーも使わない）。
+// span のあるセルは、覆う範囲がすべて上のレイヤーで空いているときだけ使う（layer.go の view と同じ）。
 export function resolveGrid(cfg: Config, stack: number[]): ResolvedGrid {
   let cols = 0
   let rows = 0
   let owner = -1
-  const found = new Map<string, ResolvedAction>()
+  let taken: boolean[] = []
+  const anchors = new Map<number, ResolvedAction>()
   for (let i = stack.length - 1; i >= 0; i--) {
     const li = stack[i]
     const size = gridSize(cfg, li)
@@ -170,20 +200,42 @@ export function resolveGrid(cfg: Config, stack: number[]): ResolvedGrid {
     if (owner < 0) {
       ;({ cols, rows } = size)
       owner = li
+      taken = new Array(cols * rows).fill(false)
     } else if (size.cols !== cols || size.rows !== rows) {
       break
     }
+    const claim: number[] = []
     for (const [k, a] of Object.entries(cfg.layers[li].touch?.cells ?? {})) {
-      if (!found.has(k)) found.set(k, { action: a, from: li })
+      const p = parseCellKey(k)
+      if (!p || p[0] >= cols || p[1] >= rows) continue
+      const [w, h] = spanOf(a)
+      let free = true
+      for (let r = p[1]; r < Math.min(p[1] + h, rows); r++)
+        for (let c = p[0]; c < Math.min(p[0] + w, cols); c++) {
+          free &&= !taken[r * cols + c]
+          claim.push(r * cols + c)
+        }
+      if (free) anchors.set(p[1] * cols + p[0], { action: a, from: li })
     }
+    for (const j of claim) taken[j] = true
   }
   const cells: (ResolvedAction | null)[] = new Array(cols * rows).fill(null)
-  for (const [k, r] of found) {
-    const p = parseCellKey(k)
-    if (!p || p[0] >= cols || p[1] >= rows) continue
-    if (actionKind(r.action) !== 'none') cells[p[1] * cols + p[0]] = r
+  const anchor: number[] = new Array(cols * rows).fill(-1)
+  for (const [i, r] of anchors) {
+    if (actionKind(r.action) === 'none') continue
+    cells[i] = r
+    const [w, h] = spanOf(r.action)
+    const c0 = i % cols
+    const r0 = Math.floor(i / cols)
+    for (let y = r0; y < Math.min(r0 + h, rows); y++) for (let x = c0; x < Math.min(c0 + w, cols); x++) anchor[y * cols + x] = i
   }
-  return { cols, rows, cells, owner }
+  return { cols, rows, cells, anchor, owner }
+}
+
+// anchorOf は、セル (col, row) を覆う割り当ての左上のセルを返す（タッチの判定、学習モード）。
+export function anchorOf(g: ResolvedGrid, col: number, row: number): [number, number] {
+  const i = g.anchor[row * g.cols + col] ?? -1
+  return i < 0 ? [col, row] : [i % g.cols, Math.floor(i / g.cols)]
 }
 
 // resolveCell は、セルの割り当てを透過も含めて返す（none のときも返す。編集画面用）。

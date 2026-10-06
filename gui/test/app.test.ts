@@ -46,7 +46,7 @@ afterEach(() => vi.restoreAllMocks())
 describe('接続', () => {
   it('hello で確かめ、設定とキー配列を読み、検証する', async () => {
     const t = await connected()
-    expect(t.cmds().slice(0, 4)).toEqual(['hello', 'get_keymap', 'get_config', 'get_status'])
+    expect(t.cmds().slice(0, 5)).toEqual(['hello', 'set_time', 'get_keymap', 'get_config', 'get_status'])
     expect(t.cmds()).toContain('validate')
     expect(t.root.textContent).toContain('lefthand demo')
     expect(t.$('[data-code="KEY_Q"]').textContent).toContain('B')
@@ -259,5 +259,71 @@ describe('ファイル', () => {
     expect(t.app.validation).toBe('offline')
     t.app.openFile(new File(['layers: [ {name'], 'broken.yaml'))
     await vi.waitFor(() => expect(t.root.textContent).toContain('読み込めません'))
+  })
+})
+
+describe('時刻とウィジェット', () => {
+  it('接続すると Brain の時刻を PC に合わせ、ずれていたことを伝える', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.clockOffsetMs = (36 * 3600 + 5) * 1000
+    const before = Date.now()
+    const t = await connected(setup({ daemon }))
+    const req = t.daemon.received.find((r) => r.cmd === 'set_time')
+    expect(req.source).toBe('gui')
+    expect(req.unix_ms).toBeGreaterThanOrEqual(before)
+    expect(req.unix_ms).toBeLessThanOrEqual(Date.now())
+    expect(t.root.textContent).toContain('Brain の時刻を PC に合わせました（1 日 12 時間ずれていました）')
+    expect(t.daemon.timeSynced).toBe(true)
+  })
+
+  it('セルを時計のウィジェットにし、書式、タップしたとき、大きさを編集して保存できる', async () => {
+    const confirms: string[] = []
+    const t = await connected()
+    t.app['deps'].confirm = (m: string) => (confirms.push(m), true)
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toMatchObject({ widget: 'clock' })
+    expect(t.$('.inspector').textContent).toContain('タップしたとき')
+    t.change('#format', '15:04:05')
+    t.change('#date_format', 'none')
+    t.change('#tz', 'UTC')
+    t.change('#tap', 'key')
+    t.change('#combo-text', 'F5')
+    t.change('#span-w', '2') // 右のセル 2,0（取り消し）を覆う。消してよいか聞く（confirm は true）
+    const cells = t.app.cfg!.layers[0].touch!.cells!
+    expect(cells['1,0']).toEqual({ widget: 'clock', label: '消しゴム', format: '15:04:05', date_format: 'none', tz: 'UTC', key: 'F5', span: [2, 1] })
+    expect(cells['2,0']).toBeUndefined()
+    expect(confirms.join()).toContain('2,0')
+    // 覆われたセルのボタンはなく、時計のボタンは 2 列ぶんの幅
+    expect(t.root.querySelector('[data-cell="2,0"]')).toBeNull()
+    expect(t.$('[data-cell="1,0"]').style.width).toBe('50%')
+    t.change('#tap', 'widget') // タップしても何もしない
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0'].key).toBeUndefined()
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+
+    t.click('#save')
+    expect(t.$('.modal').textContent).toContain('widget: clock')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect(t.daemon.config.layers[0].touch!.cells!['1,0']).toMatchObject({ widget: 'clock', span: [2, 1] })
+
+    // 学習モードで span のセルの右側を押しても、左上のセルを選ぶ
+    t.click('#learn')
+    await vi.waitFor(() => expect(t.app.learning).toBe(true))
+    t.app.sel = null
+    t.daemon.touch(2546, 3233) // セル 2,0 の中央
+    await vi.waitFor(() => expect(t.app.sel).toEqual({ kind: 'cell', col: 1, row: 0 }))
+    t.click('#learn')
+  })
+
+  it('知らないタイムゾーンは誤りになる。キーやソフトキーには選べない', async () => {
+    const t = await connected()
+    t.click('[data-cell="0,0"]')
+    t.change('#kind', 'widget')
+    t.change('#tz', 'Mars/Base')
+    await vi.waitFor(() => expect(t.app.validation).toBe('invalid'))
+    expect(t.$('.inspector').textContent).toContain('unknown tz')
+    t.click('[data-code="KEY_Z"]')
+    expect([...t.root.querySelectorAll('#kind option')].map((o) => (o as HTMLOptionElement).value)).not.toContain('widget')
   })
 })
