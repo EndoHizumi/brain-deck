@@ -18,7 +18,7 @@ import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './proto
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import type {
   ActionSpec, Config, EngineStatus, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  Problem, ValidateResult,
+  PressStyle, Problem, ValidateResult,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -83,6 +83,8 @@ export class App {
   learning = false
   brainStatus: EngineStatus | null = null
   flash: Selection | null = null
+  // プレビューで、マウスで押さえているセル（"列,行"）。押したときの見た目で描く
+  previewPress: string | null = null
   private keepalive: ReturnType<typeof setInterval> | null = null
   // そのほか
   capturing = false
@@ -894,24 +896,52 @@ export class App {
         cells.push(h('button', {
           class: ['cell', selected && 'selected', flash && 'flash', err && 'error', own && 'own'],
           style: { left: `${(x0 / W) * 100}%`, top: `${(y0 / H) * 100}%`, width: `${((x1 - x0) / W) * 100}%`, height: `${((y1 - y0) / H) * 100}%` },
-          title: `セル ${c},${r}`, dataset: { cell: cellKey(c, r) },
+          title: `セル ${c},${r}（押さえているあいだ、押したときの見た目になります）`, dataset: { cell: cellKey(c, r) },
           onclick: () => {
             this.sel = sel
             this.render()
           },
+          onpointerdown: () => this.setPreviewPress(cellKey(c, r)),
+          onpointerup: () => this.setPreviewPress(null),
+          onpointerleave: () => this.setPreviewPress(null),
+          onpointercancel: () => this.setPreviewPress(null),
         }, this.font ? '' : h('span', { class: 'cell-text' }, shortAction(cfg, g.cells[r * g.cols + c]?.action ?? null))))
       }
     }
     return h(
       'section',
       { class: 'panel touch-panel' },
-      h('div', { class: 'panel-head' }, h('h2', null, 'タッチ'), this.viewGridControls()),
+      h('div', { class: 'panel-head' }, h('h2', null, 'タッチ'), this.viewGridControls(), this.viewPressStyle()),
       h('div', { class: 'screen-row' },
         h('div', { class: 'screen', style: { aspectRatio: `${W} / ${H}` } }, h('canvas', { width: W, height: H, class: 'preview' }), cells),
         this.viewSoftStrip(),
       ),
       this.viewTouchSettings(),
     )
+  }
+
+  // viewPressStyle は、押しているセルの見せ方（display.press_style）を選ぶ欄。
+  // display のほかの項目と違い、保存すれば再起動なしで Brain に反映する。
+  private viewPressStyle(): HTMLElement {
+    const cfg = this.cfg!
+    const cur: PressStyle = cfg.display?.press_style ?? 'border'
+    return h('label', { class: 'press-style', title: 'Brain でセルを押しているあいだの見せ方。プレビューのセルを押さえると確かめられます' },
+      '押したとき ',
+      h('select', { id: 'press-style', 'data-focus': 'press-style',
+        onchange: (e: Event) => {
+          const v = (e.target as HTMLSelectElement).value as PressStyle
+          if (v === cur) return
+          ;(cfg.display ??= {}).press_style = v
+          this.changed()
+        } },
+        h('option', { value: 'border', selected: cur === 'border' }, '枠を光らせる（border）'),
+        h('option', { value: 'fill', selected: cur === 'fill' }, '塗りつぶす（fill）')))
+  }
+
+  private setPreviewPress(cell: string | null): void {
+    if (this.previewPress === cell) return
+    this.previewPress = cell
+    this.drawPreview()
   }
 
   private viewGridControls(): HTMLElement {
@@ -1063,7 +1093,8 @@ export class App {
     const refs = li === 0 ? [] : references(this.cfg, this.cfg.layers[li].name)
     // 入り方で枠の色を変える（切り替えたままなら緑、一時的なら橙）
     const mode: Mode = li === 0 ? 'base' : refs.some((r) => r.kind === 'layer_toggle' || r.kind === 'layer_to') || !refs.length ? 'latched' : 'temp'
-    const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, w: canvas.width, h: canvas.height })
+    const pressed = new Set(this.previewPress ? [this.previewPress] : [])
+    const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
   }
 
@@ -1186,7 +1217,7 @@ export class App {
       { class: 'panel info' },
       h('summary', null, 'キーボードの制約と、そのほかの設定'),
       h('ul', null, this.keymap.constraints.map((s) => h('li', null, s))),
-      h('p', { class: 'hint' }, '次の項目は、デーモンを再起動しないと変えられないため、この画面では変えられません。変えるときは /etc/lefthand/config.yaml を直接編集し、サービスを再起動します。'),
+      h('p', { class: 'hint' }, '次の項目は、デーモンを再起動しないと変えられないため、この画面では変えられません。変えるときは /etc/lefthand/config.yaml を直接編集し、サービスを再起動します。display のうち press_style（押したときの見せ方）だけは、タッチの欄で変えられます。'),
       h('table', { class: 'kv' },
         [['hid_device', c.hid_device], ['keyboard', c.keyboard], ['touch.device', c.touch?.device], ['display', c.display ? JSON.stringify(c.display) : '']]
           .map(([k, v]) => h('tr', null, h('th', null, k as string), h('td', null, (v as string) ?? '（既定）')))),

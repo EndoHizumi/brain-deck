@@ -48,7 +48,10 @@ export interface DisplayConfig {
   device?: string
   vt?: number
   rotate?: number
+  press_style?: PressStyle // 押しているセルの見せ方。省略すると border
 }
+
+export type PressStyle = 'border' | 'fill'
 
 export interface Config {
   hid_device?: string

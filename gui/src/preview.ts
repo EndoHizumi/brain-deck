@@ -3,7 +3,7 @@
 import { FONT_H, type BitmapFont } from './font'
 import { prettyCombo } from './keys'
 import { LAYER_VERB, actionKind, actionTarget, layerTitle, resolveGrid, type LayerKind } from './model'
-import type { ActionSpec, Config } from './types'
+import type { ActionSpec, Config, PressStyle } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
 type RGB = [number, number, number]
@@ -14,9 +14,10 @@ const colCell: RGB = [0x1c, 0x28, 0x38]
 const colBorder: RGB = [0x8c, 0xa0, 0xbc]
 const colText: RGB = [0xff, 0xff, 0xff]
 const colSub: RGB = [0x96, 0xa4, 0xb4]
-const colPressed: RGB = [0xff, 0xd0, 0x40]
+const colPressed: RGB = [0xff, 0xd0, 0x40] // fill の塗り、border の明るい線
 const colPressedText: RGB = [0, 0, 0]
 const colPressedSub: RGB = [0x50, 0x40, 0x00]
+const colPressEdge: RGB = [0, 0, 0] // border の外側の暗い線
 const colEmptyBorder: RGB = [0x30, 0x34, 0x3a]
 const colLayerCell: RGB = [0x2a, 0x22, 0x3c]
 const modeBorder: Record<Mode, RGB> = { base: colBorder, latched: [0x40, 0xc0, 0x70], temp: [0xff, 0x80, 0x20] }
@@ -29,6 +30,10 @@ const maxScale = 6
 const subScale = 2
 const badgeScale = 2
 const badgePad = 5
+const borderW = 2
+// press_style: border の二重の枠（外側が暗い線、内側が明るい線）
+const pressEdgeW = 2
+const pressGlowW = 5
 
 export interface CellView {
   mapped: boolean
@@ -136,6 +141,7 @@ export interface PreviewParams {
   stack: number[] // 下から重ねたレイヤーの番号
   mode: Mode
   pressed?: Set<string> // 押下中として描くセル "列,行"
+  pressStyle?: PressStyle // 省略すると cfg.display.press_style、それもなければ border
   w?: number
   h?: number
 }
@@ -155,6 +161,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   const g = resolveGrid(p.cfg, p.stack)
   const top = p.cfg.layers[p.stack[p.stack.length - 1]]
   const title = top ? layerTitle(top) : ''
+  const fill = (p.pressStyle ?? p.cfg.display?.press_style) === 'fill'
   const px = new Pixels(W, H)
   const rect = (c: number, r: number): Rect => {
     const [x0, x1] = cellSpan(c, g.cols, W)
@@ -165,7 +172,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   for (let r = 0; r < g.rows; r++) {
     for (let c = 0; c < g.cols; c++) {
       const v = cellView(p.cfg, g.cells[r * g.cols + c]?.action ?? null)
-      drawCell(font, px, rect(c, r), v, p.mode, p.pressed?.has(`${c},${r}`) ?? false)
+      drawCell(font, px, rect(c, r), v, p.mode, p.pressed?.has(`${c},${r}`) ?? false, fill)
     }
   }
   if (title) {
@@ -178,7 +185,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   return { pixels: px.data, layout: { cols: g.cols, rows: g.rows, w: W, h: H, rect } }
 }
 
-function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: Mode, pressed: boolean): void {
+function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: Mode, pressed: boolean, pressFill: boolean): void {
   px.fill(cell, colBG)
   const box = inset(cell, cellGap)
   if (!v.mapped) {
@@ -188,9 +195,14 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
   let fillC = v.layer ? colLayerCell : colCell
   let textC = colText
   let subC = colSub
-  if (pressed) [fillC, textC, subC] = [colPressed, colPressedText, colPressedSub]
+  if (pressed && pressFill) [fillC, textC, subC] = [colPressed, colPressedText, colPressedSub]
   px.fill(box, fillC)
-  px.frame(box, 2, modeBorder[mode])
+  px.frame(box, borderW, modeBorder[mode])
+  if (pressed && !pressFill) {
+    // display.go の drawRing と同じ。帯はラベルの余白（textMargin）より細い
+    px.frame(box, pressEdgeW, colPressEdge)
+    px.frame(inset(box, pressEdgeW), pressGlowW, colPressed)
+  }
   const inner = inset(box, textMargin)
   const iw = inner.x1 - inner.x0
   const ih = inner.y1 - inner.y0

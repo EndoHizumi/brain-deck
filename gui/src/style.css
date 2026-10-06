@@ -126,6 +126,7 @@ main.start { max-width: 720px; }
 .soft.own { background: var(--own); color: #fff; }
 .soft.inherited { background: var(--inherited); }
 .grid-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.press-style { font-size: 13px; margin-left: auto; }
 .touch-settings { margin-top: 10px; font-size: 13px; }
 .touch-settings summary { cursor: pointer; color: var(--muted); }
 .calib { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0; }

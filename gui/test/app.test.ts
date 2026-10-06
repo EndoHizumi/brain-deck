@@ -186,6 +186,29 @@ describe('編集と保存', () => {
     expect(t.app.cfg!.layers[0].touch!.cols).toBe(2)
     expect(Object.keys(t.app.cfg!.layers[0].touch!.cells!).sort()).toEqual(['0,0', '0,1', '0,2', '1,0', '1,1'])
   })
+
+  it('押したときの見せ方を選んで保存でき、プレビューのセルを押さえると押した見た目になる', async () => {
+    const t = await connected()
+    expect(t.$<HTMLSelectElement>('#press-style').value).toBe('border') // 書いていなければ border
+    t.change('#press-style', 'fill')
+    expect(t.app.cfg!.display!.press_style).toBe('fill')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.click('#save')
+    expect(t.$('.modal').textContent).toContain('press_style')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect(t.daemon.config.display!.press_style).toBe('fill')
+
+    // マウスで押さえているあいだだけ、そのセルを押したものとして描く
+    const cell = t.$('[data-cell="2,1"]')
+    cell.dispatchEvent(new Event('pointerdown'))
+    expect(t.app.previewPress).toBe('2,1')
+    cell.dispatchEvent(new Event('pointerup'))
+    expect(t.app.previewPress).toBeNull()
+    cell.dispatchEvent(new Event('pointerdown'))
+    cell.dispatchEvent(new Event('pointerleave'))
+    expect(t.app.previewPress).toBeNull()
+  })
 })
 
 describe('学習モード', () => {
