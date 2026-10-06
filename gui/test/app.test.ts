@@ -353,3 +353,104 @@ describe('テキストのタイル', () => {
     expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
   })
 })
+
+describe('Todo', () => {
+  const texts = (t: ReturnType<typeof setup>) =>
+    [...t.root.querySelectorAll<HTMLInputElement>('.todo-item .todo-text')].map((i) => (i.closest('.todo-item')!.classList.contains('done') ? '✓' : '') + i.value)
+  const item = (t: ReturnType<typeof setup>, text: string) =>
+    [...t.root.querySelectorAll<HTMLElement>('.todo-item')].find((li) => li.querySelector<HTMLInputElement>('.todo-text')!.value === text)!
+
+  it('接続すると一覧を読み、Brain での変更の通知を受ける。タブで足し、完了にし、並べ替え、消す', async () => {
+    const t = await connected()
+    expect(t.cmds()).toContain('get_todo')
+    expect(t.cmds()).toContain('subscribe_data')
+    t.click('#section-todo')
+    expect(t.root.textContent).toContain('まだ項目がありません')
+    expect(t.root.textContent).toContain('Todo のセルがない')
+    // 足す（Enter）。先頭にも足せる
+    const add = async (text: string, top = false) => {
+      t.$<HTMLInputElement>('#todo-new').value = text
+      t.$('#todo-new').dispatchEvent(new Event('input'))
+      t.click(top ? '#todo-add-top' : '#todo-add')
+      await vi.waitFor(() => expect(texts(t)).toContain(text))
+    }
+    await add('牛乳を買う')
+    await add('歯医者の予約')
+    await add('急ぎ', true)
+    expect(texts(t)).toEqual(['急ぎ', '牛乳を買う', '歯医者の予約'])
+    expect(t.$<HTMLInputElement>('#todo-new').value).toBe('')
+    expect(t.daemon.todo.items.map((i) => i.source)).toEqual(['gui', 'gui', 'gui'])
+    // 完了にすると下に並ぶ
+    item(t, '急ぎ').querySelector<HTMLInputElement>('input[type=checkbox]')!.click()
+    await vi.waitFor(() => expect(texts(t)).toEqual(['牛乳を買う', '歯医者の予約', '✓急ぎ']))
+    // 並べ替え（完了との境はまたがない）
+    expect(item(t, '歯医者の予約').querySelector<HTMLButtonElement>('.down')!.disabled).toBe(true)
+    item(t, '歯医者の予約').querySelector<HTMLButtonElement>('.up')!.click()
+    await vi.waitFor(() => expect(texts(t)).toEqual(['歯医者の予約', '牛乳を買う', '✓急ぎ']))
+    // 文を書き換える
+    const input = item(t, '牛乳を買う').querySelector<HTMLInputElement>('.todo-text')!
+    input.value = '牛乳と卵'
+    input.dispatchEvent(new Event('input'))
+    input.dispatchEvent(new Event('change'))
+    await vi.waitFor(() => expect(texts(t)).toEqual(['歯医者の予約', '牛乳と卵', '✓急ぎ']))
+    // Brain で長押しして切り替えると、通知で反映する
+    t.daemon.toggleTodo(t.daemon.todo.items.find((i) => i.text === '歯医者の予約')!.id)
+    await vi.waitFor(() => expect(texts(t)).toEqual(['牛乳と卵', '✓急ぎ', '✓歯医者の予約']))
+    expect(item(t, '歯医者の予約').textContent).toContain('Brain')
+    expect(t.$('#section-todo').textContent).toBe('Todo1')
+    // 完了した項目をまとめて消す
+    t.click('#todo-clear-done')
+    await vi.waitFor(() => expect(texts(t)).toEqual(['牛乳と卵']))
+    item(t, '牛乳と卵').querySelector<HTMLButtonElement>('.del')!.click()
+    await vi.waitFor(() => expect(texts(t)).toEqual([]))
+    // Todo は設定とは別なので、設定は変わっていない
+    expect(t.app.dirty).toBe(false)
+  })
+
+  it('Brain で変わっていた項目は書き換えず、読み直す', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.todoCmd({ cmd: 'todo_add', text: 'a' })
+    const t = await connected(setup({ daemon }))
+    t.click('#section-todo')
+    // GUI が知らないうちに Brain で変わった（通知が届かなかった）
+    daemon.dataSubscribed = false
+    daemon.toggleTodo('t1')
+    daemon.dataSubscribed = true
+    expect(texts(t)).toEqual(['a'])
+    item(t, 'a').querySelector<HTMLInputElement>('input[type=checkbox]')!.click()
+    await vi.waitFor(() => expect(t.root.textContent).toContain('Brain で項目が変わっていた'))
+    await vi.waitFor(() => expect(texts(t)).toEqual(['✓a']))
+    expect(daemon.todo.items[0].done).toBe(true)
+  })
+
+  it('古い rev の通知や返事は使わない', async () => {
+    const t = await connected()
+    t.app.onNotify({ event: 'todo', rev: 5, items: [{ id: 't1', text: 'new', done: false, rev: 5, created_at: '', updated_at: '' }] })
+    t.app.onNotify({ event: 'todo', rev: 4, items: [] })
+    expect(t.app.todo!.items.map((i) => i.text)).toEqual(['new'])
+  })
+
+  it('セルを Todo にすると、タップの動きは選べず、行数を決められる。プレビューに出す', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.todoCmd({ cmd: 'todo_add', text: '牛乳を買う' })
+    const t = await connected(setup({ daemon }))
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    t.change('#tap', 'key')
+    t.change('#combo-text', 'F5')
+    t.change('#widget', 'todo')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'todo', label: '消しゴム' })
+    expect(t.root.querySelector('#tap')).toBeNull()
+    expect(t.$('.inspector').textContent).toContain('今は 1 件が未完了')
+    t.change('#todo-rows', '3')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'todo', label: '消しゴム', rows: 3 })
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.change('#todo-rows', '')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0'].rows).toBeUndefined()
+    // YAML に書き出しても rows は数のまま
+    t.change('#todo-rows', '2')
+    expect(toYAML(t.app.cfg!)).toContain('rows: 2')
+    t.click('#section-todo')
+    expect(t.root.textContent).not.toContain('Todo のセルがない')
+  })
+})

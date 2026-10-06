@@ -5,7 +5,8 @@ import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
 import { LAYER_VERB, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
-import type { ActionSpec, Config, PressStyle, TextEntry } from './types'
+import { TODO_EMPTY, TODO_PAD, todoEllipsis, todoGeometry, todoOrder } from './todowidget'
+import type { ActionSpec, Config, PressStyle, TextEntry, TodoItem, TodoList } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
 type RGB = [number, number, number]
@@ -23,6 +24,10 @@ const colPressEdge: RGB = [0, 0, 0] // border の外側の暗い線
 const colEmptyBorder: RGB = [0x30, 0x34, 0x3a]
 const colLayerCell: RGB = [0x2a, 0x22, 0x3c]
 const colUnsynced: RGB = [0xff, 0x80, 0x20] // 時刻を合わせていない時計
+// todowidget.go
+const colTodoDone: RGB = [0x6a, 0x74, 0x80] // 完了した項目
+const colTodoRule: RGB = [0x30, 0x3c, 0x4c] // 行の区切り
+const colTodoOff: RGB = [0x40, 0x48, 0x54] // これ以上送れないときの ▲ ▼
 const modeBorder: Record<Mode, RGB> = { base: colBorder, latched: [0x40, 0xc0, 0x70], temp: [0xff, 0x80, 0x20] }
 const modeBadge: Record<Mode, RGB> = { base: [0x3a, 0x48, 0x5c], latched: [0x2e, 0x9e, 0x5b], temp: [0xff, 0x80, 0x20] }
 const modeBadgeText: Record<Mode, RGB> = { base: colText, latched: colText, temp: [0, 0, 0] }
@@ -51,6 +56,7 @@ export interface CellView {
   widget?: string // ウィジェットの種類
   clock?: ClockDef // 時計のウィジェット
   textId?: string // テキストのウィジェットの id
+  todoRows?: number // Todo のウィジェット（0 なら高さで決める）
 }
 
 interface Rect {
@@ -74,6 +80,7 @@ export function cellView(cfg: Config, a: ActionSpec | null): CellView {
     const v: CellView = { mapped: true, layer: isLayerAction(a), label, sub: '', widget: a.widget }
     if (a.widget === 'clock') v.clock = clockDef(a)
     if (a.widget === 'text') v.textId = a.id ?? ''
+    if (a.widget === 'todo') v.todoRows = typeof a.rows === 'number' ? a.rows : 0
     return v
   }
   if (k !== 'key' && k !== 'none') {
@@ -164,12 +171,16 @@ export interface PreviewParams {
   now?: Date // 時計に出す時刻。省略すると今
   synced?: boolean // false なら、時刻を合わせていないときの時計を描く
   texts?: Record<string, TextEntry> // テキストのタイルの中身（Brain の get_text）
+  todo?: TodoList // Todo の一覧（Brain の get_todo）
+  todoPage?: number // Todo のセルに出すページ（0 から）
 }
 
 export interface WidgetEnv {
   now: Date
   synced: boolean
   texts: Record<string, TextEntry>
+  todo: TodoItem[]
+  todoPage: number
 }
 
 export interface PreviewLayout {
@@ -190,7 +201,8 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   const title = top ? layerTitle(top) : ''
   const fill = (p.pressStyle ?? p.cfg.display?.press_style) === 'fill'
   const px = new Pixels(W, H)
-  const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {} }
+  const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {}, todo: p.todo?.items ?? [],
+    todoPage: p.todoPage ?? 0 }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -272,6 +284,10 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
     drawCentered(font, px, area, area.y0, cap, s, subInk)
     area.y0 += FONT_H * s + widgetLineGap
   }
+  if (v.todoRows !== undefined) {
+    drawTodo(font, px, area, v.todoRows, env, subInk)
+    return
+  }
   if (v.textId !== undefined) {
     const e = Object.hasOwn(env.texts, v.textId) ? env.texts[v.textId] : undefined
     let body = TEXT_NONE
@@ -310,4 +326,54 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
 function drawCentered(font: BitmapFont, px: Pixels, area: Rect, y: number, s: string, scale: number, c: RGB): void {
   const x = area.x0 + Math.trunc((area.x1 - area.x0 - font.textWidth(s) * scale) / 2)
   px.text(font, Math.max(x, area.x0), y, s, scale, c, area)
+}
+
+// drawTodo は todowidget.go の drawTodo と同じ。area は見出しの下の範囲。
+function drawTodo(font: BitmapFont, px: Pixels, area: Rect, rows: number, env: WidgetEnv, subInk: RGB): void {
+  const items = todoOrder(env.todo)
+  const aw = area.x1 - area.x0
+  const ah = area.y1 - area.y0
+  if (!items.length) {
+    const s = Math.min(fitScale(font, [TODO_EMPTY], aw, ah), 2)
+    drawCentered(font, px, area, area.y0 + Math.trunc((ah - FONT_H * s) / 2), TODO_EMPTY, s, subInk)
+    return
+  }
+  const g = todoGeometry(area, items.length, rows)
+  const page = Math.max(Math.min(env.todoPage, g.pages - 1), 0)
+  g.rows.forEach((r, i) => {
+    const k = page * g.per + i
+    if (k >= items.length) return
+    if (i > 0) px.fill({ ...r, y1: r.y0 + 1 }, colTodoRule)
+    drawTodoRow(font, px, r, items[k], g.scale)
+  })
+  if (!g.nav) return
+  px.fill({ ...g.nav, y1: g.nav.y0 + 1 }, colTodoRule)
+  const arrow = (zone: Rect, s: string, ok: boolean) => {
+    const sc = Math.min(fitScale(font, [s], zone.x1 - zone.x0, zone.y1 - zone.y0 - 4), 3)
+    drawCentered(font, px, zone, zone.y0 + Math.trunc((zone.y1 - zone.y0 - FONT_H * sc) / 2), s, sc, ok ? colText : colTodoOff)
+  }
+  arrow(g.up!, '▲', page > 0)
+  arrow(g.down!, '▼', page < g.pages - 1)
+  const p = `${page + 1}/${g.pages}`
+  const mid = g.mid!
+  const s = Math.min(fitScale(font, [p], mid.x1 - mid.x0, FONT_H * 2), 2)
+  drawCentered(font, px, mid, mid.y0 + Math.trunc((mid.y1 - mid.y0 - FONT_H * s) / 2), p, s, colSub)
+}
+
+// drawTodoRow は 1 行を描く。左にチェックの箱、右に項目の文（完了なら薄く、取り消し線）。
+function drawTodoRow(font: BitmapFont, px: Pixels, r: Rect, it: TodoItem, scale: number): void {
+  const [textC, boxC] = it.done ? [colTodoDone, colTodoDone] : [colText, colSub]
+  const bs = FONT_H * scale - 2
+  const by = r.y0 + Math.trunc((r.y1 - r.y0 - bs) / 2)
+  const box = { x0: r.x0 + TODO_PAD, y0: by, x1: r.x0 + TODO_PAD + bs, y1: by + bs }
+  px.frame(box, 2, boxC)
+  if (it.done) px.fill(inset(box, 4), boxC)
+  const tx = box.x1 + TODO_PAD
+  const s = todoEllipsis(font, it.text, Math.trunc((r.x1 - TODO_PAD - tx) / scale))
+  const ty = r.y0 + Math.trunc((r.y1 - r.y0 - FONT_H * scale) / 2)
+  px.text(font, tx, ty, s, scale, textC, r)
+  if (it.done) {
+    const y = ty + Math.trunc((FONT_H * scale) / 2)
+    px.fill({ x0: tx, y0: y, x1: Math.min(tx + font.textWidth(s) * scale, r.x1 - TODO_PAD), y1: y + Math.max(scale - 1, 1) }, textC)
+  }
 }

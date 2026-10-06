@@ -10,6 +10,8 @@ if (new URLSearchParams(location.search).has('demo')) {
     const daemon = new demo.FakeDaemon(parseConfigText(sample.default))
     // テキストのタイルを試すための中身（brain-deck text build "ビルド成功" --style ok と同じ）
     daemon.texts = { build: { text: 'ビルド成功', style: 'ok', set_at: new Date().toISOString() } }
+    // Todo を試すための項目（brain-deck todo add と同じ）。lefthandDemo.toggleTodo('t1') で、Brain で長押ししたことにできる
+    for (const text of ['牛乳を買う', 'PR #42 のレビュー', '歯医者の予約']) daemon.todoCmd({ cmd: 'todo_add', text, source: 'brain-deck' })
     const { serial } = demo.fakeSerial()
     const app = new App(root, { serial, openTransport: async () => new demo.FakeTransport(daemon) })
     document.title = 'lefthand 設定（デモ）'

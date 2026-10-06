@@ -17,11 +17,12 @@ import {
 import { hasSeconds } from './clock'
 import { cellSpan, renderPreview, type Mode } from './preview'
 import { TEXT_ID_PATTERN, TEXT_STYLES, textExpired } from './textwidget'
+import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import type {
   ActionSpec, Config, EngineStatus, GetTextResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, TextEntry, ValidateResult, WidgetKind,
+  PressStyle, Problem, SetTimeResult, TextEntry, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -91,6 +92,13 @@ export class App {
   previewPress: string | null = null
   // テキストのタイルの中身（接続したときに Brain から読む）。GUI の接続中は brain-deck が書けないので、読み直さない
   texts: Record<string, TextEntry> = {}
+  // 画面の切り替え：設定（キーとタッチ）か、Todo か
+  section: 'config' | 'todo' = 'config'
+  // Todo の一覧（Brain のデータが正。接続したときに読み、Brain で変わると通知が届く）
+  todo: TodoList | null = null
+  todoBusy = false
+  todoNew = '' // 追加の欄に書きかけの文
+  private todoDrafts: Record<string, string> = {} // 書き換えている途中の項目の文（通知で描き直しても消えない）
   private keepalive: ReturnType<typeof setInterval> | null = null
   // 時計のプレビューを、時刻が変わるたびに描き直すためのタイマー
   private previewTimer: ReturnType<typeof setTimeout> | null = null
@@ -238,6 +246,7 @@ export class App {
       this.hello = null
       this.stopLearning(false)
       this.brainStatus = null
+      this.todo = null
       if (reason !== 'closed by user') this.say(`Brain との接続が切れました（${reason}）。編集中の内容は残っています`, 'error')
       this.validation = 'offline'
       this.render()
@@ -270,6 +279,7 @@ export class App {
     this.client = null
     this.hello = null
     this.brainStatus = null
+    this.todo = null
     await c?.close()
     this.validation = 'offline'
     this.render()
@@ -292,8 +302,108 @@ export class App {
     }
     this.brainStatus = (await c.request<{ status: EngineStatus }>('get_status')).status
     if (this.hello?.commands?.includes('get_text')) this.texts = (await c.request<GetTextResult>('get_text')).texts ?? {}
+    await this.loadTodo()
     this.render()
     this.scheduleValidate(0)
+  }
+
+  // ---------- Todo ----------
+
+  get todoSupported(): boolean {
+    return !!this.hello?.commands?.includes('get_todo')
+  }
+
+  // loadTodo は Todo の一覧を読み、Brain で変わったら知らせてもらう（subscribe_data）。
+  async loadTodo(): Promise<void> {
+    if (!this.connected || !this.todoSupported) {
+      this.todo = null
+      return
+    }
+    const c = this.client!
+    const r = await c.request<TodoResult>('get_todo')
+    this.todo = { rev: r.rev, items: r.items ?? [] }
+    if (this.hello?.commands?.includes('subscribe_data')) await c.request('subscribe_data', { enable: true })
+  }
+
+  // applyTodo は、返事や通知で届いた一覧を使う。届く順は前後することがあるので、古い rev のものは捨てる。
+  private applyTodo(l: TodoList): void {
+    if (this.todo && l.rev < this.todo.rev) return
+    this.todo = { rev: l.rev, items: l.items ?? [] }
+    for (const id of Object.keys(this.todoDrafts)) if (!this.todo.items.some((i) => i.id === id)) delete this.todoDrafts[id]
+    this.render()
+  }
+
+  // todoCall は Todo のコマンドを送る。項目が Brain で変わっていたら（conflict、not_found）、読み直して知らせる。
+  async todoCall(cmd: string, params: Record<string, unknown>): Promise<TodoResult | null> {
+    if (!this.connected) return null
+    this.todoBusy = true
+    this.render()
+    try {
+      const r = await this.client!.request<TodoResult>(cmd, { ...params, source: 'gui' })
+      this.applyTodo(r)
+      return r
+    } catch (e: any) {
+      if (e instanceof ProtocolError && (e.code === 'conflict' || e.code === 'not_found')) {
+        this.say('Brain で項目が変わっていたので、変更しませんでした。最新の一覧を読み直しました', 'error')
+        await this.loadTodo().catch(() => {})
+      } else {
+        this.say(`Todo を変更できませんでした：${e?.message ?? e}`, 'error')
+      }
+      return null
+    } finally {
+      this.todoBusy = false
+      this.render()
+    }
+  }
+
+  async addTodo(text: string, top = false): Promise<void> {
+    const t = text.replace(/\s+/g, ' ').trim()
+    if (!t) return
+    const r = await this.todoCall('todo_add', top ? { text: t, index: 0 } : { text: t })
+    if (r) this.todoNew = ''
+    this.render()
+  }
+
+  async setTodoDone(it: TodoItem, done: boolean): Promise<void> {
+    await this.todoCall('todo_update', { item: it.id, rev: it.rev, done })
+  }
+
+  async editTodo(it: TodoItem, text: string): Promise<void> {
+    const t = text.replace(/\s+/g, ' ').trim()
+    delete this.todoDrafts[it.id]
+    if (!t || t === it.text) {
+      this.render()
+      return
+    }
+    await this.todoCall('todo_update', { item: it.id, rev: it.rev, text: t })
+  }
+
+  async deleteTodo(it: TodoItem): Promise<void> {
+    delete this.todoDrafts[it.id]
+    await this.todoCall('todo_delete', { item: it.id, rev: it.rev })
+  }
+
+  // moveTodo は、画面の順で 1 つ上（-1）か下（+1）の項目と入れ替える。未完了と完了の境はまたがない。
+  async moveTodo(it: TodoItem, dir: -1 | 1): Promise<void> {
+    const items = this.todo?.items ?? []
+    const ord = todoOrder(items)
+    const i = ord.findIndex((x) => x.id === it.id)
+    const other = ord[i + dir]
+    if (i < 0 || !other || other.done !== it.done) return
+    const rest = items.filter((x) => x.id !== it.id)
+    const j = rest.findIndex((x) => x.id === other.id)
+    await this.todoCall('todo_move', { item: it.id, rev: it.rev, index: dir < 0 ? j : j + 1 })
+  }
+
+  async clearDoneTodo(): Promise<void> {
+    const n = this.todo?.items.filter((i) => i.done).length ?? 0
+    if (!n || !this.deps.confirm(`完了した項目 ${n} 件を Brain から消します。よいですか？`)) return
+    const r = await this.todoCall('todo_clear_done', {})
+    if (r) this.say(`完了した項目を ${r.removed ?? n} 件消しました`, 'ok')
+  }
+
+  todoInConfig(cfg: Config | null = this.cfg): boolean {
+    return !!cfg?.layers.some((l) => Object.values(l.touch?.cells ?? {}).some((a) => a.widget === 'todo'))
   }
 
   // ---------- 編集 ----------
@@ -526,6 +636,7 @@ export class App {
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
     for (const f of ['format', 'date_format', 'tz', 'id'] as const) if (a[f] === '') delete a[f]
+    if (!(Number.isInteger(a.rows) && a.rows! > 0)) delete a.rows
     this.setAction(a)
   }
 
@@ -537,6 +648,9 @@ export class App {
     for (const f of CLOCK_FIELDS) if (w !== 'clock') delete a[f]
     if (w !== 'text') delete a.id
     else a.id = cur.id || this.suggestTextId()
+    if (w !== 'todo') delete a.rows
+    // Todo は押した位置で働く（長押しで完了、▲▼ でページ送り）ので、タップしたときのキーやレイヤーは書けない
+    else for (const k of ['key', ...LAYER_KINDS] as const) delete a[k]
     this.setAction(a)
   }
 
@@ -589,6 +703,10 @@ export class App {
       const { event: _, ...st } = n
       this.brainStatus = st
       this.render()
+      return
+    }
+    if (n.event === 'todo') {
+      this.applyTodo(n)
       return
     }
     if (n.event === 'input' && this.learning) this.learn(n)
@@ -860,13 +978,83 @@ export class App {
     return h(
       'main',
       null,
-      h('div', { class: 'source' }, `編集中：${this.source}`, this.dirty ? h('span', { class: 'dirty' }, '（未保存の変更あり）') : null),
-      this.viewTabs(),
-      this.viewLayerProps(),
-      h('div', { class: 'columns' },
-        h('div', { class: 'left' }, this.viewKeyboard(), this.viewTouch()),
-        h('div', { class: 'right' }, this.viewInspector(), this.viewProblems(), this.viewDeviceInfo()),
-      ),
+      this.viewSections(),
+      this.section === 'todo'
+        ? this.viewTodo()
+        : [
+            h('div', { class: 'source' }, `編集中：${this.source}`, this.dirty ? h('span', { class: 'dirty' }, '（未保存の変更あり）') : null),
+            this.viewTabs(),
+            this.viewLayerProps(),
+            h('div', { class: 'columns' },
+              h('div', { class: 'left' }, this.viewKeyboard(), this.viewTouch()),
+              h('div', { class: 'right' }, this.viewInspector(), this.viewProblems(), this.viewDeviceInfo()),
+            ),
+          ],
+    )
+  }
+
+  showSection(s: 'config' | 'todo'): void {
+    this.section = s
+    this.render()
+  }
+
+  // viewSections は、設定（キーとタッチ）と Todo の切り替え。
+  private viewSections(): HTMLElement {
+    const open = this.todo?.items.filter((i) => !i.done).length
+    return h('nav', { class: 'sections', role: 'tablist' },
+      h('button', { role: 'tab', id: 'section-config', class: ['section', this.section === 'config' && 'active'],
+        'aria-selected': this.section === 'config' ? 'true' : 'false', onclick: () => this.showSection('config') }, 'キーとタッチ'),
+      h('button', { role: 'tab', id: 'section-todo', class: ['section', this.section === 'todo' && 'active'],
+        'aria-selected': this.section === 'todo' ? 'true' : 'false', onclick: () => this.showSection('todo') },
+        'Todo', open ? h('span', { class: 'count' }, String(open)) : null))
+  }
+
+  // viewTodo は「Todo」タブ。項目は Brain のデータで、ここで変えるとすぐ Brain に書く（設定の保存とは別）。
+  private viewTodo(): HTMLElement {
+    const panel = (...c: (HTMLElement | null)[]) => h('section', { class: 'panel todo-panel' }, h('h2', null, 'Todo（Brain に保存）'), c)
+    if (!this.connected) return panel(h('p', { class: 'hint' }, 'Brain に接続すると、Todo を編集できます。項目は Brain に保存され、設定ファイルとは別です。'))
+    if (!this.todoSupported) return panel(h('div', { class: 'warn' }, 'Brain の lefthand が Todo に対応していません。lefthand を新しくしてください'))
+    const items = todoOrder(this.todo?.items ?? [])
+    const open = items.filter((i) => !i.done).length
+    const busy = this.todoBusy
+    const addInput = h('input', { id: 'todo-new', 'data-focus': 'todo-new', value: this.todoNew, maxlength: TODO_MAX_RUNES, placeholder: '新しい項目（Enter で追加）',
+      oninput: (e: Event) => (this.todoNew = (e.target as HTMLInputElement).value),
+      onkeydown: (e: KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.isComposing) void this.addTodo(this.todoNew, e.shiftKey)
+      } })
+    const row = (it: TodoItem, i: number) => {
+      const prev = items[i - 1]
+      const next = items[i + 1]
+      return h('li', { class: ['todo-item', it.done && 'done'], dataset: { id: it.id } },
+        h('input', { type: 'checkbox', checked: it.done, disabled: busy, title: it.done ? '未完了に戻す' : '完了にする',
+          onchange: (e: Event) => void this.setTodoDone(it, (e.target as HTMLInputElement).checked) }),
+        h('input', { class: 'todo-text', value: this.todoDrafts[it.id] ?? it.text, maxlength: TODO_MAX_RUNES, 'data-focus': `todo-${it.id}`,
+          oninput: (e: Event) => (this.todoDrafts[it.id] = (e.target as HTMLInputElement).value),
+          onchange: (e: Event) => void this.editTodo(it, (e.target as HTMLInputElement).value),
+          onkeydown: (e: KeyboardEvent) => {
+            if (e.key === 'Enter' && !e.isComposing) (e.target as HTMLInputElement).blur()
+          } }),
+        h('button', { class: 'small up', title: '上へ', disabled: busy || !prev || prev.done !== it.done, onclick: () => void this.moveTodo(it, -1) }, '↑'),
+        h('button', { class: 'small down', title: '下へ', disabled: busy || !next || next.done !== it.done, onclick: () => void this.moveTodo(it, 1) }, '↓'),
+        h('button', { class: 'small danger del', title: '消す', disabled: busy, onclick: () => void this.deleteTodo(it) }, '削除'),
+        it.source === 'brain' ? h('span', { class: 'hint', title: 'Brain で切り替えた項目' }, 'Brain') : null)
+    }
+    return panel(
+      h('div', { class: 'todo-add' }, addInput,
+        h('button', { class: 'primary', id: 'todo-add', disabled: busy, onclick: () => void this.addTodo(this.todoNew) }, '追加'),
+        h('button', { id: 'todo-add-top', disabled: busy, onclick: () => void this.addTodo(this.todoNew, true),
+          title: 'Shift+Enter でも先頭に足せます' }, '先頭に追加')),
+      items.length ? h('ul', { class: 'todo-list' }, items.map(row)) : h('p', { class: 'hint' }, 'まだ項目がありません'),
+      h('div', { class: 'todo-foot' },
+        h('span', null, `未完了 ${open} 件、完了 ${items.length - open} 件`),
+        h('button', { id: 'todo-clear-done', disabled: busy || open === items.length, onclick: () => void this.clearDoneTodo() }, '完了した項目を消す')),
+      this.todoInConfig()
+        ? null
+        : h('p', { class: 'warn' }, '今の設定には Todo のセルがないので、Brain の画面には出ません。「キーとタッチ」で、セルの種類をウィジェットにし、ウィジェットを Todo にしてください。'),
+      h('p', { class: 'hint' },
+        'ここでの変更は、すぐ Brain に書きます（「Brain に保存」は要りません）。完了した項目は消さずに薄く表示し、未完了の下に並べます。' +
+        'Brain では、項目を 0.5 秒押し続けると完了を切り替えます（押しているあいだ黄色になります）。入りきらないときは、セルの下の ▲ ▼ でページを送ります。' +
+        'Brain で切り替えると、ここにもすぐ反映します。PC のターミナルからは brain-deck todo add "…" などで書き換えられます（この画面が接続しているあいだは使えません）。'),
     )
   }
 
@@ -1200,7 +1388,7 @@ export class App {
     const pressed = new Set(this.previewPress ? [this.previewPress] : [])
     const now = new Date()
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
-      texts: this.texts })
+      texts: this.texts, todo: this.todo ?? undefined })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
   }
@@ -1251,7 +1439,7 @@ export class App {
     const errs = this.problemsAt((loc) => this.selMatches(loc, sel, this.layer))
     const kind: ActionKind | 'inherit' = own ? (own.widget !== undefined ? 'widget' : actionKind(own)) : 'inherit'
     // ウィジェットのセルで、タップしたときに働くもの
-    const tap: ActionKind | null = own?.widget !== undefined ? actionKind(own) : null
+    const tap: ActionKind | null = own?.widget !== undefined && own.widget !== 'todo' ? actionKind(own) : null
     const inheritLabel = this.layer === 0 ? '割り当てなし' : '透過（下のレイヤーのものを使う）'
     const notes = sel.kind === 'key' ? this.keymap.keys.filter((k) => k.code === sel.code || k.symbol === sel.code).map((k) => k.note).filter(Boolean) : []
 
@@ -1310,7 +1498,7 @@ export class App {
       h('label', { class: 'row' }, 'ウィジェット ', h('select', { 'data-focus': 'widget', id: 'widget',
         onchange: (e: Event) => this.setWidgetKind((e.target as HTMLSelectElement).value as WidgetKind) },
         (Object.keys(WIDGET_LABELS) as WidgetKind[]).map((w) => h('option', { value: w, selected: own.widget === w }, WIDGET_LABELS[w])))),
-      own.widget === 'text' ? this.viewTextEditor(own) : this.viewClockEditor(text, missing),
+      own.widget === 'text' ? this.viewTextEditor(own) : own.widget === 'todo' ? this.viewTodoEditor(own) : this.viewClockEditor(text, missing),
     )
   }
 
@@ -1337,6 +1525,23 @@ export class App {
       `中身は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。PC で「brain-deck text ${id || '<id>'} "ビルド成功" --style ok --ttl 10m」のように書き換えます。` +
       '色は通常・成功（ok）・失敗（error）・警告（warn）。有効期限を過ぎると、消さずに薄く表示します。設定 GUI が接続しているあいだは、brain-deck から書き換えられません。'))
     return out
+  }
+
+  // viewTodoEditor は、Todo のセルの欄。項目は設定ではなく Brain のデータで、「Todo」タブか brain-deck todo で書き換える。
+  private viewTodoEditor(own: ActionSpec): HTMLElement[] {
+    const n = this.todo ? `今は ${this.todo.items.filter((i) => !i.done).length} 件が未完了です。` : ''
+    return [
+      h('label', { class: 'row', title: '1 ページに並べる項目の数。空なら、セルの高さに入るだけ並べます（1 行 52 ドット）' }, '1 ページの行数 ',
+        h('input', { type: 'number', min: 1, max: TODO_MAX_ROWS, value: own.rows ?? '', placeholder: '自動', 'data-focus': 'rows', id: 'todo-rows', class: 'num',
+          onchange: (e: Event) => {
+            const v = (e.target as HTMLInputElement).value
+            this.patchAction({ rows: v === '' ? undefined : Math.min(Math.max(Math.trunc(Number(v)) || 1, 1), TODO_MAX_ROWS) })
+          } })),
+      h('p', { class: 'hint' },
+        `項目は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。上の「Todo」タブか、PC で「brain-deck todo add "牛乳を買う"」のように書き換えます。${n}` +
+        'Brain では、項目を 0.5 秒押し続けると完了を切り替えます。入りきらないときは、セルの下の ▲ ▼ でページを送ります。'),
+      h('button', { class: 'small', onclick: () => this.showSection('todo') }, 'Todo タブを開く'),
+    ]
   }
 
   private viewClockEditor(text: (f: 'format' | 'date_format' | 'tz', label: string, placeholder: string, title: string) => HTMLElement, missing: string[]): (HTMLElement | null)[] {

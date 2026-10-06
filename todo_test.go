@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -426,5 +428,68 @@ func TestProtocolTodo(t *testing.T) {
 	}
 	if d.monitor.dataCh != nil {
 		t.Error("still subscribed")
+	}
+}
+
+// 設定 GUI のプレビュー（gui/src/todowidget.ts）が Go と同じ配置と省略をすることを、GUI のテストで確かめるための表。
+// 配置を変えたら LEFTHAND_UPDATE_TODOLAYOUT=1 go test -run TodoLayoutTable で書き直す。
+const guiTodoLayoutJSON = "gui/test/fixtures/todolayout.json"
+
+type todoLayoutCase struct {
+	Area  [4]int     `json:"area"`
+	N     int        `json:"n"`
+	Rows  int        `json:"rows"`
+	Per   int        `json:"per"`
+	Pages int        `json:"pages"`
+	Scale int        `json:"scale"`
+	First [4]int     `json:"first"`
+	Last  [4]int     `json:"last"`
+	Nav   *[3][4]int `json:"nav"` // ▲、ページ番号、▼
+}
+
+type todoEllipsisCase struct {
+	Text string `json:"text"`
+	W    int    `json:"w"`
+	Out  string `json:"out"`
+}
+
+func rect4(r image.Rectangle) [4]int { return [4]int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} }
+
+func todoLayoutTable() map[string]any {
+	var layout []todoLayoutCase
+	areas := []image.Rectangle{image.Rect(12, 40, 388, 468), image.Rect(12, 12, 388, 148), image.Rect(212, 172, 588, 308),
+		image.Rect(0, 0, 100, 30), image.Rect(5, 7, 791, 473), image.Rect(12, 12, 188, 468)}
+	for _, a := range areas {
+		for _, n := range []int{1, 3, 7, 8, 9, 30} {
+			for _, rows := range []int{0, 1, 3, 20} {
+				g := todoGeometry(a, n, rows)
+				c := todoLayoutCase{Area: rect4(a), N: n, Rows: rows, Per: g.per, Pages: g.pages, Scale: g.scale,
+					First: rect4(g.rows[0]), Last: rect4(g.rows[len(g.rows)-1])}
+				if !g.nav.Empty() {
+					c.Nav = &[3][4]int{rect4(g.up), rect4(g.mid), rect4(g.down)}
+				}
+				layout = append(layout, c)
+			}
+		}
+	}
+	var ell []todoEllipsisCase
+	for _, s := range []string{"牛乳を買う", "brain-deck の README を書き直す（cron の例と、終了コードの表も）", "x", "混在 mixed 🙂 text", strings.Repeat("あ", 200)} {
+		for _, w := range []int{0, 6, 30, 100, 160, 1000} {
+			ell = append(ell, todoEllipsisCase{s, w, todoEllipsis(s, w)})
+		}
+	}
+	return map[string]any{"layout": layout, "ellipsis": ell}
+}
+
+func TestTodoLayoutTable(t *testing.T) {
+	want, _ := json.MarshalIndent(todoLayoutTable(), "", " ")
+	want = append(want, '\n')
+	if os.Getenv("LEFTHAND_UPDATE_TODOLAYOUT") == "1" {
+		if err := os.WriteFile(guiTodoLayoutJSON, want, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := os.ReadFile(guiTodoLayoutJSON); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("%s is out of date (%v); run LEFTHAND_UPDATE_TODOLAYOUT=1 go test -run TodoLayoutTable", guiTodoLayoutJSON, err)
 	}
 }

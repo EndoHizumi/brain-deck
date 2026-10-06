@@ -13,16 +13,16 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   layer_toggle: '押すたびに出し入れ（layer_toggle）',
   layer_oneshot: '次の 1 キーだけ（layer_oneshot）',
   layer_to: 'そのレイヤーへ移る（layer_to）',
-  widget: 'ウィジェット（時計、テキスト）',
+  widget: 'ウィジェット（時計、テキスト、Todo）',
 }
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
-export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト' }
+export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo' }
 // widget.go の既定の書式
 export const DEFAULT_CLOCK_FORMAT = '15:04'
 export const DEFAULT_DATE_FORMAT = '1月2日({wday})'
 // ウィジェットにだけ書ける項目
-export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id'] as const
+export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows'] as const
 // ウィジェットの種類ごとの項目
 export const CLOCK_FIELDS = ['format', 'date_format', 'tz'] as const
 
@@ -75,7 +75,7 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   else if (k === 'widget') s = ''
   else s = `${k}: ${actionTarget(a)}`
   if (a.widget !== undefined) {
-    const opts = (['format', 'date_format', 'tz', 'id'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
+    const opts = (['format', 'date_format', 'tz', 'id', 'rows'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
     const w = `widget: ${a.widget}${opts.length ? `（${opts.join(', ')}）` : ''}`
     s = s ? `${w}、タップで ${s}` : w
   }
@@ -93,7 +93,8 @@ export function normalizeAction(v: unknown): ActionSpec {
     const out: Record<string, unknown> = {}
     for (const [k, x] of Object.entries(v)) {
       if (x === undefined || x === null) continue
-      out[k] = typeof x === 'number' ? String(x) : x
+      // 数で書いたキー（`1`）は文字にする。todo の rows は数のまま
+      out[k] = typeof x === 'number' && k !== 'rows' ? String(x) : x
     }
     return out as ActionSpec
   }

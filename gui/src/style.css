@@ -170,3 +170,20 @@ table.diff td.before { color: #8a2b2b; }
 table.diff td.after { color: #1d5e24; }
 tr.removed td.after, tr.added td.before { color: var(--muted); }
 .modal .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+/* 設定と Todo の切り替え */
+.sections { display: flex; gap: 6px; margin-bottom: 10px; }
+.section { border-radius: 16px; padding: 4px 14px; }
+.section.active { background: #1c2838; color: #fff; border-color: #1c2838; }
+.section .count { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 11px; }
+
+/* Todo */
+.todo-panel { max-width: 760px; }
+.todo-add { display: flex; gap: 6px; margin-bottom: 10px; }
+.todo-add input { flex: 1; min-width: 0; }
+.todo-list { list-style: none; margin: 0; padding: 0; }
+.todo-item { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.todo-item .todo-text { flex: 1; min-width: 0; }
+.todo-item.done .todo-text { color: var(--muted); text-decoration: line-through; }
+.todo-item input[type='checkbox'] { width: 18px; height: 18px; }
+.todo-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0 6px; font-size: 13px; }

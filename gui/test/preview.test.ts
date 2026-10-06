@@ -71,6 +71,27 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // Todo のウィジェット。config/widgets-example.yaml の「Todo」レイヤー、項目は fixtures/todo.json（-render-todo）
+  // TZ=Asia/Tokyo go run . -render-png ... -render-layer todo -render-todo-page 2 -render-todo gui/test/fixtures/todo.json ...
+  const todoLayer = wcfg.layers.findIndex((l) => l.name === 'todo')
+  const todo = JSON.parse(repoFile('gui/test/fixtures/todo.json').toString('utf8'))
+  const tcases: { file: string; page?: number; empty?: boolean }[] = [
+    { file: 'todo.png' },
+    { file: 'todo-page2.png', page: 1 },
+    { file: 'todo-empty.png', empty: true },
+  ]
+  for (const c of tcases) {
+    it(`Todo も lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: wcfg, stack: [0, todoLayer], mode: 'latched', now, texts,
+        todo: c.empty ? { rev: 0, items: [] } : todo, todoPage: c.page })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   it('press_style を省略すると枠を光らせ、設定の press_style に従う', () => {
     const at = (pixels: Uint8ClampedArray, x: number, y: number) => Array.from(pixels.slice((y * 800 + x) * 4, (y * 800 + x) * 4 + 3))
     const pressed = new Set(['1,1'])

@@ -7,7 +7,7 @@ import keymapJSON from './keymap-pwsh2.json'
 import { LAYER_KINDS, actionKind, actionTarget, parseCellKey, spanOf } from './model'
 import type { Transport } from './protocol'
 import { TEXT_ID_PATTERN } from './textwidget'
-import type { ActionSpec, Config, KeymapInfo, Problem, TextEntry } from './types'
+import type { ActionSpec, Config, KeymapInfo, Problem, TextEntry, TodoItem, TodoList } from './types'
 
 const keymap = keymapJSON as KeymapInfo
 const SOURCE_KEYS = new Set(keymap.keys.flatMap((k) => [k.code, k.symbol]).filter(Boolean) as string[])
@@ -23,6 +23,9 @@ export class FakeDaemon {
   clockOffsetMs = 0 // Brain の時計の遅れ（set_time で 0 になる）
   timeSynced = false
   texts: Record<string, TextEntry> = {} // テキストのタイルの中身
+  todo: TodoList = { rev: 0, items: [] } // Todo の一覧
+  private nextTodo = 1
+  dataSubscribed = false
   // 通知を送る先（FakeTransport が設定する）
   emit: (line: string) => void = () => {}
 
@@ -54,7 +57,8 @@ export class FakeDaemon {
     switch (req.cmd) {
       case 'hello':
         return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
-          commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text'] })
+          commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
+            'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
@@ -78,6 +82,19 @@ export class FakeDaemon {
         else this.texts[req.name] = { text: String(req.text), style: req.style ?? 'normal', set_at: new Date().toISOString(),
           ...(req.ttl_sec ? { expires_at: new Date(Date.now() + req.ttl_sec * 1000).toISOString() } : {}) }
         return ok({ name: req.name, cleared: !!req.clear, shown: true })
+      case 'get_todo':
+      case 'todo_add':
+      case 'todo_update':
+      case 'todo_delete':
+      case 'todo_move':
+      case 'todo_clear_done': {
+        const r = this.todoCmd(req)
+        if (typeof r === 'string') return err(r, r)
+        return ok({ ...r, rev: this.todo.rev, items: this.todo.items })
+      }
+      case 'subscribe_data':
+        this.dataSubscribed = req.enable !== false
+        return ok({ subscribed: this.dataSubscribed, events: ['todo'] })
       case 'validate': {
         const p = validate(req.config)
         return ok({ valid: p.length === 0, errors: p, warnings: [], config: p.length ? undefined : req.config })
@@ -102,6 +119,81 @@ export class FakeDaemon {
   timeInfo() {
     return { now: new Date(Date.now() - this.clockOffsetMs).toISOString(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       utc_offset_sec: -new Date().getTimezoneOffset() * 60, synced: this.timeSynced, ntp_synced: false }
+  }
+
+  // todoCmd は todo.go の TodoService をまねる。誤りならエラーの種類を返す。
+  todoCmd(req: any): Record<string, unknown> | string {
+    const items = [...this.todo.items]
+    const now = new Date().toISOString()
+    const find = () => {
+      const i = items.findIndex((x) => x.id === req.item)
+      if (i < 0) return 'not_found'
+      if (typeof req.rev === 'number' && items[i].rev !== req.rev) return 'conflict'
+      return i
+    }
+    const rev = this.todo.rev + 1
+    const extra: Record<string, unknown> = {}
+    switch (req.cmd) {
+      case 'get_todo':
+        return { shown: true }
+      case 'todo_add': {
+        const text = String(req.text ?? '').replace(/\s+/g, ' ').trim()
+        if (!text) return 'bad_request'
+        const it: TodoItem = { id: `t${this.nextTodo++}`, text, done: false, rev, created_at: now, updated_at: now, source: req.source }
+        const at = typeof req.index === 'number' ? req.index : items.length
+        items.splice(at, 0, it)
+        extra.item = it
+        break
+      }
+      case 'todo_update': {
+        const i = find()
+        if (typeof i === 'string') return i
+        const it = { ...items[i], rev, updated_at: now, source: req.source }
+        if (typeof req.text === 'string') it.text = req.text
+        if (typeof req.done === 'boolean') {
+          it.done = req.done
+          if (req.done) it.done_at = now
+          else delete it.done_at
+        }
+        items[i] = it
+        extra.item = it
+        break
+      }
+      case 'todo_delete': {
+        const i = find()
+        if (typeof i === 'string') return i
+        items.splice(i, 1)
+        break
+      }
+      case 'todo_move': {
+        const i = find()
+        if (typeof i === 'string') return i
+        if (typeof req.index !== 'number' || req.index < 0 || req.index >= items.length) return 'bad_request'
+        const [it] = items.splice(i, 1)
+        items.splice(req.index, 0, it)
+        break
+      }
+      case 'todo_clear_done': {
+        const kept = items.filter((x) => !x.done)
+        extra.removed = items.length - kept.length
+        if (!extra.removed) return extra
+        items.splice(0, items.length, ...kept)
+        break
+      }
+    }
+    this.todo = { rev, items }
+    this.emitTodo()
+    return extra
+  }
+
+  private emitTodo(): void {
+    if (this.dataSubscribed) setTimeout(() => this.emit(JSON.stringify({ event: 'todo', ...this.todo })), 0)
+  }
+
+  // toggleTodo は、Brain で長押しして完了を切り替えたことにする。
+  toggleTodo(id: string): void {
+    const it = this.todo.items.find((x) => x.id === id)
+    if (it) this.todoCmd({ cmd: 'todo_update', item: id, done: !it.done, source: 'brain' })
   }
 
   // pressKey / touch は、Brain で押したことにする（学習モードの通知）。
@@ -134,7 +226,10 @@ export function validate(cfg: Config): Problem[] {
     if (n > 1 || (n === 0 && !a.widget))
       return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to (a widget cell may omit them)` })
     if (!cell && (a.widget || a.span)) return out.push({ path, message: `${where}: widget and span can be used only in touch cells` })
-    if (a.widget && a.widget !== 'clock' && a.widget !== 'text') out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text)` })
+    if (a.widget && a.widget !== 'clock' && a.widget !== 'text' && a.widget !== 'todo') out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo)` })
+    if (a.widget === 'todo' && n > 0) out.push({ path, message: `${where}: widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*` })
+    if (a.rows !== undefined && a.widget !== 'todo') out.push({ path, message: `${where}: rows is for widget: todo` })
+    if (a.rows !== undefined && !(Number.isInteger(a.rows) && a.rows >= 1 && a.rows <= 20)) out.push({ path, message: `${where}: rows must be 1..20 (omit it to fit the cell height)` })
     if (a.widget === 'text' && !TEXT_ID_PATTERN.test(a.id ?? '')) out.push({ path, message: `${where}: widget: text needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
     if (a.widget !== 'text' && a.id) out.push({ path, message: `${where}: id is for widget: text` })
     if (!a.widget && (a.format || a.date_format || a.tz)) out.push({ path, message: `${where}: format, date_format and tz need widget: clock` })

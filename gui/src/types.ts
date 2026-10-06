@@ -15,9 +15,10 @@ export interface ActionSpec {
   date_format?: string // clock：日付の行。none で出さない
   tz?: string // clock：タイムゾーン（IANA の名前）
   id?: string // text：中身の名前（set_text の name）
+  rows?: number // todo：1 ページの行数。省略すると高さで決める
 }
 
-export type WidgetKind = 'clock' | 'text'
+export type WidgetKind = 'clock' | 'text' | 'todo'
 
 export interface SoftArea {
   x: [number, number]
@@ -149,6 +150,30 @@ export interface GetTextResult {
   ids: string[] // 設定で使われている id
 }
 
+// Todo の項目（get_todo、todo_*、todo の通知。todo.go の TodoItem）
+export interface TodoItem {
+  id: string
+  text: string
+  done: boolean
+  rev: number // 最後に変えたときの、一覧の rev
+  created_at: string
+  updated_at: string
+  done_at?: string
+  source?: string // 最後に変えた側（gui、brain-deck、brain）
+}
+
+// Todo の一覧。items は並べた順で、完了したものも混ざっている（画面には未完了のあとに完了を出す）
+export interface TodoList {
+  rev: number
+  items: TodoItem[]
+}
+
+export interface TodoResult extends TodoList {
+  item?: TodoItem
+  shown?: boolean // 設定に Todo のセルがあるか（get_todo、todo_add）
+  removed?: number // todo_clear_done
+}
+
 export interface ValidateResult {
   valid: boolean
   errors: Problem[]
@@ -173,4 +198,9 @@ export interface LayerEvent extends EngineStatus {
   event: 'layer'
 }
 
-export type Notification = InputEvent | LayerEvent
+// Brain で Todo が変わったとき（subscribe_data のあと）
+export interface TodoEvent extends TodoList {
+  event: 'todo'
+}
+
+export type Notification = InputEvent | LayerEvent | TodoEvent
