@@ -1,6 +1,6 @@
 # config/widgets-example.yaml
-# ウィジェット（時計、テキスト）の使い方の例。config/current.yaml（Brain で動いている設定）に、
-# 「情報」レイヤーを足したもの。メニューの「情報」から入り、「基本」で戻る。
+# ウィジェット（時計、テキスト、Todo）の使い方の例。config/current.yaml（Brain で動いている設定）に、
+# 「情報」と「Todo」のレイヤーを足したもの。メニューの「情報」「Todo」から入り、「基本」で戻る。
 # 書き方は docs/config.md の「ウィジェット」を参照
 hid_device: /dev/hidg0
 keyboard: brain-kbd-i2c
@@ -115,8 +115,9 @@ layers:
     label: メニュー
     touch:
       cols: 4
-      rows: 2
+      rows: 3
       cells:
+        "0,2": {layer_to: todo, label: Todo}
         "0,0": {layer_to: code, label: コード}
         "0,1": {layer_to: symbol, label: 記号}
         "1,0": {layer_to: browser, label: ブラウザ}
@@ -272,6 +273,21 @@ layers:
         "3,1": {widget: text, id: deploy, label: デプロイ, key: LGUI+S}
         # span はキーのセルにも使える
         "0,2": {key: ENTER, span: [3, 1], label: 決定}
+        "3,2": {layer_to: base, label: 基本}
+  - name: todo
+    label: Todo
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # Todo の一覧（2 列 × 3 行ぶん）。項目を 0.5 秒押し続けると完了を切り替える。
+        # 入りきらないときは、下の ▲ ▼ でページを送る。項目は設定 GUI の「Todo」タブか、
+        # PC で `brain-deck todo add "牛乳を買う"` で足す
+        "0,0": {widget: todo, span: [2, 3], label: Todo}
+        "2,0": {widget: clock, span: [2, 1]}
+        "2,1": {widget: text, id: build, label: ビルド}
+        "3,1": {widget: text, id: deploy, label: デプロイ}
+        "2,2": {layer_to: menu, label: メニュー}
         "3,2": {layer_to: base, label: 基本}
 display:
   enabled: true

@@ -167,6 +167,15 @@ type Engine struct {
 	onView func(*View) // 重なりが変わったとき（画面の描き直し）。待たずに返ること
 	// onStatus は重なりが変わったとき（設定 GUI への通知）。ロックを持ったまま呼ぶので、待たずに返ること
 	onStatus func(EngineStatus)
+	widgets  *WidgetRT    // 押した位置で働くウィジェット（Todo）に渡す状態。nil なら 800x480 とみなす
+	touchAt  *widgetTouch // PressTouch から press に、押した位置を渡す
+}
+
+// SetWidgets は、ウィジェットがタップを処理するのに使う状態を設定する。
+func (e *Engine) SetWidgets(rt *WidgetRT) {
+	e.mu.Lock()
+	e.widgets = rt
+	e.mu.Unlock()
 }
 
 func NewEngine(km *Keymap, out *State) *Engine {
@@ -208,6 +217,7 @@ type TouchHit struct {
 	Soft     string // ソフトキーの名前（セルでないとき）
 	Col, Row int
 	Mapped   bool
+	Own      bool // ウィジェットが押した位置で働き、自分で押したことを描く（セル全体を光らせない）
 }
 
 // PressTouch はタッチの生座標で押す。判定は今の重なりの格子で行う。
@@ -223,9 +233,19 @@ func (e *Engine) PressTouch(x, y int32) TouchHit {
 	} else if v.Cols > 0 {
 		c, r := touchCell(e.km.Touch, v.Cols, v.Rows, x, y)
 		a, h.Col, h.Row = v.at(c, r) // span のセルは、左上のセルとして扱う
+		if a != nil && a.Widget.ownsTouch() {
+			h.Own = true
+			W, H := 800, 480
+			if e.widgets != nil {
+				W, H = e.widgets.screen()
+			}
+			e.touchAt = &widgetTouch{cell: cellRect(h.Col, h.Row, a.SpanW, a.SpanH, v.Cols, v.Rows, W, H),
+				pt: touchPoint(e.km.Touch, x, y, W, H)}
+		}
 	}
 	h.Mapped = a.tappable()
 	e.press("t", a)
+	e.touchAt = nil
 	return h
 }
 
@@ -248,6 +268,8 @@ func (e *Engine) Release(id string) {
 	case actHold:
 		e.removeIf(func(en stackEntry) bool { return en.kind == actHold && en.src == id })
 		e.refresh()
+	case actWidget:
+		a.Widget.touchUp(e.widgets)
 	}
 }
 
@@ -285,9 +307,9 @@ func (e *Engine) press(id string, a *Action) {
 			}
 			consumeOneshot = false
 		case actWidget:
-			// ウィジェットに任せる。待たずに返ること
-			if a.Widget != nil && a.Widget.tap != nil {
-				a.Widget.tap(a.Widget)
+			// ウィジェットに任せる。待たずに返る
+			if e.touchAt != nil {
+				a.Widget.touchDown(e.widgets, *e.touchAt, a.Spec.Label)
 			}
 		}
 	}
@@ -366,6 +388,11 @@ func (e *Engine) Reload(km *Keymap) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.out.releaseAll()
+	for _, a := range e.down { // 長押しの途中なら取り消す
+		if a != nil && a.Kind == actWidget {
+			a.Widget.touchUp(e.widgets)
+		}
+	}
 	e.down = map[string]*Action{}
 	e.stack = nil
 	e.km = km

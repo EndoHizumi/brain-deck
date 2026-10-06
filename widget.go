@@ -18,6 +18,7 @@ import (
 const (
 	widgetClock = "clock"
 	widgetText  = "text"
+	widgetTodo  = "todo"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -32,7 +33,7 @@ const (
 	unsyncedText = "時刻未設定"
 )
 
-var widgetKinds = []string{widgetClock, widgetText}
+var widgetKinds = []string{widgetClock, widgetText, widgetTodo}
 
 var jaWeekdays = [...]string{"日", "月", "火", "水", "木", "金", "土"}
 
@@ -47,9 +48,8 @@ type WidgetDef struct {
 	Loc        *time.Location // clock：nil なら Brain のタイムゾーン
 	Seconds    bool           // clock：秒を出す（1 秒ごとに描き直す）
 	ID         string         // text：中身の名前
-	// tap は、key や layer_* を書いていないセルをタップしたときの動き。nil なら何もしない（光らせない）。
-	// 入力の goroutine から呼ばれるので、待たずに返ること
-	tap func(*WidgetDef)
+	Rows       int            // todo：1 ページの行数。0 なら高さで決める
+	todo       *todoState     // todo：ページと、押している行
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -57,15 +57,30 @@ type WidgetEnv struct {
 	Now        time.Time
 	TimeSynced bool                 // この起動のあいだに時刻を合わせた（set_time か NTP）
 	Texts      map[string]TextEntry // text：id ごとの中身（写し）
+	Todo       TodoList             // todo：一覧（写し）
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
 func compileWidget(s ActionSpec) (*WidgetDef, error) {
+	if s.Rows != 0 && s.Widget != widgetTodo {
+		return nil, fmt.Errorf("rows is for widget: todo")
+	}
 	switch s.Widget {
 	case widgetClock:
 		if s.ID != "" {
 			return nil, fmt.Errorf("id is for widget: text")
 		}
+	case widgetTodo:
+		if s.Format != "" || s.DateFormat != "" || s.TZ != "" || s.ID != "" {
+			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: todo")
+		}
+		if s.count() > 0 {
+			return nil, fmt.Errorf("widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*")
+		}
+		if s.Rows < 0 || s.Rows > todoMaxRows {
+			return nil, fmt.Errorf("rows must be 1..%d (omit it to fit the cell height)", todoMaxRows)
+		}
+		return &WidgetDef{Kind: widgetTodo, Rows: s.Rows, todo: &todoState{}}, nil
 	case widgetText:
 		if s.Format != "" || s.DateFormat != "" || s.TZ != "" {
 			return nil, fmt.Errorf("format, date_format and tz are for widget: clock")
@@ -160,6 +175,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 			return "\x00none"
 		}
 		return fmt.Sprintf("%s\x00%s\x00%v", e.Text, e.Style, e.Expired(env.Now))
+	case widgetTodo:
+		return todoKey(w, env)
 	}
 	return ""
 }
@@ -185,14 +202,13 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 // drawWidget は、セルの内側 inner にウィジェットを描く。label があれば上に小さく出す。
 // ink、subInk は、押したとき（fill）に色を変えるためのもの。
 func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, ink, subInk RGB) {
-	area := inner
-	if v.Label != "" {
-		caption := strings.ReplaceAll(v.Label, "\n", " ")
-		s := min(fitScale([]string{caption}, area.Dx(), fontH*captionScale), captionScale)
-		drawCentered(cv, area, area.Min.Y, caption, s, subInk)
-		area.Min.Y += fontH*s + widgetLineGap
+	caption, s, area := widgetCaption(inner, v.Label)
+	if caption != "" {
+		drawCentered(cv, inner, inner.Min.Y, caption, s, subInk)
 	}
 	switch v.Widget.Kind {
+	case widgetTodo:
+		drawTodo(cv, area, v.Widget, env, subInk)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {
@@ -225,6 +241,18 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 			y += fontH * s
 		}
 	}
+}
+
+// widgetCaption は、見出し（label）の 1 行と倍率、見出しの下に残る範囲を返す。label が空なら inner をそのまま返す。
+func widgetCaption(inner image.Rectangle, label string) (string, int, image.Rectangle) {
+	if label == "" {
+		return "", 0, inner
+	}
+	caption := strings.ReplaceAll(label, "\n", " ")
+	s := min(fitScale([]string{caption}, inner.Dx(), fontH*captionScale), captionScale)
+	area := inner
+	area.Min.Y += fontH*s + widgetLineGap
+	return caption, s, area
 }
 
 // ---------- text ----------

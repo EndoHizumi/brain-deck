@@ -49,12 +49,15 @@ const (
 	errInvalid    = "invalid_config"  // 設定の誤り。problems に場所付きで入る
 	errApply      = "apply_failed"    // 保存したが反映に失敗し、前の設定に戻した
 	errInternal   = "internal_error"  //
+	errNotFound   = "not_found"       // todo：その ID の項目がない
+	errConflict   = "conflict"        // todo：項目が、送った rev のあとに変わった
 )
 
 // 通知の種類（event）
 const (
 	notifyInput = "input"
 	notifyLayer = "layer"
+	notifyTodo  = "todo"
 )
 
 // ---------- 行の組み立て ----------
@@ -120,6 +123,10 @@ type request struct {
 	TTLSec   *float64        `json:"ttl_sec,omitempty"` // set_text：有効期限（秒）
 	Clear    bool            `json:"clear,omitempty"`   // set_text：消す
 	Client   string          `json:"client,omitempty"`  // hello：つないだ側の名前（ログ用）
+	Item     string          `json:"item,omitempty"`    // todo_*：項目の ID
+	Rev      *uint64         `json:"rev,omitempty"`     // todo_*：送った側が見ていた項目の rev（違えば conflict）
+	Index    *int            `json:"index,omitempty"`   // todo_add、todo_move：並べた順での位置
+	Done     *bool           `json:"done,omitempty"`    // todo_update：完了
 }
 
 type response struct {
@@ -159,6 +166,53 @@ type Monitor struct {
 	mu            sync.Mutex
 	ch            chan []byte // 購読中の通知先。nil なら購読していない
 	suppressUntil time.Time   // この時刻まで、押した入力を PC に送らない（学習モード）
+	dataCh        chan []byte // subscribe_data の通知先（Todo が Brain で変わったなど）。nil なら購読していない
+}
+
+// subscribeData は、データの通知先を設定する。ch が nil なら購読をやめる。
+func (m *Monitor) subscribeData(ch chan []byte) {
+	m.mu.Lock()
+	m.dataCh = ch
+	m.mu.Unlock()
+}
+
+// TodoChanged は Todo の一覧が変わったときに呼ぶ（TodoService の通知の goroutine から）。
+func (m *Monitor) TodoChanged(l TodoList) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	ch := m.dataCh
+	m.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	b, err := json.Marshal(todoEvent{Event: notifyTodo, todoResult: todoJSON(l)})
+	if err != nil {
+		return
+	}
+	select {
+	case ch <- b:
+	default: // PC が読まないときは捨てる。GUI は次に読み直したときにそろう
+	}
+}
+
+type todoEvent struct {
+	Event string `json:"event"`
+	todoResult
+}
+
+// todoResult は、Todo の一覧を返すときの形（get_todo、todo_* の結果、todo の通知）。
+type todoResult struct {
+	Rev   uint64     `json:"rev"`
+	Items []TodoItem `json:"items"`
+}
+
+func todoJSON(l TodoList) todoResult {
+	if l.Items == nil {
+		l.Items = []TodoItem{}
+	}
+	return todoResult{Rev: l.Rev, Items: l.Items}
 }
 
 // subscribe は通知先を設定する。ch が nil なら購読をやめる。
@@ -264,6 +318,7 @@ type Controller struct {
 	monitor *Monitor
 	clock   *TimeService
 	texts   *TextService
+	todos   *TodoService
 	started time.Time
 }
 
@@ -290,7 +345,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{
 			"protocol": protocolVersion, "daemon": "lefthand", "version": daemonVersion(),
 			"max_line": maxLineBytes, "config_path": c.store.path,
-			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text"},
+			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
+				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data"},
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -358,6 +414,16 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.setText(id, req)
 	case "get_text":
 		return ok(map[string]any{"texts": c.texts.List(time.Now()), "ids": textIDs(c.store.Current())})
+	case "get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done":
+		return c.todo(id, req)
+	case "subscribe_data":
+		on := req.Enable == nil || *req.Enable
+		if on {
+			c.monitor.subscribeData(events)
+		} else {
+			c.monitor.subscribeData(nil)
+		}
+		return ok(map[string]any{"subscribed": on, "events": []string{notifyTodo}})
 	case "subscribe_input":
 		on := req.Enable == nil || *req.Enable
 		if on {
@@ -407,6 +473,104 @@ func (c *Controller) setText(id json.RawMessage, req request) response {
 		vlogf("control: set_text %s (%s, %d chars) by %s", req.Name, e.Style, len([]rune(e.Text)), req.Source)
 	}
 	return response{ID: id, OK: true, Result: res}
+}
+
+// todo は Todo のコマンドを処理する。保存（SD カードへの書き込み）は待たずに返す。
+func (c *Controller) todo(id json.RawMessage, req request) response {
+	now := time.Now()
+	src := req.Source
+	if src == "" {
+		src = "unknown"
+	}
+	needItem := func() *response {
+		if req.Item == "" {
+			r := errResp(id, errBadRequest, `"item" (the id of the item) is required`, nil)
+			return &r
+		}
+		return nil
+	}
+	var (
+		l    TodoList
+		item *TodoItem
+		err  error
+		res  = map[string]any{}
+	)
+	switch req.Cmd {
+	case "get_todo":
+		l = c.todos.Snapshot()
+		res["shown"] = todoShown(c.store.Current())
+	case "todo_add":
+		if req.Text == nil {
+			return errResp(id, errBadRequest, `"text" (a string) is required`, nil)
+		}
+		index := -1
+		if req.Index != nil {
+			index = *req.Index
+		}
+		var it TodoItem
+		it, l, err = c.todos.Add(*req.Text, index, now, src)
+		item = &it
+		res["shown"] = todoShown(c.store.Current())
+	case "todo_update":
+		if r := needItem(); r != nil {
+			return *r
+		}
+		if req.Text == nil && req.Done == nil {
+			return errResp(id, errBadRequest, `"text" or "done" is required`, nil)
+		}
+		var it TodoItem
+		it, l, err = c.todos.Edit(req.Item, req.Rev, TodoEdit{Text: req.Text, Done: req.Done}, now, src)
+		item = &it
+	case "todo_delete":
+		if r := needItem(); r != nil {
+			return *r
+		}
+		l, err = c.todos.Delete(req.Item, req.Rev)
+	case "todo_move":
+		if r := needItem(); r != nil {
+			return *r
+		}
+		if req.Index == nil {
+			return errResp(id, errBadRequest, `"index" (the new position, from 0) is required`, nil)
+		}
+		l, err = c.todos.Move(req.Item, req.Rev, *req.Index)
+	case "todo_clear_done":
+		var n int
+		n, l, err = c.todos.ClearDone()
+		res["removed"] = n
+	}
+	switch {
+	case errors.Is(err, errTodoNotFound):
+		return errResp(id, errNotFound, err.Error(), nil)
+	case errors.Is(err, errTodoConflict):
+		return errResp(id, errConflict, err.Error(), nil)
+	case err != nil:
+		return errResp(id, errBadRequest, err.Error(), nil)
+	}
+	if item != nil {
+		res["item"] = item
+		vlogf("control: %s %s %q done=%v by %s", req.Cmd, item.ID, item.Text, item.Done, src)
+	} else if req.Cmd != "get_todo" {
+		vlogf("control: %s %s by %s", req.Cmd, req.Item, src)
+	}
+	t := todoJSON(l)
+	res["rev"], res["items"] = t.Rev, t.Items
+	return response{ID: id, OK: true, Result: res}
+}
+
+// todoShown は、設定のどこかに Todo のセルがあるか。
+func todoShown(cfg *Config) bool {
+	for _, l := range cfg.Layers {
+		if l.Touch == nil {
+			continue
+		}
+		for _, a := range l.Touch.Cells {
+			if a.Widget == widgetTodo {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func configArg(req request) ([]byte, error) {
@@ -539,6 +703,9 @@ func (m *Monitor) unsubscribeIf(ch chan []byte) {
 	if m.ch == ch {
 		m.ch = nil
 		m.suppressUntil = time.Time{}
+	}
+	if m.dataCh == ch {
+		m.dataCh = nil
 	}
 }
 

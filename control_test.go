@@ -60,6 +60,7 @@ type testDaemon struct {
 	monitor *Monitor
 	clock   *TimeService
 	texts   *TextService
+	todos   *TodoService
 	ctl     *Controller
 	conn    net.Conn // GUI 側
 	rd      *bufio.Reader
@@ -114,7 +115,10 @@ func newTestDaemon(t *testing.T, src string) *testDaemon {
 	d.store = &configStore{path: d.path, cfg: cfg, km: km, apply: reloader(d.engine)}
 	d.clock = NewTimeService(OpenStore(filepath.Join(dir, "data")))
 	d.texts = NewTextService(OpenStore(filepath.Join(dir, "data")))
-	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, started: time.Now()}
+	d.todos = NewTodoService(OpenStore(filepath.Join(dir, "data")))
+	d.todos.SetOnNotify(d.monitor.TodoChanged)
+	d.engine.SetWidgets(NewWidgetRT(d.todos))
+	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, todos: d.todos, started: time.Now()}
 	daemonSide, gui := net.Pipe()
 	d.conn, d.rd = gui, bufio.NewReaderSize(gui, 1<<20)
 	go func() { d.served <- d.ctl.Serve(daemonSide) }()

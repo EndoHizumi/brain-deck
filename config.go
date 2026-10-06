@@ -91,6 +91,7 @@ type ActionSpec struct {
 	DateFormat string `yaml:"date_format,omitempty" json:"date_format,omitempty"` // clock：日付の行の書式。none で出さない
 	TZ         string `yaml:"tz,omitempty" json:"tz,omitempty"`                   // clock：タイムゾーン（IANA の名前）
 	ID         string `yaml:"id,omitempty" json:"id,omitempty"`                   // text：中身の名前（set_text の name）
+	Rows       int    `yaml:"rows,omitempty" json:"rows,omitempty"`               // todo：1 ページの行数
 }
 
 // Span はセルの大きさ [列数, 行数]。書かなければ [1, 1]。
@@ -110,7 +111,7 @@ func (s Span) MarshalYAML() (any, error) {
 
 var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
-	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true,
+	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 }
 
 func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
@@ -124,7 +125,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, label, span, widget, format, date_format, tz, id)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, label, span, widget, format, date_format, tz, id, rows)", k.Line, k.Value)
 			}
 		}
 	}
@@ -345,7 +346,7 @@ func (a *Action) tappable() bool {
 		return false
 	}
 	if a.Kind == actWidget {
-		return a.Widget != nil && a.Widget.tap != nil
+		return a.Widget.ownsTouch()
 	}
 	return a.Kind != actNone
 }
@@ -442,7 +443,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		if !cell && (s.Widget != "" || !s.Span.IsZero()) {
 			fail(path, "%s: widget and span can be used only in touch cells", where)
 		}
-		if s.Widget != "" || s.Format != "" || s.DateFormat != "" || s.TZ != "" || s.ID != "" {
+		if s.Widget != "" || s.Format != "" || s.DateFormat != "" || s.TZ != "" || s.ID != "" || s.Rows != 0 {
 			w, err := compileWidget(s)
 			if err != nil {
 				fail(path, "%s: %v", where, err)

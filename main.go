@@ -21,6 +21,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image"
 	"image/png"
 	"log"
 	"os"
@@ -359,6 +360,14 @@ func touchCell(tc *TouchConfig, cols, rows int, x, y int32) (col, row int) {
 	return cellOf(x, tc.MinX, tc.MaxX, cols), cellOf(y, tc.MinY, tc.MaxY, rows)
 }
 
+// touchPoint は、タッチの生座標を W×H の画面のドットにする。セルの境界（touchCell）と同じ割り方。
+func touchPoint(tc *TouchConfig, x, y int32, W, H int) image.Point {
+	if tc.SwapXY {
+		x, y = y, x
+	}
+	return image.Pt(cellOf(x, tc.MinX, tc.MaxX, W), cellOf(y, tc.MinY, tc.MaxY, H))
+}
+
 func evTime(ev *evdev.InputEvent) time.Time {
 	return time.Unix(int64(ev.Time.Sec), int64(ev.Time.Usec)*1000)
 }
@@ -398,8 +407,8 @@ func runTouch(dev *evdev.InputDevice, e *Engine, disp *Display, mon *Monitor) {
 					pressed = true
 					continue
 				}
-				h := e.PressTouch(x, y) // HID を先に送り、描画はそのあと
-				if h.Mapped && h.Soft == "" {
+				h := e.PressTouch(x, y)                 // HID を先に送り、描画はそのあと
+				if h.Mapped && h.Soft == "" && !h.Own { // Todo は押した行を自分で描く
 					disp.SetPressed(h.Gen, h.Col, h.Row, true)
 					lit = &h
 				}
@@ -694,6 +703,8 @@ func main() {
 	pngTime := flag.String("render-time", "", "-render-png で時計に出す時刻（RFC 3339。例: 2026-10-06T09:41:00+09:00）。省略すると今")
 	pngUnsynced := flag.Bool("render-unsynced", false, "-render-png で、時刻を一度も合わせていないときの時計を描く")
 	pngTexts := flag.String("render-texts", "", "-render-png で、テキストのタイルに出す中身（text.json の形のファイル）")
+	pngTodo := flag.String("render-todo", "", "-render-png で、Todo のセルに出す項目（todo.json の形のファイル）")
+	pngTodoPage := flag.Int("render-todo-page", 1, "-render-png で、Todo のセルに出すページ（1 から）")
 	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータと時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	flag.Usage = func() {
@@ -778,6 +789,27 @@ func main() {
 			}
 			env.Texts = f.Texts
 		}
+		if *pngTodo != "" {
+			b, err := os.ReadFile(*pngTodo)
+			if err != nil {
+				log.Fatal(err)
+			}
+			var f todoFile
+			if err := json.Unmarshal(b, &f); err != nil {
+				log.Fatalf("%s: %v", *pngTodo, err)
+			}
+			env.Todo = TodoList{Rev: f.Rev, Items: f.Items}
+		}
+		for _, l := range km.Layers {
+			if l.Grid == nil {
+				continue
+			}
+			for _, a := range l.Grid.Cells {
+				if a.Widget.ownsTouch() {
+					a.Widget.todo.page = max(*pngTodoPage-1, 0)
+				}
+			}
+		}
 		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, env); err != nil {
 			log.Fatal(err)
 		}
@@ -810,9 +842,13 @@ func main() {
 		log.Printf("time: not set since boot (the clock widget shows %q until the settings GUI connects)", unsyncedText)
 	}
 	texts := NewTextService(store)
+	todos := NewTodoService(store)
+	widgetRT := NewWidgetRT(todos)
+	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
 		env.Texts = texts.Snapshot()
+		env.Todo = todos.Snapshot()
 		return env
 	}
 
@@ -851,6 +887,8 @@ func main() {
 				addAtExit(d.Close)
 				clock.SetOnChange(d.Poke)
 				texts.SetOnChange(d.Poke)
+				todos.SetOnChange(d.Poke)
+				widgetRT.SetScreen(first.W, first.H, d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
 			}
@@ -867,8 +905,10 @@ func main() {
 			monitor: mon,
 			clock:   clock,
 			texts:   texts,
+			todos:   todos,
 			started: time.Now(),
 		}
+		todos.SetOnNotify(mon.TodoChanged)
 		go ctl.runSerial(*serialPath)
 	}
 

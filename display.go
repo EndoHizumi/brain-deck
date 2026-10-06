@@ -68,12 +68,17 @@ func (l *Layout) badgeRect() image.Rectangle {
 func (l *Layout) rect(col, row int) image.Rectangle {
 	w, h := 1, 1
 	if i := row*l.Cols + col; i < len(l.Cells) {
-		w, h = max(l.Cells[i].SpanW, 1), max(l.Cells[i].SpanH, 1)
+		w, h = l.Cells[i].SpanW, l.Cells[i].SpanH
 	}
-	x0, _ := cellSpan(col, l.Cols, l.W)
-	_, x1 := cellSpan(col+w-1, l.Cols, l.W)
-	y0, _ := cellSpan(row, l.Rows, l.H)
-	_, y1 := cellSpan(row+h-1, l.Rows, l.H)
+	return cellRect(col, row, w, h, l.Cols, l.Rows, l.W, l.H)
+}
+
+// cellRect は、cols×rows の格子で (col, row) から spanW×spanH のセルの、W×H の画面上の範囲を返す。
+func cellRect(col, row, spanW, spanH, cols, rows, W, H int) image.Rectangle {
+	x0, _ := cellSpan(col, cols, W)
+	_, x1 := cellSpan(col+max(spanW, 1)-1, cols, W)
+	y0, _ := cellSpan(row, rows, H)
+	_, y1 := cellSpan(row+max(spanH, 1)-1, rows, H)
 	return image.Rect(x0, y0, x1, y1)
 }
 
