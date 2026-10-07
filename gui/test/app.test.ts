@@ -31,6 +31,7 @@ function setup(opts: { daemon?: FakeDaemon; transport?: () => Transport; confirm
     validateDelayMs: 5,
     helloTimeoutMs: 100,
     keepaliveMs: 20,
+    sniffMs: 5,
     decodeImage: async () => fakeSource(),
   })
   const $ = <T extends HTMLElement = HTMLElement>(sel: string) => root.querySelector<T>(sel)!

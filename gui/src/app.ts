@@ -25,6 +25,7 @@ import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
+import { PortRoles, isBrainPort, looksLikeConsole } from './ports'
 import type {
   ActionSpec, BrainImage, Config, EngineStatus, GetTextResult, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind,
@@ -89,6 +90,8 @@ export interface AppDeps {
   validateDelayMs?: number
   helloTimeoutMs?: number
   keepaliveMs?: number
+  // 一覧から選んだポートに hello を送る前に、何も書かずに待つ時間。コンソール（ログイン画面）の文字が届いたら、送らない
+  sniffMs?: number
 }
 
 // ソフトキーの名前と、帯に印刷された文字
@@ -96,7 +99,7 @@ const SOFT_TITLES: Record<string, string> = {
   home: 'HOME', up: '▲', down: '▼', right: '▶', left: '◀', enter: '決定', back: '戻る', menu: '操作機能',
 }
 
-type TryResult = { result: 'ok' } | { result: 'no_answer' } | { result: 'open_failed'; error: string }
+type TryResult = { result: 'ok' } | { result: 'no_answer' } | { result: 'console' } | { result: 'open_failed'; error: string }
 
 // openFailedMessage は、ポートを開けなかったときの案内。Linux では権限がないことが多い。
 function openFailedMessage(err: string): string {
@@ -114,6 +117,9 @@ export class App {
   client: Client | null = null
   hello: HelloResult | null = null
   connecting = false
+  // Brain の 2 つのシリアルの、どちらが設定用でどちらがコンソール用か（ports.ts）。コンソールのタブと共有する
+  ports = new PortRoles()
+  private settingsPort: SerialPort | null = null
   // 設定
   keymap: KeymapInfo = defaultKeymap as KeymapInfo
   saved: Config | null = null // Brain に保存されている設定（差分の基準）
@@ -179,6 +185,7 @@ export class App {
       validateDelayMs: deps.validateDelayMs ?? 250,
       helloTimeoutMs: deps.helloTimeoutMs ?? 1500,
       keepaliveMs: deps.keepaliveMs ?? 10000,
+      sniffMs: deps.sniffMs ?? 300,
       decodeImage: deps.decodeImage ?? decodeFile,
     }
     this.deps
@@ -193,8 +200,10 @@ export class App {
     window.addEventListener('beforeunload', (e) => {
       if (this.dirty) e.preventDefault()
     })
-    this.deps.serial?.addEventListener?.('disconnect', () => {
-      /* 読み込みループの終わりで onClose が呼ばれる */
+    this.deps.serial?.addEventListener?.('disconnect', (e: Event) => {
+      // ケーブルを抜くと、つなぎ直したときには別の SerialPort になるので、覚えた役割を忘れる。
+      // 接続していれば、読み込みループの終わりで onClose が呼ばれる
+      if (e.target) this.ports.forget(e.target as SerialPort)
     })
     this.render()
   }
@@ -230,30 +239,41 @@ export class App {
     this.connecting = true
     this.render()
     try {
-      // 以前に許可したポートを先に試す（ACM が 2 つあるので、応答したほうが設定用）
-      const known = (await serial.getPorts()).filter((p) => {
-        const i = p.getInfo()
-        return i.usbVendorId === BRAIN_FILTER.usbVendorId && i.usbProductId === BRAIN_FILTER.usbProductId
-      })
-      let openError = ''
-      for (const p of known) {
-        const r = await this.tryPort(p)
-        if (r.result === 'ok') return
-        if (r.result === 'open_failed') openError = r.error
+      // 設定用だと分かっているポート（ports.ts）だけを、聞かずに使う。分からないポートには、何も書かない
+      const brain = (await serial.getPorts()).filter(isBrainPort)
+      const known = this.ports.pick('settings', brain)
+      if (known) {
+        const r = await this.tryPort(known, false)
+        if (r.result === 'open_failed') this.say(openFailedMessage(r.error), 'error')
+        else if (r.result === 'no_answer')
+          this.say('設定用のポートは開けましたが、lefthand が答えません。lefthand.service が動いているかを確かめてください（ssh brain systemctl status lefthand）', 'error')
+        return
       }
+      this.say(
+        brain.length
+          ? 'Brain のシリアルは 2 つあり、ブラウザからはどちらが設定用か見分けられません。一覧から設定用（2 つ目。Linux では ttyACM1、macOS では番号の大きい cu.usbmodem…）を選んでください'
+          : 'ポートの一覧から、Brain の設定用のポート（2 つ目。Linux では ttyACM1）を選んでください',
+      )
       let port: SerialPort
       try {
         port = await serial.requestPort({ filters: [BRAIN_FILTER] })
       } catch {
-        this.say(openError ? openFailedMessage(openError) : 'ポートが選ばれませんでした', openError ? 'error' : 'info')
+        this.say('ポートが選ばれませんでした')
         return
       }
-      const r = await this.tryPort(port)
+      const conflict = this.ports.conflict(port, 'settings')
+      if (conflict) {
+        this.say(`${conflict}。もう一度「Brain に接続」を押して、もう一方を選んでください`, 'error')
+        return
+      }
+      const r = await this.tryPort(port, true)
       if (r.result === 'open_failed') this.say(openFailedMessage(r.error), 'error')
+      else if (r.result === 'console')
+        this.say('このポートからは、ログイン画面かシェルの文字が届きました。コンソール用のポートなので、何も送っていません。もう一度「Brain に接続」を押して、もう一方を選んでください', 'error')
       else if (r.result === 'no_answer')
         this.say(
           'このポートは開けましたが、lefthand が答えません。Brain のシリアルは 2 つあり、もう一方（コンソール用）を選んだかもしれません。' +
-            'もう一度「接続」を押して、別のポートを選んでください',
+            'もう一度「接続」を押して、別のポートを選んでください（コンソール用に送った文字は、ログイン画面に入力されています。コンソールのタブで Enter を押すか、60 秒待つと消えます）',
           'error',
         )
     } finally {
@@ -263,29 +283,48 @@ export class App {
   }
 
   // tryPort はポートを開いて hello を送る。lefthand が答えたら、そのまま使う。
-  private async tryPort(port: SerialPort): Promise<TryResult> {
+  // sniff のときは、送る前に少し待ち、コンソールの文字（ログイン画面など）が届いたら送らない。
+  private async tryPort(port: SerialPort, sniff: boolean): Promise<TryResult> {
     let t: Transport
     try {
       t = await this.deps.openTransport(port)
     } catch (e: any) {
       return { result: 'open_failed', error: String(e?.message ?? e) }
     }
+    this.ports.use(port, 'settings')
+    if (sniff && this.deps.sniffMs > 0) {
+      const dec = new TextDecoder()
+      let got = ''
+      t.onData = (b) => (got += dec.decode(b, { stream: true }))
+      t.onClose = () => {}
+      await new Promise((r) => setTimeout(r, this.deps.sniffMs))
+      if (looksLikeConsole(got)) {
+        this.ports.learn(port, 'console')
+        this.ports.release(port)
+        await t.close().catch(() => {})
+        return { result: 'console' }
+      }
+    }
     const c = new Client(t)
     try {
       await c.start()
       const hello = await c.request<HelloResult>('hello', {}, this.deps.helloTimeoutMs)
       if (hello.daemon !== 'lefthand') throw new Error('not lefthand')
+      this.ports.learn(port, 'settings')
       if (hello.protocol !== PROTOCOL_VERSION) {
         this.say(`プロトコルの版が違います（Brain: ${hello.protocol}、GUI: ${PROTOCOL_VERSION}）。どちらかを更新してください`, 'error')
+        this.ports.release(port)
         await c.close()
         return { result: 'ok' } // 設定用のポートではあった
       }
       c.maxLine = hello.max_line
+      this.settingsPort = port
       this.attach(c, hello)
       await this.syncTime()
       await this.loadFromBrain()
       return { result: 'ok' }
     } catch {
+      this.ports.release(port)
       await c.close().catch(() => {})
       return { result: 'no_answer' }
     }
@@ -298,6 +337,7 @@ export class App {
     c.onStray = (s) => console.debug('lefthand: stray line', s)
     c.onClose = (reason) => {
       if (this.client !== c) return
+      this.releaseSettingsPort()
       this.client = null
       this.hello = null
       this.stopLearning(false)
@@ -331,9 +371,15 @@ export class App {
     }
   }
 
+  private releaseSettingsPort(): void {
+    if (this.settingsPort) this.ports.release(this.settingsPort)
+    this.settingsPort = null
+  }
+
   async disconnect(): Promise<void> {
     this.stopLearning(true)
     const c = this.client
+    this.releaseSettingsPort()
     this.client = null
     this.hello = null
     this.brainStatus = null
@@ -1279,7 +1325,7 @@ export class App {
       h('h2', null, 'はじめに'),
       h('ol', null,
         h('li', null, 'Brain と PC を USB ケーブルでつなぎ、「Brain に接続」を押します。'),
-        h('li', null, 'ポートを選ぶ画面で、Brain（USB 1d6b:0104）のポートを選びます。Brain には 2 つのシリアルがあり、設定用は 2 つ目です（Linux では /dev/ttyACM1）。違うほうを選んだときは、そう表示されます。'),
+        h('li', null, 'ポートを選ぶ画面で、Brain（USB 1d6b:0104）の設定用のポートを選びます。Brain には 2 つのシリアルがあり、設定用は 2 つ目です（Linux では ttyACM1）。1 つ目はコンソール（ログイン画面）用で、ブラウザからは見分けられないので、名前で選んでください。選んだポートは、ページを開いているあいだ覚えています。'),
         h('li', null, 'つながらなくても、「ファイルを開く」で設定ファイル（YAML / JSON）を編集できます。'),
       ),
       this.deps.serial
