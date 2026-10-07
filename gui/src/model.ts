@@ -40,18 +40,18 @@ export const PAD_NUM_FIELDS = ['speed', 'accel', 'scroll_width', 'scroll_step', 
 export const PAD_FIELDS = [...PAD_NUM_FIELDS, 'scroll_direction', 'long_press'] as const
 // トラックパッドの既定値（trackpad.go の defaultPad。gui/test/fixtures/pad-defaults.json で Go と比べる）
 export const PAD_DEFAULTS = {
-  speed: 1.0,
-  accel: 1.0,
-  scroll_width: 72,
+  speed: 1.2,
+  accel: 2.0,
+  scroll_width: 96,
   scroll_direction: 'natural',
   scroll_step: 24,
-  settle_ms: 30,
+  settle_ms: 80,
   smooth: 3,
   deadzone: 1.5,
-  min_pressure: 0,
-  tap_ms: 180,
-  tap_move: 12,
-  drag_ms: 200,
+  min_pressure: 500,
+  tap_ms: 250,
+  tap_move: 8,
+  drag_ms: 300,
   long_press: 'none',
 } as const
 // ウィジェットが押した位置で働く（タップしたときのキーやレイヤーを書けない）

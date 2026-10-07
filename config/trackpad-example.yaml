@@ -275,8 +275,8 @@ layers:
       cols: 4
       rows: 5
       cells:
-        # 左の 3 列ぶんがトラックパッド。右端の 72 ドットがスクロールの帯
-        "0,0": {widget: trackpad, span: [3, 5], label: トラックパッド, speed: 1, accel: 1, scroll_width: 72, scroll_direction: natural}
+        # 左の 3 列ぶんがトラックパッド。右端の 96 ドットがスクロールの帯
+        "0,0": {widget: trackpad, span: [3, 5], label: トラックパッド, speed: 1.2, accel: 2, scroll_width: 96, scroll_direction: natural}
         "3,0": {mouse: left, label: 左}
         "3,1": {mouse: right, label: 右}
         "3,2": {mouse: middle, label: 中}

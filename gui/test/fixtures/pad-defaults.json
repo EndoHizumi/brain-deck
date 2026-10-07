@@ -1,15 +1,15 @@
 {
-  "accel": 1,
+  "accel": 2,
   "deadzone": 1.5,
-  "drag_ms": 200,
+  "drag_ms": 300,
   "long_press": "none",
-  "min_pressure": 0,
+  "min_pressure": 500,
   "scroll_direction": "natural",
   "scroll_step": 24,
-  "scroll_width": 72,
-  "settle_ms": 30,
+  "scroll_width": 96,
+  "settle_ms": 80,
   "smooth": 3,
-  "speed": 1,
-  "tap_move": 12,
-  "tap_ms": 180
+  "speed": 1.2,
+  "tap_move": 8,
+  "tap_ms": 250
 }

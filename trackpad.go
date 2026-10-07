@@ -11,14 +11,17 @@ import (
 // ---------- トラックパッド（widget: trackpad） ----------
 //
 // セルの中で指を動かすとカーソルが動く。短いタップで左クリック、タップしてすぐ触れて動かすとドラッグ、
-// 右端の帯（scroll_width）をなぞると縦のスクロール。長押しの右クリックは、既定では使わない（long_press: right で使う）。
+// 右端の帯（scroll_width）をなぞると縦のスクロール（帯ではタップしてもクリックしない）。
+// 長押しの右クリックは、既定では使わない（long_press: right で使う）。
 //
-// タッチパネル（mxs-lradc-ts）は抵抗膜で、触れた瞬間と離す瞬間に座標が跳ね、止めていても少し揺れる。そのため、
+// タッチパネル（mxs-lradc-ts）は抵抗膜で、サンプルは 26 ms ごと。触れた直後と離す直前は押す強さが弱く、座標が跳ねる。
+// 止めていても少し揺れ、押す強さが変わるにつれて位置がゆっくり流れる。なぞる途中で一瞬離れたことになることもある。そのため、
+//   - 押す強さ（ABS_PRESSURE）が min_pressure より弱いサンプルを捨てる。そういうサンプルしかないタッチは、なかったことにする
 //   - 触れてから settle_ms のあいだのサンプルを捨てる
-//   - 押す強さ（ABS_PRESSURE）が min_pressure より弱いサンプルを捨てる
 //   - 最後の smooth 個のサンプルの平均を使う
-//   - 平均の位置から deadzone ドット以内の揺れは無視する（ヒステリシス。動き始めにも効く）
-//   - 離す直前のサンプルは 1 つ遅らせて使い、離したときに捨てる（離す瞬間の跳ね）
+//   - 平均の位置から deadzone ドット以内の揺れは無視する（ヒステリシス。動き始めにも効く）。その内側のごく遅い流れも送らない（padCreep）
+//   - 離す直前のサンプルは padHoldBack 個遅らせて使い、離したときに捨てる（離す瞬間の跳ね）
+//   - タップでないタッチのあと、padLiftGrace のうちに触れ直せば、同じタッチの続きにする
 // 判定は、時刻を受け取る状態機械（Pad）で行う。実機ではイベントを受け取った時刻を、
 // 記録したタッチの再生（-replay-touch、テスト）では記録した時刻を使うので、同じ結果になる。
 
@@ -41,20 +44,20 @@ type PadParams struct {
 	LongPress   bool          // 長押しで右クリック
 }
 
-// 既定値。2026-10 の実機の記録（testdata/touch）から決めた。docs/config.md にも書く
+// 既定値。2026-10-08 に実機で記録したタッチ（testdata/touch）から決めた。根拠は docs/config.md の「既定値の根拠」
 var defaultPad = PadParams{
-	Speed:       1.0,
-	Accel:       1.0,
-	ScrollWidth: 72,
+	Speed:       1.2,
+	Accel:       2.0,
+	ScrollWidth: 96,
 	Natural:     true,
 	ScrollStep:  24,
-	Settle:      30 * time.Millisecond,
+	Settle:      80 * time.Millisecond,
 	Smooth:      3,
 	Deadzone:    1.5,
-	MinPressure: 0,
-	TapTime:     180 * time.Millisecond,
-	TapMove:     12,
-	DragGap:     200 * time.Millisecond,
+	MinPressure: 500,
+	TapTime:     250 * time.Millisecond,
+	TapMove:     8,
+	DragGap:     300 * time.Millisecond,
 }
 
 const (
@@ -164,32 +167,58 @@ const (
 	padWait            // タップのあと。左ボタンを押したまま、次に触れるのを drag_ms まで待つ
 	padTap2            // タップのあとに触れた。左ボタンを押したまま
 	padDrag            // ドラッグ中（左ボタンを押したまま動かす）
+	padLift            // タップでないタッチで指が離れた。padLiftGrace のあいだに触れ直せば、同じタッチの続きにする
+	padTapUp           // タップで指が離れた。padBounce のあいだに触れ直せば、同じタッチの続き（着地の跳ね）。過ぎたら左ボタンを押して padWait
 )
 
-var padStateNames = [...]string{"idle", "touch", "scroll", "wait", "tap2", "drag"}
+var padStateNames = [...]string{"idle", "touch", "scroll", "wait", "tap2", "drag", "lift", "tapup"}
 
 func (s padState) String() string { return padStateNames[s] }
 
 type fpt struct{ X, Y float64 }
+
+// 細かい調整（設定には出さない。テストで変える）。値の根拠は docs/config.md の「既定値の根拠」
+var (
+	// padLiftGrace：なぞっている途中で、指が一瞬離れたと判定されることがある（帯のスクロールで 28〜204 ms）。
+	// タップでないタッチ（なぞる、スクロール、ドラッグ）のあと、この時間のうちに触れ直せば続きとして扱う。
+	// ドラッグなら左ボタンを離さず、帯ならスクロールのまま。位置は触れ直したところから測り直す（跳ばない）
+	padLiftGrace = 150 * time.Millisecond
+	// padCreep：平均の位置が deadzone の内側にあるあいだ、基準の位置をこの速さ（ドット/秒）まで指に寄せる。
+	// 指を止めていても、押す強さが変わって位置が 2〜3 ドット/秒で流れるので、それより遅い動きを送らない
+	padCreep = 6.0
+	// padHoldBack：離す直前のこの数のサンプルは使わない（遅らせて使い、離したときに捨てる）
+	padHoldBack = 2
+	// padBounce：タップで離れてから、この時間のうちに触れ直したら、着地の跳ね（同じタッチの続き）とみなす。
+	// 左ボタンは、この時間が過ぎてから押す。記録では、跳ねの切れ目は 28〜105 ms、ダブルタップの間は 122〜180 ms
+	padBounce = 110 * time.Millisecond
+	// padResumeSettle：触れ直して続けるときは、settle_ms の代わりにこの時間だけ捨てる（指は動いているので、押し始めの流れより、捨てて失う動きのほうが大きい）
+	padResumeSettle = 30 * time.Millisecond
+)
 
 // Pad はトラックパッドの判定。タッチの goroutine と、タイマーから呼ばれるのでロックで守る。
 type Pad struct {
 	mu  sync.Mutex
 	out padOut
 
-	p      *PadParams
-	cell   image.Rectangle // セルの画面上の範囲（span を含む）
-	tc     *TouchConfig
-	W, H   int
-	active bool // 指が触れている
-	st     padState
+	p       *PadParams
+	cell    image.Rectangle // セルの画面上の範囲（span を含む）
+	tc      *TouchConfig
+	W, H    int
+	active  bool // 指が触れている
+	pending bool // 触れたが、まだ押す強さの足りるサンプルがない（なければ、そのタッチはなかったことにする）
+	st      padState
 
-	tDown    time.Time
+	tDown    time.Time // 触れた時刻（着地の跳ねの続きなら、最初に触れた時刻）
+	tContact time.Time // いちばん最近に触れた時刻（settle はここから測る）
 	waitTill time.Time // padWait の終わり
+	liftTill time.Time // padLift の終わり
+	liftFrom padState  // padLift の前の状態
+	tapUpT   time.Time // padTapUp：タップで離れた時刻
+	resumed  bool      // 一瞬離れたあとの続き（タップにしない）
 	n        int       // 使ったサンプルの数
 	win      []fpt     // 平均を取るサンプル
-	held     *fpt      // 1 つ遅らせているサンプル（離す瞬間の跳ねを捨てる）
-	heldT    time.Time
+	queue    []fpt     // 遅らせているサンプル（離す瞬間の跳ねを捨てる）
+	queueT   []time.Time
 	start    fpt // 最初の平均の位置
 	filt     fpt // ヒステリシスを通した位置
 	lastT    time.Time
@@ -200,7 +229,7 @@ type Pad struct {
 	accW     float64 // スクロールの送り残し（ドット）
 	longDone bool    // 長押しの右クリックを送った
 
-	// 実機では、待ち時間（drag_ms、長押し）が過ぎたらタイマーで Tick を呼ぶ
+	// 実機では、待ち時間（drag_ms、長押し、padLiftGrace）が過ぎたらタイマーで Tick を呼ぶ
 	realtime bool
 	timer    *time.Timer
 	stats    PadStats
@@ -214,6 +243,8 @@ type PadStats struct {
 	Wheel                                                   int // 送ったホイールの合計
 	WheelAbs                                                int
 	Dropped                                                 int // 捨てたサンプル（settle、pressure）
+	Ignored                                                 int // なかったことにしたタッチ（押す強さの足りるサンプルがない）
+	Resumed                                                 int // 一瞬離れたあとに続けたタッチ
 }
 
 // NewPad は判定を作る。realtime なら、待ち時間をタイマーで処理する（実機）。
@@ -234,6 +265,7 @@ func (g *Pad) State() padState {
 }
 
 // Down は、トラックパッドのセルに触れたときに呼ぶ。cell はセルの画面上の範囲、W×H は画面の大きさ。
+// 状態は、押す強さの足りる最初のサンプル（begin）で変える。
 func (g *Pad) Down(p *PadParams, cell image.Rectangle, tc *TouchConfig, W, H int, t time.Time) {
 	if g == nil {
 		return
@@ -244,22 +276,49 @@ func (g *Pad) Down(p *PadParams, cell image.Rectangle, tc *TouchConfig, W, H int
 	switch {
 	case g.st == padWait && p != g.p:
 		g.finishWait() // 別のトラックパッド
-	case g.st == padTap2 || g.st == padDrag:
+	case g.st == padLift && p != g.p:
+		g.finishLift()
+	case g.st == padTapUp && p != g.p:
+		g.finishTapUp(true)
+	case g.st == padTap2 || g.st == padDrag || g.st == padTouch || g.st == padScroll:
 		g.out.Release(padSourceL) // 離したのを受け取れなかった
 		g.st = padIdle
 	}
 	g.p, g.cell, g.tc, g.W, g.H = p, cell, tc, W, H
-	g.active = true
-	g.tDown, g.lastT = t, t
-	g.n, g.win, g.held = 0, g.win[:0], nil
-	g.travel, g.vel, g.accX, g.accY, g.accW = 0, 0, 0, 0, 0
-	g.longDone = false
+	g.active, g.pending = true, true
+	if g.st != padTapUp {
+		g.tDown = t // 跳ねの続きなら、最初に触れた時刻のまま（タップの長さは、最初から測る）
+	}
+	g.tContact = t
+	g.queue, g.queueT = g.queue[:0], g.queueT[:0]
 	g.stats.Touches++
-	if g.st == padWait {
-		g.st = padTap2 // 左ボタンは押したまま
-		g.waitTill = time.Time{}
-	} else {
+}
+
+// begin は、押す強さの足りる最初のサンプル（位置 pt）で、タッチを始める。g.mu を持って呼ぶ。
+// 帯かどうかは、この位置で決める（settle で捨てるサンプルでも。短いタッチを帯の外と取り違えないように）。
+func (g *Pad) begin(pt fpt) {
+	g.pending = false
+	g.n, g.win = 0, g.win[:0]
+	g.lastT = g.tContact
+	g.vel, g.accX, g.accY = 0, 0, 0
+	g.longDone = false
+	switch g.st {
+	case padTapUp:
+		g.st = padTouch // 着地の跳ね。travel は残し、まだタップになりうる
+		g.stats.Resumed++
+	case padWait:
+		g.st, g.waitTill = padTap2, time.Time{} // 左ボタンは押したまま
+		g.travel, g.resumed, g.accW = 0, false, 0
+	case padLift:
+		g.st, g.liftTill = g.liftFrom, time.Time{} // 続き。travel とスクロールの送り残しは残す
+		g.resumed = true
+		g.stats.Resumed++
+	default:
 		g.st = padTouch
+		g.travel, g.resumed, g.accW = 0, false, 0
+		if g.p.ScrollWidth > 0 && pt.X >= float64(g.cell.Max.X-g.p.ScrollWidth) {
+			g.st = padScroll
+		}
 	}
 }
 
@@ -275,15 +334,28 @@ func (g *Pad) Sample(x, y, pressure int32, t time.Time) {
 		return
 	}
 	g.checkLong(t)
-	if t.Sub(g.tDown) < g.p.Settle || (g.p.MinPressure > 0 && pressure < g.p.MinPressure) {
+	if g.p.MinPressure > 0 && pressure < g.p.MinPressure {
 		g.stats.Dropped++
 		return
 	}
 	pt := g.screen(x, y)
-	if g.held != nil {
-		g.use(*g.held, g.heldT)
+	if g.pending {
+		g.begin(pt)
 	}
-	g.held, g.heldT = &pt, t
+	settle := g.p.Settle
+	if g.resumed || g.tContact != g.tDown {
+		settle = min(settle, padResumeSettle)
+	}
+	if t.Sub(g.tContact) < settle {
+		g.stats.Dropped++
+		return
+	}
+	g.queue = append(g.queue, pt)
+	g.queueT = append(g.queueT, t)
+	if len(g.queue) > padHoldBack {
+		g.use(g.queue[0], g.queueT[0])
+		g.queue, g.queueT = g.queue[1:], g.queueT[1:]
+	}
 }
 
 // use は、遅らせていたサンプルを判定に使う。g.mu を持って呼ぶ。
@@ -302,23 +374,26 @@ func (g *Pad) use(pt fpt, t time.Time) {
 	g.n++
 	if g.n == 1 {
 		g.start, g.filt, g.lastT = avg, avg, t
-		if g.st == padTouch && g.p.ScrollWidth > 0 && avg.X >= float64(g.cell.Max.X-g.p.ScrollWidth) {
-			g.st = padScroll
-		}
 		return
 	}
 	g.travel = max(g.travel, math.Hypot(avg.X-g.start.X, avg.Y-g.start.Y))
-	// ヒステリシス：平均の位置が filt から deadzone より離れたぶんだけ、filt を動かす
+	// ヒステリシス：平均の位置が filt から deadzone より離れたぶんだけ、filt を動かす。
+	// 内側なら、filt を padCreep の速さまで寄せる（送らない。止めた指の流れ）
 	dx, dy := avg.X-g.filt.X, avg.Y-g.filt.Y
 	d := math.Hypot(dx, dy)
+	dt := t.Sub(g.lastT).Seconds()
 	var mx, my float64
 	if d > g.p.Deadzone {
 		k := (d - g.p.Deadzone) / d
 		mx, my = dx*k, dy*k
 		g.filt.X += mx
 		g.filt.Y += my
+	} else if d > 0 && dt > 0 {
+		k := min(padCreep*dt, d) / d
+		g.filt.X += dx * k
+		g.filt.Y += dy * k
 	}
-	if dt := t.Sub(g.lastT).Seconds(); dt > 0 {
+	if dt > 0 {
 		v := math.Hypot(mx, my) / dt
 		g.vel = 0.5*g.vel + 0.5*v
 	}
@@ -375,22 +450,26 @@ func (g *Pad) Up(t time.Time) {
 	}
 	g.checkLong(t)
 	g.active = false
-	g.held = nil
-	tap := t.Sub(g.tDown) <= g.p.TapTime && g.travel <= g.p.TapMove && !g.longDone
+	g.queue, g.queueT = g.queue[:0], g.queueT[:0]
+	if g.pending {
+		// 押す強さの足りるサンプルがなかった（離す瞬間の跳ね、ごく軽い接触）。タップの待ちなどはそのまま続ける
+		g.pending = false
+		g.stats.Ignored++
+		return
+	}
+	tap := t.Sub(g.tDown) <= g.p.TapTime && g.travel <= g.p.TapMove && !g.longDone && !g.resumed
 	switch g.st {
-	case padTouch, padScroll:
-		g.st = padIdle
+	case padTouch:
 		if !tap {
+			g.lift(padTouch, t)
 			return
 		}
-		g.stats.Taps++
-		g.out.Press(padSourceL, mouseLeft)
-		if g.p.DragGap > 0 {
-			g.st, g.waitTill = padWait, t.Add(g.p.DragGap)
-			return
+		g.st, g.tapUpT = padTapUp, t
+		if padBounce <= 0 {
+			g.finishTapUp(false)
 		}
-		g.out.Release(padSourceL)
-		g.stats.Clicks++
+	case padScroll:
+		g.lift(padScroll, t) // 帯ではタップしてもクリックしない（なぞる途中の切れ目がタップに見えるため）
 	case padTap2:
 		g.st = padIdle
 		g.out.Release(padSourceL)
@@ -403,12 +482,43 @@ func (g *Pad) Up(t time.Time) {
 			g.stats.Clicks++ // 押したまま止めて離した。1 回のクリック（長いもの）
 		}
 	case padDrag:
-		g.st = padIdle
-		g.out.Release(padSourceL)
+		g.lift(padDrag, t) // ボタンは、触れ直さないまま padLiftGrace が過ぎたら離す
 	}
 }
 
-// Tick は、待ち時間（drag_ms、長押し）を処理する。t は今の時刻。
+// finishTapUp は、タップのあと padBounce が過ぎた（または、ほかに触れた）ので、左ボタンを押す。
+// drag_ms があれば、タップで離れてから drag_ms まで押したまま待つ。now なら、待たずにクリックを終える。g.mu を持って呼ぶ。
+func (g *Pad) finishTapUp(now bool) {
+	g.stats.Taps++
+	g.out.Press(padSourceL, mouseLeft)
+	if g.p.DragGap > 0 && !now {
+		g.st, g.waitTill = padWait, g.tapUpT.Add(max(g.p.DragGap, padBounce))
+		return
+	}
+	g.out.Release(padSourceL)
+	g.st = padIdle
+	g.stats.Clicks++
+}
+
+// lift は、タップでないタッチで指が離れたときに、触れ直すのを待つ。g.mu を持って呼ぶ。
+func (g *Pad) lift(from padState, t time.Time) {
+	g.st, g.liftFrom = padLift, from
+	if padLiftGrace <= 0 {
+		g.finishLift()
+		return
+	}
+	g.liftTill = t.Add(padLiftGrace)
+}
+
+// finishLift は、触れ直さなかったので、タッチを終える（ドラッグならボタンを離す）。g.mu を持って呼ぶ。
+func (g *Pad) finishLift() {
+	if g.liftFrom == padDrag {
+		g.out.Release(padSourceL)
+	}
+	g.st, g.liftTill = padIdle, time.Time{}
+}
+
+// Tick は、待ち時間（drag_ms、長押し、padLiftGrace）を処理する。t は今の時刻。
 func (g *Pad) Tick(t time.Time) {
 	if g == nil {
 		return
@@ -416,6 +526,15 @@ func (g *Pad) Tick(t time.Time) {
 	g.mu.Lock()
 	defer g.arm()
 	defer g.mu.Unlock()
+	if g.st == padWait && !t.Before(g.waitTill) {
+		g.finishWait()
+	}
+	if g.st == padLift && !t.Before(g.liftTill) {
+		g.finishLift()
+	}
+	if g.st == padTapUp && !t.Before(g.tapUpT.Add(padBounce)) {
+		g.finishTapUp(false)
+	}
 	if g.st == padWait && !t.Before(g.waitTill) {
 		g.finishWait()
 	}
@@ -433,7 +552,7 @@ func (g *Pad) finishWait() {
 
 // checkLong は、長押しの右クリックを判定する。g.mu を持って呼ぶ。
 func (g *Pad) checkLong(t time.Time) {
-	if !g.p.LongPress || g.longDone || g.st != padTouch || g.travel > g.p.TapMove || t.Sub(g.tDown) < padLongPress {
+	if !g.p.LongPress || g.longDone || g.pending || g.st != padTouch || g.resumed || g.travel > g.p.TapMove || t.Sub(g.tDown) < padLongPress {
 		return
 	}
 	g.longDone = true
@@ -453,7 +572,11 @@ func (g *Pad) deadline() time.Time {
 	switch {
 	case g.st == padWait:
 		return g.waitTill
-	case g.active && g.p.LongPress && g.st == padTouch && !g.longDone:
+	case g.st == padLift:
+		return g.liftTill
+	case g.st == padTapUp:
+		return g.tapUpT.Add(padBounce)
+	case g.active && !g.pending && g.p.LongPress && g.st == padTouch && !g.resumed && !g.longDone:
 		return g.tDown.Add(padLongPress)
 	}
 	return time.Time{}
@@ -467,8 +590,13 @@ func (g *Pad) Interrupt() {
 	g.mu.Lock()
 	defer g.arm()
 	defer g.mu.Unlock()
-	if g.st == padWait {
+	switch g.st {
+	case padWait:
 		g.finishWait()
+	case padLift:
+		g.finishLift()
+	case padTapUp:
+		g.finishTapUp(true)
 	}
 }
 
@@ -485,7 +613,8 @@ func (g *Pad) Cancel() {
 		g.out.Release(padSourceL)
 		g.out.Release(padSourceR)
 	}
-	g.st, g.active, g.held, g.waitTill = padIdle, false, nil, time.Time{}
+	g.st, g.active, g.pending, g.waitTill, g.liftTill, g.tapUpT = padIdle, false, false, time.Time{}, time.Time{}, time.Time{}
+	g.queue, g.queueT = g.queue[:0], g.queueT[:0]
 }
 
 // arm は、実機のとき、次の待ち時間にタイマーを合わせる。g.mu を離してから呼ぶ（defer の順）。

@@ -667,7 +667,7 @@ describe('マウスとトラックパッド', () => {
     t.change('#widget', 'trackpad')
     expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'trackpad', label: '消しゴム' })
     expect(t.root.querySelector('#tap')).toBeNull()
-    expect(t.$<HTMLInputElement>('#pad-speed').placeholder).toBe('1')
+    expect(t.$<HTMLInputElement>('#pad-speed').placeholder).toBe('1.2')
     t.change('#pad-speed', '2.5')
     t.change('#pad-scroll_width', '0')
     t.change('#pad-scroll_direction', 'traditional')

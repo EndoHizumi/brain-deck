@@ -209,6 +209,7 @@ type TouchSummary struct {
 	MinP, MaxP         int32
 	FirstJump, MaxStep float64 // 最初の 2 サンプルの間の距離、隣り合うサンプルの距離の最大（ドット）
 	InCell             bool
+	Open               bool // 記録の終わりまで離さなかった
 }
 
 // replayTouch は、記録を p の設定のトラックパッドで再生する。
@@ -297,6 +298,13 @@ func replayTouch(rec *TouchRecording, p *PadParams) ReplayResult {
 			}
 		}
 	}
+	if cur != nil { // 記録の終わりまで触れていた
+		if n := len(rec.Events); n > 0 {
+			cur.Dur = rec.Events[n-1].T - cur.Start
+		}
+		cur.Open = true
+		touches = append(touches, *cur)
+	}
 	tick(time.Duration(math.MaxInt64))
 	return ReplayResult{Stats: pad.Stats(), Ops: lg.ops, Touches: touches}
 }
@@ -343,11 +351,11 @@ func printReplay(w io.Writer, path string, rec *TouchRecording, r ReplayResult, 
 	for i, t := range r.Touches {
 		fmt.Fprintf(w, "  touch #%d at %6.3fs: %4d ms, %3d samples, (%5.1f,%5.1f) -> (%5.1f,%5.1f), pressure %d..%d, first step %.1f, max step %.1f%s\n",
 			i+1, t.Start.Seconds(), t.Dur.Milliseconds(), t.Samples, t.X0, t.Y0, t.X1, t.Y1, t.MinP, t.MaxP, t.FirstJump, t.MaxStep,
-			map[bool]string{true: "", false: " (outside the trackpad)"}[t.InCell])
+			map[bool]string{true: "", false: " (outside the trackpad)"}[t.InCell]+map[bool]string{true: " (not released before the end)"}[t.Open])
 	}
 	s := r.Stats
-	fmt.Fprintf(w, "  => taps %d, clicks %d, double clicks %d, drags %d, right clicks %d, move (%d, %d) path (%d, %d), wheel %d (|%d|), dropped samples %d\n",
-		s.Taps, s.Clicks, s.DoubleClicks, s.Drags, s.RightClicks, s.MoveX, s.MoveY, s.PathX, s.PathY, s.Wheel, s.WheelAbs, s.Dropped)
+	fmt.Fprintf(w, "  => taps %d, clicks %d, double clicks %d, drags %d, right clicks %d, move (%d, %d) path (%d, %d), wheel %d (|%d|), dropped samples %d, ignored touches %d, resumed touches %d\n",
+		s.Taps, s.Clicks, s.DoubleClicks, s.Drags, s.RightClicks, s.MoveX, s.MoveY, s.PathX, s.PathY, s.Wheel, s.WheelAbs, s.Dropped, s.Ignored, s.Resumed)
 	if ops {
 		for _, o := range r.Ops {
 			switch o.Kind {
