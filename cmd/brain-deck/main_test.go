@@ -84,6 +84,7 @@ type fakeBrain struct {
 	ignore  int // 最初のこの数の hello に答えない（デーモンの再起動直後を真似る）
 	todo    todoList
 	removed int
+	cals    any // set_calendar で受け取った calendars
 }
 
 func newFakeBrain(t *testing.T) *fakeBrain {
@@ -149,6 +150,11 @@ func (f *fakeBrain) serve(commands []string) {
 			if req["cmd"] == "todo_clear_done" {
 				res = map[string]any{"rev": f.todo.Rev, "items": f.todo.Items, "removed": f.removed}
 			}
+		case "set_calendar":
+			f.cals = req["calendars"]
+			res = map[string]any{"rev": 1, "shown": true}
+		case "get_calendar":
+			res = map[string]any{"rev": 1, "shown": true, "calendars": f.cals}
 		default:
 			res = map[string]any{}
 		}

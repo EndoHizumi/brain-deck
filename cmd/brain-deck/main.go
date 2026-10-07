@@ -25,6 +25,7 @@ const (
 	exitBusy       = 4 // 設定 GUI（ほかのプログラム）が接続中、ほかの brain-deck が終わらない
 	exitBrainError = 5 // Brain がエラーを返した（引数の誤り、古いデーモンなど）
 	exitPermission = 6 // ポートを開く権限がない（Linux の dialout）
+	// exitFetch = 7（calendar.go）：予定の取得に失敗した（取れたカレンダーは送った）
 )
 
 const defaultTimeout = 5 * time.Second
@@ -72,6 +73,11 @@ const usage = `使い方：
   brain-deck todo edit <番号|ID> <文> 項目の文を書き換える
   brain-deck todo rm <番号|ID>...     項目を消す
   brain-deck todo clear-done          完了した項目をまとめて消す
+  brain-deck calendar sync            予定を ICS の URL から取ってきて Brain に送る（~/.config/brain-deck/calendars.yaml）
+  brain-deck calendar sync --ics <URL> [--days 7]   設定ファイルを使わず、URL を直接指定する（何度でも書ける）
+  brain-deck calendar sync --dry-run  取ってきた予定を表示するだけで、Brain には送らない
+  brain-deck calendar [list] [--json] Brain にある予定
+  brain-deck calendar clear           Brain の予定を消す
   brain-deck time sync                PC の時刻を Brain に送る
   brain-deck status                   Brain の状態（版、時刻、レイヤー）
   brain-deck version
@@ -80,12 +86,15 @@ const usage = `使い方：
   --port <パス>      ポートを指定する（例：/dev/serial/by-id/usb-SHARP_Brain_0123456789-if05、/dev/cu.usbmodem01234567895）。
                      環境変数 BRAIN_DECK_PORT でも指定できる。省略すると探す
   --timeout <時間>   全体の時間の上限（既定 5s）
-  --no-time-sync     text の前に、Brain の時刻を合わせない
+  --no-time-sync     text と calendar sync の前に、Brain の時刻を合わせない
+  --config <パス>    calendar sync の設定ファイル（既定 ~/.config/brain-deck/calendars.yaml）
+  --fetch-timeout <時間>  calendar sync で予定を取ってくる時間の上限（既定 30s。--timeout とは別）
   -q, --quiet        成功したときに何も出さない
   -v, --verbose      通信の内容を標準エラーに出す
 
 終了コード：0 成功、1 予期しないエラー、2 使い方の誤り、3 Brain が見つからない・返事がない、
-           4 設定 GUI が接続中（ほかのプログラムがポートを使用中）、5 Brain がエラーを返した、6 ポートを開く権限がない
+           4 設定 GUI が接続中（ほかのプログラムがポートを使用中）、5 Brain がエラーを返した、6 ポートを開く権限がない、
+           7 予定の取得に失敗した（calendar sync。取れたカレンダーは送る）
 `
 
 type options struct {
@@ -97,10 +106,16 @@ type options struct {
 	list       bool
 	noTimeSync bool
 	top        bool // todo add：先頭に足す
-	json       bool // todo list：JSON で出す
-	quiet      bool
-	verbose    bool
-	args       []string
+	json       bool // todo list、calendar list：JSON で出す
+	// calendar sync
+	ics          []string // --ics（何度でも）
+	days         int
+	config       string
+	dryRun       bool
+	fetchTimeout time.Duration
+	quiet        bool
+	verbose      bool
+	args         []string
 }
 
 type usageError string
@@ -110,8 +125,8 @@ func (e usageError) Error() string { return string(e) }
 // parseArgs は、オプションをどこに書いても受け付ける（`text build "x" --style ok` も `--style ok text build "x"` も）。
 // `--` のあとは、すべてふつうの引数にする（`-` で始まるテキストを渡すとき）。
 func parseArgs(argv []string) (*options, error) {
-	o := &options{timeout: defaultTimeout, port: os.Getenv("BRAIN_DECK_PORT")}
-	withValue := map[string]bool{"port": true, "timeout": true, "style": true, "ttl": true}
+	o := &options{timeout: defaultTimeout, port: os.Getenv("BRAIN_DECK_PORT"), fetchTimeout: defaultFetchTimeout}
+	withValue := map[string]bool{"port": true, "timeout": true, "style": true, "ttl": true, "ics": true, "days": true, "config": true, "fetch-timeout": true}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--" {
@@ -151,6 +166,22 @@ func parseArgs(argv []string) (*options, error) {
 			o.list = true
 		case "no-time-sync":
 			o.noTimeSync = true
+		case "ics":
+			o.ics = append(o.ics, val)
+		case "days":
+			o.days, err = strconv.Atoi(val)
+			if err == nil && (o.days < 1 || o.days > maxCalDays) {
+				err = fmt.Errorf("must be 1..%d", maxCalDays)
+			}
+		case "config":
+			o.config = val
+		case "fetch-timeout":
+			o.fetchTimeout, err = time.ParseDuration(val)
+			if err == nil && o.fetchTimeout <= 0 {
+				err = errors.New("must be positive")
+			}
+		case "dry-run":
+			o.dryRun = true
 		case "top":
 			o.top = true
 		case "json":
@@ -206,8 +237,12 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	hint := "（使い方は brain-deck --help）"
-	if (o.top || o.json) && o.args[0] != "todo" {
-		fmt.Fprintln(stderr, "brain-deck: --top と --json は todo で使います"+hint)
+	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && o.args[0] == "calendar") {
+		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo と calendar で使います"+hint)
+		return exitUsage
+	}
+	if o.args[0] != "calendar" && (len(o.ics) > 0 || o.days != 0 || o.config != "" || o.dryRun) {
+		fmt.Fprintln(stderr, "brain-deck: --ics、--days、--config、--dry-run は calendar sync で使います"+hint)
 		return exitUsage
 	}
 	var cmd func(*Client) (string, error)
@@ -219,6 +254,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = textCommand(o, stdin)
 	case "todo":
 		cmd, err = todoCommand(o, stdin)
+	case "calendar":
+		return runCalendar(o, stdout, stderr)
 	case "time":
 		if len(o.args) != 2 || o.args[1] != "sync" {
 			err = usageError("time のあとには sync を書きます（brain-deck time sync）")
