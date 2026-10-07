@@ -56,7 +56,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 
 - `protocol` はこの文書の版。互換性のない変更をしたら上げる。GUI は違えば使わない。
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
-- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
+- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
 
 ### get_config
@@ -256,6 +256,65 @@ Brain のシステムの時刻を合わせる。Brain には RTC がないので
 | `texts` | Brain にあるすべてのテキスト。形は `set_text` の `entry` と同じ。`expired` は、今の時刻で期限が切れているか |
 | `ids` | 今の設定で、テキストのセルに使われている id（名前の順） |
 
+### Todo（get_todo、todo_add、todo_update、todo_delete、todo_move、todo_clear_done）
+
+Todo のセル（`{ widget: todo }`）の項目を読み書きする。項目は `/var/lib/lefthand/todo.json` に置き、Brain のデータを正とする。
+
+```json
+→ {"id":20,"cmd":"get_todo"}
+← {"id":20,"ok":true,"result":{"rev":12,"shown":true,"items":[
+   {"id":"t9","text":"急ぎ：Brain の電池を充電","done":false,"rev":9,"created_at":"2026-10-07T00:32:13Z","updated_at":"2026-10-07T00:32:13Z","source":"brain-deck"},
+   {"id":"t2","text":"PR #42 のレビュー","done":true,"rev":10,"created_at":"...","updated_at":"...","done_at":"2026-10-07T00:32:14Z","source":"brain"}]}}
+→ {"id":21,"cmd":"todo_add","text":"牛乳を買う","index":0,"source":"gui"}
+← {"id":21,"ok":true,"result":{"item":{"id":"t10",...},"rev":13,"items":[...],"shown":true}}
+→ {"id":22,"cmd":"todo_update","item":"t10","rev":13,"done":true,"source":"gui"}
+→ {"id":23,"cmd":"todo_update","item":"t10","rev":14,"text":"牛乳と卵を買う"}
+→ {"id":24,"cmd":"todo_move","item":"t10","rev":15,"index":2}
+→ {"id":25,"cmd":"todo_delete","item":"t10","rev":15}
+→ {"id":26,"cmd":"todo_clear_done"}
+← {"id":26,"ok":true,"result":{"removed":1,"rev":17,"items":[...]}}
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `items` | 並べた順（GUI で並べ替えた順）。完了したものも混ざっている。Brain の画面と brain-deck の番号は、未完了を並べた順のあとに完了を並べた順 |
+| `id` | 項目の ID（`t` と数）。消した ID は使い回さない |
+| `rev`（一覧） | 一覧が変わるたびに 1 増える |
+| `rev`（項目） | その項目を最後に変えたときの、一覧の `rev` |
+| `source` | 最後に変えた側（`gui`、`brain-deck`、Brain で長押ししたときは `brain`） |
+| `shown` | 今の設定に Todo のセルがあるか（get_todo、todo_add） |
+
+| コマンド | 引数 | 内容 |
+| --- | --- | --- |
+| `get_todo` | なし | 一覧を返す |
+| `todo_add` | `text`（必須）、`index`（省略すると最後） | 足す。`index` は `items` の中の位置 |
+| `todo_update` | `item`（必須）、`rev`、`text`、`done` | 文か完了を変える（どちらか 1 つは必須） |
+| `todo_delete` | `item`（必須）、`rev` | 消す |
+| `todo_move` | `item`、`index`（必須）、`rev` | `items` の中で、ほかの項目をよけたあとの `index` の位置に移す |
+| `todo_clear_done` | なし | 完了した項目をすべて消す。`removed` は消した数 |
+
+- **返事**：どれも、変えたあとの一覧（`rev`、`items`）を返す。`todo_add` と `todo_update` は、変えた項目（`item`）も返す。
+- **同時の編集**：`rev` を付けると、その項目の今の `rev` と違うとき（送った側が読んだあとに、Brain での長押しなどで変わったとき）は `conflict` を返し、何も変えない。ない ID は `not_found`。GUI と brain-deck は、読んだときの `rev` を付けて送る。
+- **文**：前後の空白を除き、改行とタブは空白にする。空と、200 文字を超えるものは `bad_request`。
+- **保存**：返事は、`todo.json` の書き込み（SD カード）を待たない。続けて変えたときは、まとめて書く。
+- **数**：上限はない。
+
+### subscribe_data
+
+```json
+→ {"id":27,"cmd":"subscribe_data","enable":true}
+← {"id":27,"ok":true,"result":{"subscribed":true,"events":["todo"]}}
+```
+
+Brain のデータが変わったことを、通知で知らせる。今は Todo だけ。設定 GUI は接続したときに購読し、Brain で長押しして切り替えたことを、すぐ一覧に反映する。
+
+```json
+{"event":"todo","rev":14,"items":[...]}
+```
+
+- **いつ届くか**：一覧が変わるたび（どこから変えても。自分のリクエストで変えたときも届く）。続けて変わったときは、最後の一覧だけが届くことがある。返事の前後どちらにも届きうるので、受け取る側は `rev` が今持っているものより小さければ捨てる。
+- **終わり**：`enable: false`、またはポートの開き直し。`subscribe_input` とは別で、学習モードを終えても購読は続く。
+
 ## エラーの種類
 
 | code | 意味 |
@@ -268,6 +327,8 @@ Brain のシステムの時刻を合わせる。Brain には RTC がないので
 | `invalid_config` | 設定の誤り。`problems` に場所付きで入る。何も変えていない |
 | `apply_failed` | 保存したが反映に失敗し、ファイルも動作も前の設定に戻した |
 | `internal_error` | そのほか（ファイルを書けないなど）。何も変えていないか、前の設定に戻せなかったことを message に書く |
+| `not_found` | Todo：その ID の項目がない |
+| `conflict` | Todo：項目が、送った `rev` のあとに変わった。何も変えていない |
 
 brain-deck は、エラーの種類によって終了コードを変える（README の「終了コード」）。
 

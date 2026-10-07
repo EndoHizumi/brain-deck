@@ -233,7 +233,7 @@ touch:
 
 ### ウィジェットとセルの大きさ
 
-タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）とテキスト（`text`）。
+タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）。
 また、どのセルも `span: [列数, 行数]` で、右と下のセルにまたがる大きさにできる。
 
 ```yaml
@@ -243,6 +243,7 @@ cells:
   "3,0": { widget: clock, tz: America/Los_Angeles, label: LA, key: LGUI+SPACE }  # タップでキーを送る
   "0,2": { key: ENTER, span: [3, 1], label: "決定" }              # 横に 3 つぶんのキー
   "2,1": { widget: text, id: build, label: "ビルド" }             # テキスト。中身は PC から brain-deck で書き換える
+  "0,0": { widget: todo, span: [2, 3], label: Todo }              # Todo の一覧（別のレイヤーの例）
 ```
 
 - **書式**：`format`（時刻、既定 `15:04`）と `date_format`（日付、既定 `1月2日({wday})`、`none` で出さない）は Go の書き方。`{wday}` は日本語の曜日。詳しくは [docs/config.md](docs/config.md) の「ウィジェット」。
@@ -250,7 +251,8 @@ cells:
 - **描き直し**：時計は 1 分に 1 回（秒を出すときだけ 1 秒に 1 回）、変わったセルだけを描き直す。実機で、秒つきの時計 1 つの描き直しは約 4 ms。
 - **時刻を合わせていないとき**：時刻を橙色で描き、日付の代わりに「時刻未設定」と出す（[時刻合わせ](#時刻合わせ)）。
 - **テキスト**：中身は設定ファイルではなく Brain のデータ（`/var/lib/lefthand/text.json`）で、PC の [brain-deck](#brain-deckpc-のコマンド) から書き換える。色は通常・成功・失敗・警告の 4 種類。有効期限を過ぎると、消さずに薄く表示する。一度も書いていない id は「未設定」と出る。長い文は折り返し、入りきらなければ「…」で切る。
-- **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」レイヤーを足したもの。
+- **Todo**：項目は Brain のデータ（`/var/lib/lefthand/todo.json`）で、設定 GUI の「Todo」タブか [brain-deck todo](#todo) で書き換える。未完了の下に、完了した項目を薄く（取り消し線で）並べる。Brain では、**項目を 0.5 秒押し続けると完了を切り替える**（押しているあいだ、その行が黄色になる）。入りきらないときは、セルの下の帯の **▲ ▼ をタップしてページを送る**（画面右の帯の ▲▼ はレイヤーの切り替えに使っているため、別にした）。`rows: 3` で 1 ページの行数を決められる。Todo のセルには `key` や `layer_*` は書けない。
+- **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」と「Todo」のレイヤーを足したもの。
 
 ### データの置き場所（/var/lib/lefthand）
 
@@ -260,11 +262,14 @@ cells:
 | --- | --- |
 | clock.json | 最後に時刻を合わせた記録（起動ごとの ID、時刻、ずれ、送った側） |
 | text.json | テキストのタイルの中身（id ごとに、テキスト、色、書いた時刻、有効期限、送った側）。64 個まで覚え、超えたら古いものから捨てる |
+| todo.json | Todo の項目（ID、文、完了、更新番号、時刻、変えた側）。数の上限はない |
 
 - **書き込み**：一時ファイルに書いて rename する。SD カードへの書き込みは数秒かかることがあるので、通信の返事は書き込みを待たずに返す。続けて書き換えたときは、まとめて 1 回書く。
 - **消すとき**：`brain-deck text <id> --clear`。全部消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/text.json`。
 
-Todo とカレンダーのデータも、ここに置く予定。
+- **Todo を全部消すとき**：GUI の「Todo」タブか `brain-deck todo rm`。ファイルごと消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/todo.json`。
+
+カレンダーのデータも、ここに置く予定。
 
 ### 今のレイヤーの表示
 
@@ -344,7 +349,8 @@ ModemManager が動いている PC では、つないだ直後の数秒、ModemM
 9. **保存**：「Brain に保存…」で、変更点の一覧が出る。確かめて「保存して反映する」を押すと、Brain が検証してから保存し、すぐに反映する。押しているキーはいったん離れる。誤りがあるあいだは保存できない。
 10. **ファイル**：「YAML で書き出す」「JSON で書き出す」で、編集中の設定を PC に保存する。「ファイルを開く」で読み込む。読み込んだだけでは Brain は変わらない。Brain につないでいなくても、ファイルの編集はできる（検証は Brain につないだときに行う）。
 
-- **ウィジェット**：セルを選び、種類を「ウィジェット（時計、テキスト）」にすると、時計の書式とタイムゾーン、テキストの id、見出し、タップしたときの動きを選べる。テキストは、接続したときに Brain から読んだ中身でプレビューに出る（GUI の接続中は brain-deck が書けないので、中身は変わらない）。プレビューは PC の今の時刻で描き、時刻が変わるたびに描き直す（Brain のタイムゾーンが PC と違うと、`tz` を書いていない時計の表示は Brain と違う）。
+- **Todo**：上の「Todo」タブで、項目を足す（Enter。Shift+Enter か「先頭に追加」で先頭に）、チェックで完了を切り替える、文を書き換える（Enter か欄を離れたとき）、↑↓ で並べ替える（未完了と完了の境はまたがない）、削除、完了した項目をまとめて消す。変更はすぐ Brain に書く（「Brain に保存」は要らない）。Brain で長押しして切り替えると、通知ですぐ反映する。Brain で変わったあとの古い一覧のまま書き換えようとすると、書き換えずに読み直す。
+- **ウィジェット**：セルを選び、種類を「ウィジェット（時計、テキスト、Todo）」にすると、時計の書式とタイムゾーン、テキストの id、見出し、タップしたときの動きを選べる。テキストは、接続したときに Brain から読んだ中身でプレビューに出る（GUI の接続中は brain-deck が書けないので、中身は変わらない）。プレビューは PC の今の時刻で描き、時刻が変わるたびに描き直す（Brain のタイムゾーンが PC と違うと、`tz` を書いていない時計の表示は Brain と違う）。
 - **セルの大きさ**：セルを選び、「大きさ」の列と行を変える。広げた範囲に、このレイヤーのセルがあれば、消してよいか聞く。
 - **時刻**：接続するたびに、PC の時刻を Brain に送って合わせる。ずれていたときと、Brain のタイムゾーンが PC と違うときは、そのことを出す。
 - **GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`display`（`press_style` を除く）は、デーモンを再起動しないと変えられないので、GUI からの保存では変えられない（変えると誤りになる）。ファイルを直接編集して、サービスを再起動する。
@@ -359,6 +365,9 @@ brain-deck text build "ビルド成功" --style ok --ttl 10m   # テキストの
 brain-deck text build --clear                              # 消す（「未設定」に戻す）
 printf "複数行も\n書ける" | brain-deck text note -          # 標準入力から読む
 brain-deck text --list                                     # Brain にあるテキストの一覧
+brain-deck todo add "牛乳を買う"                           # Todo を足す
+brain-deck todo                                            # Todo の一覧（番号は Brain の画面と同じ順）
+brain-deck todo done 2                                     # 2 番を完了にする
 brain-deck time sync                                       # PC の時刻を Brain に送る
 brain-deck status                                          # 版、レイヤー、Brain の時刻
 ```
@@ -388,6 +397,34 @@ GOOS=darwin GOARCH=arm64 go build -o brain-deck ./cmd/brain-deck   # Apple シ�
 - **時刻**：有効期限を正しくするため、Brain の時刻がずれていれば（合わせていない、または 2 秒以上違う）、書く前に PC の時刻に合わせる。`--no-time-sync` で合わせない。時刻を合わせる前に書いたテキストは、あとで時刻を合わせたときに、期限も同じだけずらす（書いてから `--ttl` の時間で切れる）。
 - **書き換えの速さ**：コマンド全体で 40〜100 ms、Brain での描き直しは 1 セル 5〜20 ms（実機）。続けて何度も書いたときは、SD カードへの保存と重なって 100 ms を超えることがあった。入力の処理は待たせない。
 
+### Todo
+
+```sh
+brain-deck todo add "牛乳を買う"            # 最後に足す
+brain-deck todo add "急ぎの用事" --top      # 先頭に足す
+grep -h "TODO" src/*.go | brain-deck todo add -   # 標準入力の 1 行ごとに足す
+brain-deck todo                            # 一覧（todo list と同じ）
+brain-deck todo list --json                # JSON で（スクリプト用。ID と rev も出る）
+brain-deck todo done 2 3                   # 2 番と 3 番を完了にする
+brain-deck todo undo 5                     # 未完了に戻す
+brain-deck todo edit 1 "牛乳と卵を買う"     # 文を書き換える
+brain-deck todo rm 4                       # 消す
+brain-deck todo clear-done                 # 完了した項目をまとめて消す
+```
+
+```
+$ brain-deck todo
+  1 [ ] 急ぎ：Brain の電池を充電
+  2 [ ] 牛乳を買う
+  3 [x] PR #42 のレビュー
+未完了 2 件、完了 1 件
+```
+
+- **番号**：Brain の画面と同じ順（未完了を並べた順に、そのあとに完了）で 1 から数える。完了にすると下に移るので、番号は変わる。番号の代わりに ID（`t12` など、`--json` で分かる）も使える。
+- **同時の編集**：番号で選んだ項目は、読んだときの更新番号を付けて書き換える。そのあいだに Brain で長押しして変わっていたら、書き換えずに終了コード 5 で終わる（「brain-deck todo list で確かめてから、もう一度」）。
+- **並べ替え**：コマンドではできない。設定 GUI の「Todo」タブで行う。
+- **速さ**：実機で、1 回のコマンドは 30〜60 ms。Brain の画面は 10〜30 ms で描き直す。
+
 ### 終了コード
 
 | コード | 意味 | 例 |
@@ -397,7 +434,7 @@ GOOS=darwin GOARCH=arm64 go build -o brain-deck ./cmd/brain-deck   # Apple シ�
 | 2 | 使い方の誤り | 知らないコマンド、`--ttl` の書き方 |
 | 3 | Brain が見つからない、返事がない | ケーブルが抜けている、lefthand.service が止まっている |
 | 4 | 設定 GUI が接続中（ほかのプログラムがポートを使っている） | 「設定 GUI が接続中です（chromium (pid 1234) が … を開いています）」。ほかの brain-deck が 5 秒以内に終わらないときも |
-| 5 | Brain がエラーを返した | `--style` の誤り、古い lefthand（`set_text` がない） |
+| 5 | Brain がエラーを返した | `--style` の誤り、古い lefthand（`set_text` がない）、Todo を読んだあとに Brain で変わった |
 | 6 | ポートを開く権限がない | Linux で dialout に入っていない |
 
 - **待つ時間**：全体で 5 秒（`--timeout` で変える）。Brain が見つからない、GUI が接続中のときは、すぐに終わる。ビルドのスクリプトから呼んでも止まらない。
@@ -626,6 +663,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
 | control.go | 設定 GUI とのシリアル通信（/dev/ttyGS1） |
 | widget.go | ウィジェット（時計、テキスト）の書式、折り返し、描き直しの間隔、描画 |
+| todo.go | Todo の項目（get_todo、todo_* のコマンドの中身）と、その保存、変わったことの通知 |
+| todowidget.go | Todo のセルの配置、描画、ページ送り、長押しでの切り替え |
 | text.go | テキストのタイルの中身（set_text、get_text）と、その保存 |
 | timesync.go | 時刻合わせ（set_time）と、合わせたかどうかの判断 |
 | store.go | データの置き場所（/var/lib/lefthand）の読み書き |
@@ -643,7 +682,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | install.sh | Brain 上での配置 |
 | config.yaml | 設定の例。実機と同じ値 |
 | config/current.yaml | Brain で動いている本番の設定の写し（2026-10-06 に退避） |
-| config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」レイヤーを足したもの） |
+| config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
 | docs/kernel-build.md | HID と ACM を有効にしたカーネルのビルドと、SD カードへの差し替え |
@@ -679,10 +718,17 @@ X=gui/test/fixtures/texts.json
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-texts.png -render-layer info -render-time $T -render-texts $X $C
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-texts-pressed.png -render-layer info -render-time $T -render-texts $X -render-pressed "2,1 3,1" $C
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/widgets-texts-pressed-fill.png -render-layer info -render-time $T -render-texts $X -render-press-style fill -render-pressed "2,1 3,1" $C
+# Todo。項目は gui/test/fixtures/todo.json（11 件。2 ページ目に完了した項目）。todo-empty.png は項目が 0 件の todo.json で書く
+D=gui/test/fixtures/todo.json
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/todo.png -render-layer todo -render-time $T -render-texts $X -render-todo $D $C
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/todo-page2.png -render-layer todo -render-todo-page 2 -render-time $T -render-texts $X -render-todo $D $C
+echo '{"rev":0,"next_id":1,"items":[]}' > /tmp/empty.json
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/todo-empty.png -render-layer todo -render-time $T -render-texts $X -render-todo /tmp/empty.json $C
 ```
 
 時計の書式は、GUI（`gui/src/clock.ts`）でも Go と同じ結果になるよう作り直している。Go の結果の表（`gui/test/fixtures/goformat.json`）と比べるので、書式の処理を変えたら `LEFTHAND_UPDATE_GOFORMAT=1 go test -run GoFormatTable` で書き直す。
 テキストの折り返し（`gui/src/textwidget.ts`）も同じく、Go の結果の表（`gui/test/fixtures/textlayout.json`）と比べる。折り返し方を変えたら `LEFTHAND_UPDATE_TEXTLAYOUT=1 go test -run TextLayoutTable` で書き直す。
+Todo の配置と「…」での省略（`gui/src/todowidget.ts`）も、Go の表（`gui/test/fixtures/todolayout.json`）と比べる。変えたら `LEFTHAND_UPDATE_TODOLAYOUT=1 go test -run TodoLayoutTable`。
 
 brain-deck のテストは、PTY を Brain の代わりにして、ポートの排他、開き直し、終了コードを確かめる（Linux だけ）。macOS 向けは `GOOS=darwin go vet ./cmd/brain-deck` でビルドできることだけを確かめている。
 
@@ -705,6 +751,8 @@ scp lefthand.test config.yaml brain:lefthand/
 ssh brain 'sudo systemctl stop lefthand.service; cd ~/lefthand && sudo LEFTHAND_HW_TEST=1 timeout 60 ./lefthand.test -test.run HW -test.v; sudo systemctl start lefthand.service'
 ```
 
+`TestHWTodo` は、Todo のセルの行と ▼ を（エンジンを通して）押し、長押しの黄色、完了の切り替え、ページ送りの描き直しの時間をログに出し、フレームバッファが全体を描き直したものと同じことを確かめる。
+
 ### コマンドラインのオプション
 
 ```
@@ -724,6 +772,8 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-time 2026-10-06T09:41:00+09:00  時計に出す時刻（省略すると今）
          -render-unsynced                    時刻を合わせていないときの時計を描く
          -render-texts texts.json            テキストのタイルの中身（text.json と同じ形）
+         -render-todo todo.json              Todo のセルの項目（todo.json と同じ形）
+         -render-todo-page 2                 Todo のセルに出すページ（1 から）
 ```
 
 ## フォントとライセンス
