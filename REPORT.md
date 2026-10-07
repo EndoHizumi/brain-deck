@@ -6,6 +6,40 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：本番の設定にダッシュボード（2026-10-07）
+
+本番の設定（`/etc/lefthand/config.yaml`）に、時計、テキスト、Todo、カレンダーを並べた「ダッシュボード」のレイヤーを足し、反映した。
+
+### 配置（4 × 3）
+
+| 位置 | セル |
+| --- | --- |
+| 上の段の左 | テキストのタイル `build`（ビルド）、`deploy`（デプロイ） |
+| 上の段の右 | 時計（2 × 1、日付と曜日つき） |
+| 下の段の左 | Todo（2 × 2） |
+| 下の段の右 | カレンダー（2 × 2、`calendars` を書かず全部） |
+
+- **案から変えたこと**：時計とテキストのタイルを左右で入れ替えた。右上にはレイヤーの札（「ダッシュボード」）が出て、右上のセルの見出し（「デプロイ」）に重なったため。時計には見出しがなく、時刻は中央にあるので、札と重ならない。
+- **押しやすさ**：右の列の右端 43 ドットは画面右の帯のソフトキー（8 つとも割り当てあり）。予定の ▼ は x 650〜757 の範囲が押せる（帯の外）。
+
+### 切り替え
+
+- **ソフトキー**：帯の 8 つは、base ですべて使っていた（操作機能はメニューの切替、戻るは Cmd）。既存の割り当ては変えない約束なので、ソフトキーは使わず、**メニューの空いていたセル 2,1** に「ダッシュボード」（`layer_to: dashboard`）を置いた。操作機能 → ダッシュボードの 2 回で入る。
+- **戻り方**：HOME（`layer_to: base`、ダッシュボードには soft_keys がないので透過する）か、操作機能 → 基本。エンジンで、メニュー → ダッシュボード（重なりは base と dashboard）→ HOME で base、操作機能 → 基本で base を確かめた。
+- **base との違い**：`-dump-json` でそろえて比べ、足した項目（dashboard のレイヤーとメニューのセル 2,1）だけだった。
+
+### 確認と反映
+
+- **`-render-png`**：テスト用のデータ（テキスト、Todo 11 件、予定）、空のデータと時刻未設定、Brain のデータ（読むだけ）の 3 通りで描き、見出し、時刻、日付、予定と Todo の行、ページの帯が収まっていた。
+- **検証**：PC と Brain の `lefthand -check` が通った。
+- **反映**：前の版を `/etc/lefthand/config.yaml.before-dashboard` に残し、配置して lefthand.service を再起動した。起動のログに dashboard のレイヤーが出て、`brain-deck status` が答えた。
+- **元に戻す**：`ssh brain 'sudo cp /etc/lefthand/config.yaml.before-dashboard /etc/lefthand/config.yaml && sudo systemctl restart lefthand.service'`
+- **作業前のサービス**：15:27 に止められ、そのあと `-data-dir /tmp/lh-try widgets-cal.yaml` を 180 秒手動で起動した記録があり、起動し直されないまま止まっていた。今回の再起動で動いている。
+
+### PC の定期実行
+
+`contrib/systemd/` に `brain-deck-calendar.service` と `.timer` を置いた（配置と有効化はユーザーが行う）。README の例の `OnUnitActiveSec` と `Persistent=true` は組み合わせても効かない（Persistent は OnCalendar だけ）ので、`OnCalendar=*:0/15` にし、README も直した。
+
 ## 追記：カレンダー（2026-10-07、フェーズ 4）
 
 カレンダーのセル（`widget: calendar`）と、PC で ICS の予定を取ってきて送る `brain-deck calendar sync` を作った。
