@@ -1,6 +1,7 @@
 package main
 
 import (
+	"image"
 	"os"
 	"testing"
 	"time"
@@ -153,4 +154,126 @@ func itoa(n int) string {
 		return string(rune('0' + n))
 	}
 	return itoa(n/10) + string(rune('0'+n%10))
+}
+
+// TestHWTodo は、Todo のセルを実機の画面で押す。長押しの黄色、完了の切り替え、ページ送りの描き直しの時間を測り、
+// 画面（フレームバッファ）が、同じ状態で全体を描いたものと同じになることを確かめる。
+//
+//	sudo LEFTHAND_HW_TEST=1 timeout 60 ./lefthand.test -test.run HWTodo -test.v
+func TestHWTodo(t *testing.T) {
+	if os.Getenv("LEFTHAND_HW_TEST") == "" {
+		t.Skip("set LEFTHAND_HW_TEST=1 on the device")
+	}
+	verbose = true
+	cfg, km := compileText(t, todoConfig)
+	ts := NewTodoService(OpenStore(t.TempDir()))
+	for _, s := range []string{"牛乳を買う", "PR #42 のレビュー", "brain-deck の README を書き直す（cron の例と、終了コードの表も）", "歯医者の予約",
+		"ゴミ出し", "SD カードを交換する", "請求書を送る", "カーネルの設定の差分を見直す", "傘を返す", "Brain の電池を充電"} {
+		ts.Add(s, -1, time.Now(), "test")
+	}
+	e := NewEngine(km, &State{hid: NewHIDWriter(os.DevNull), active: map[string]Combo{}})
+	rt := NewWidgetRT(ts)
+	e.SetWidgets(rt)
+	env := func() WidgetEnv { return WidgetEnv{Now: time.Now(), TimeSynced: true, Todo: ts.Snapshot()} }
+	l := buildLayout(km, e.View())
+	d, err := StartDisplay(cfg.Display, l, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	ts.SetOnChange(d.Poke)
+	rt.SetScreen(l.W, l.H, d.Poke)
+	w := km.Layers[0].Grid.Cells[cellPos{0, 0}].Widget
+
+	// waitKey は、セル 0,0 が、今の状態で描き直されるまで待ち、かかった時間を返す
+	waitKey := func(what string, t0 time.Time) time.Duration {
+		t.Helper()
+		for time.Since(t0) < 2*time.Second {
+			want := todoKey(w, env())
+			d.drawMu.Lock()
+			ok := d.wkeys[0] == want
+			d.drawMu.Unlock()
+			if ok {
+				return time.Since(t0)
+			}
+			time.Sleep(500 * time.Microsecond)
+		}
+		t.Fatalf("%s: not redrawn", what)
+		return 0
+	}
+	same := func(what string) {
+		t.Helper()
+		time.Sleep(200 * time.Millisecond) // DRM の遅延書き込みを待つ
+		cv := d.cv
+		ref := NewCanvas(cv.pw, cv.ph, cv.stride, cv.pf, cv.rot)
+		d.drawMu.Lock()
+		rl := *d.layout
+		rl.Env = env()
+		drawAll(ref, &rl, d.drawn)
+		diffCV, diffFB := 0, 0
+		for y := 0; y < cv.ph; y++ {
+			n := cv.pw * cv.pf.Bpp
+			a := ref.pix[y*cv.stride : y*cv.stride+n]
+			b := cv.pix[y*cv.stride : y*cv.stride+n]
+			f := d.fb.mem[d.fb.base+y*d.fb.Info.LineLength : d.fb.base+y*d.fb.Info.LineLength+n]
+			for i := range a {
+				if a[i] != b[i] {
+					diffCV++
+				}
+				if a[i] != f[i] {
+					diffFB++
+				}
+			}
+		}
+		d.drawMu.Unlock()
+		os.WriteFile("/tmp/lefthand-fb-todo-"+what+".raw", d.fb.mem[:d.fb.Info.LineLength*d.fb.Info.YRes], 0o644)
+		if diffCV != 0 || diffFB != 0 {
+			t.Errorf("%s: %d bytes differ from a full redraw (%d on the framebuffer)", what, diffCV, diffFB)
+		}
+	}
+	pt := func(r image.Rectangle) (int32, int32) { return int32(r.Min.X + r.Dx()/2), int32(r.Min.Y + r.Dy()/2) }
+	geom := func() todoGeom {
+		return todoGeometry(todoArea(cellRect(0, 0, 2, 3, 4, 3, l.W, l.H), "Todo"), len(ts.Snapshot().Items), 0)
+	}
+	same("idle")
+
+	for n := 0; n < 5; n++ {
+		g := geom()
+		x, y := pt(g.rows[1])
+		t0 := time.Now()
+		h := e.PressTouch(x, y)
+		if el := time.Since(t0); el > 5*time.Millisecond {
+			t.Errorf("PressTouch blocked for %v", el)
+		}
+		if !h.Own {
+			t.Fatalf("hit = %+v", h)
+		}
+		t.Logf("held: yellow row drawn in %v", waitKey("held", t0))
+		if n == 0 {
+			same("held")
+		}
+		t1 := time.Now().Add(todoHold)
+		time.Sleep(todoHold + 20*time.Millisecond)
+		t.Logf("toggled: redrawn %v after the 0.5 s", waitKey("toggled", t1))
+		e.Release("t")
+		if n == 0 {
+			same("toggled")
+		}
+	}
+	g := geom()
+	x, y := pt(g.down)
+	t0 := time.Now()
+	e.PressTouch(x, y)
+	t.Logf("▼: page 2 drawn in %v", waitKey("page", t0))
+	e.Release("t")
+	waitKey("page released", time.Now())
+	same("page2")
+	if page, _, _ := w.todo.view(); page != 1 {
+		t.Errorf("page = %d", page)
+	}
+	// PC から書き換えたとき（todo_add と同じ）
+	t0 = time.Now()
+	ts.Add("PC から足した項目", 0, time.Now(), "test")
+	t.Logf("added from the PC: redrawn in %v", waitKey("added", t0))
+	same("added")
 }
