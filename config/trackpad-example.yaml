@@ -1,0 +1,285 @@
+# config/trackpad-example.yaml
+# トラックパッド（widget: trackpad）と、マウスのボタンのセルの使い方の例。
+# config/current.yaml に「マウス」のレイヤーを足し、メニューを 5 列にして「マウス」を置いたもの。
+# メニュー →「マウス」で入り、「基本」で戻る。本体のキーは base のまま（文字を打ちながら使える）。
+# 書き方は docs/config.md の「トラックパッド」と「マウスの操作」を参照。
+# トラックパッドの値（speed など）を書かなければ、既定値を使う。ここでは主な項目を既定値のまま書いてある
+hid_device: /dev/hidg0
+keyboard: brain-kbd-i2c
+touch:
+  device: mxs-lradc-ts
+  min_x: 226
+  max_x: 3938
+  min_y: 3803
+  max_y: 384
+  soft_areas:
+    back: {x: [3740, 4095], "y": [812, 1239]}
+    down: {x: [3740, 4095], "y": [2522, 2948]}
+    enter: {x: [3740, 4095], "y": [1240, 1666]}
+    home: {x: [3740, 4095], "y": [3377, 4095]}
+    left: {x: [3740, 4095], "y": [1667, 2094]}
+    menu: {x: [3740, 4095], "y": [0, 811]}
+    right: {x: [3740, 4095], "y": [2095, 2521]}
+    up: {x: [3740, 4095], "y": [2949, 3376]}
+layers:
+  - name: base
+    label: 基本
+    keys:
+      KEY_0: "0"
+      KEY_1: "1"
+      KEY_2: "2"
+      KEY_3: "3"
+      KEY_4: "4"
+      KEY_5: "5"
+      KEY_6: "6"
+      KEY_7: "7"
+      KEY_8: "8"
+      KEY_9: "9"
+      KEY_A: A
+      KEY_APOSTROPHE: APOSTROPHE
+      KEY_B: B
+      KEY_BACKSLASH: BACKSLASH
+      KEY_BACKSPACE: BACKSPACE
+      KEY_C: C
+      KEY_COMMA: COMMA
+      KEY_D: D
+      KEY_DELETE: DELETE
+      KEY_DOT: DOT
+      KEY_DOWN: DOWN
+      KEY_E: E
+      KEY_ENTER: ENTER
+      KEY_EQUAL: EQUAL
+      KEY_ESC: ESC
+      KEY_F: F
+      KEY_G: G
+      KEY_GRAVE: GRAVE
+      KEY_H: H
+      KEY_I: I
+      KEY_INSERT: INSERT
+      KEY_J: J
+      KEY_K: K
+      KEY_L: L
+      KEY_LEFT: LEFT
+      KEY_LEFTALT: LALT
+      KEY_LEFTBRACE: LEFTBRACE
+      KEY_LEFTCTRL: LCTRL
+      KEY_LEFTSHIFT: LSHIFT
+      KEY_M: M
+      KEY_MINUS: MINUS
+      KEY_N: "N"
+      KEY_O: O
+      KEY_P: P
+      KEY_PAGEDOWN: PAGEDOWN
+      KEY_PAGEUP: PAGEUP
+      KEY_Q: Q
+      KEY_R: R
+      KEY_RIGHT: RIGHT
+      KEY_RIGHTBRACE: RIGHTBRACE
+      KEY_S: S
+      KEY_SEMICOLON: SEMICOLON
+      KEY_SLASH: SLASH
+      KEY_SPACE: SPACE
+      KEY_T: T
+      KEY_TAB: TAB
+      KEY_U: U
+      KEY_UP: UP
+      KEY_V: V
+      KEY_W: W
+      KEY_X: X
+      KEY_Y: "Y"
+      KEY_Z: Z
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LGUI+S, label: 保存}
+        "0,1": {key: LGUI+C, label: コピー}
+        "0,2": {layer_toggle: menu, label: メニュー}
+        "1,0": {key: LGUI+Z, label: 取り消し}
+        "1,1": {key: LGUI+V, label: 貼り付け}
+        "1,2": {key: LGUI, label: "Cmd\n押す間"}
+        "2,0": {key: LGUI+LSHIFT+Z, label: やり直し}
+        "2,1": {key: LGUI+X, label: 切り取り}
+        "2,2": {key: LGUI+TAB, label: "アプリ\n切替"}
+        "3,0": {key: LGUI+F, label: 検索}
+        "3,1": {key: LGUI+A, label: 全選択}
+        "3,2": {key: LGUI+SPACE, label: Spotlight}
+    soft_keys:
+      back: LGUI
+      down: {layer_toggle: browser}
+      enter: {layer_toggle: symbol}
+      home: {layer_to: base}
+      left: {layer_toggle: move}
+      menu: {layer_toggle: menu}
+      right: {layer_toggle: debug}
+      up: {layer_toggle: code}
+  - name: menu
+    label: メニュー
+    touch:
+      cols: 5
+      rows: 2
+      cells:
+        "0,0": {layer_to: code, label: コード}
+        "0,1": {layer_to: symbol, label: 記号}
+        "1,0": {layer_to: browser, label: ブラウザ}
+        "1,1": {layer_to: window, label: ウィンドウ}
+        "2,0": {layer_to: debug, label: デバッグ}
+        "2,1": {layer_to: dashboard, label: "ダッシュ\nボード"}
+        "3,0": {layer_to: move, label: 移動}
+        "3,1": {layer_to: base, label: 基本}
+        "4,0": {layer_to: mouse, label: マウス}
+  - name: code
+    label: コード
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LGUI+LSHIFT+P, label: "コマンド\nパレット"}
+        "0,1": {key: F12, label: 定義へ}
+        "0,2": {key: LSHIFT+LALT+F, label: 整形}
+        "1,0": {key: LGUI+P, label: "ファイル\nを開く"}
+        "1,1": {key: LSHIFT+F12, label: 参照}
+        "1,2": {key: LGUI+SLASH, label: コメント}
+        "2,0": {key: LGUI+LSHIFT+F, label: "全体を\n検索"}
+        "2,1": {key: LCTRL+MINUS, label: "前の\n位置へ"}
+        "2,2": {key: LGUI+D, label: "次の一致\nも選択"}
+        "3,0": {key: LGUI+B, label: "サイド\nバー"}
+        "3,1": {key: F2, label: "名前の\n変更"}
+        "3,2": {key: LGUI+DOT, label: "クイック\n修正"}
+  - name: browser
+    label: ブラウザ
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LGUI+LALT+I, label: "開発\nツール"}
+        "0,1": {key: LGUI+R, label: "再読み\n込み"}
+        "0,2": {key: LCTRL+LSHIFT+TAB, label: "前の\nタブ"}
+        "1,0": {key: LGUI+LSHIFT+C, label: "要素を\n選択"}
+        "1,1": {key: LGUI+LSHIFT+R, label: "強制\n再読込"}
+        "1,2": {key: LCTRL+TAB, label: "次の\nタブ"}
+        "2,0": {key: LGUI+LALT+K, label: "コン\nソール"}
+        "2,1": {key: LGUI+L, label: "アドレス\nバー"}
+        "2,2": {key: LGUI+EQUAL, label: 拡大}
+        "3,0": {key: LGUI+LALT+M, label: "レスポン\nシブ"}
+        "3,1": {key: LGUI+LSHIFT+T, label: "閉じた\nタブ"}
+        "3,2": {key: LGUI+MINUS, label: 縮小}
+  - name: debug
+    label: デバッグ
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: F5, label: "開始\n続行"}
+        "0,1": {key: F9, label: "ブレーク\nポイント"}
+        "0,2": {key: F8, label: "FF\n再開"}
+        "1,0": {key: F10, label: "ステップ\nオーバー"}
+        "1,1": {key: LSHIFT+F5, label: 停止}
+        "1,2": {key: LGUI+B, label: "FF\nブレーク"}
+        "2,0": {key: F11, label: "ステップ\nイン"}
+        "2,1": {key: LGUI+LSHIFT+F5, label: 再起動}
+        "2,2": {key: LGUI+LSHIFT+B, label: "FF条件付\nブレーク"}
+        "3,0": {key: LSHIFT+F11, label: "ステップ\nアウト"}
+        "3,1": {key: LGUI+LSHIFT+D, label: "実行と\nデバッグ"}
+        "3,2": {key: LGUI+LALT+Z, label: "FF\nデバッガ"}
+  - name: move
+    label: 移動
+    keys:
+      KEY_A: LGUI+LEFT
+      KEY_B: LALT+LEFT
+      KEY_D: PAGEDOWN
+      KEY_E: LGUI+RIGHT
+      KEY_H: LEFT
+      KEY_I: LGUI+UP
+      KEY_J: DOWN
+      KEY_K: UP
+      KEY_L: RIGHT
+      KEY_M: LGUI+DOWN
+      KEY_U: PAGEUP
+      KEY_W: LALT+RIGHT
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LALT+LEFT, label: "単語←\n(B)"}
+        "0,1": {key: LEFT, label: "←\n(H)"}
+        "0,2": {key: LGUI+LEFT, label: "行頭\n(A)"}
+        "1,0": {key: UP, label: "↑\n(K)"}
+        "1,1": {key: DOWN, label: "↓\n(J)"}
+        "1,2": {key: PAGEUP, label: "PgUp\n(U)"}
+        "2,0": {key: LALT+RIGHT, label: "単語→\n(W)"}
+        "2,1": {key: RIGHT, label: "→\n(L)"}
+        "2,2": {key: PAGEDOWN, label: "PgDn\n(D)"}
+        "3,0": {key: LGUI+UP, label: "先頭\n(I)"}
+        "3,1": {key: LGUI+DOWN, label: "末尾\n(M)"}
+        "3,2": {key: LGUI+RIGHT, label: "行末\n(E)"}
+  - name: symbol
+    label: 記号
+    touch:
+      cols: 5
+      rows: 4
+      cells:
+        "0,0": {key: LSHIFT+9, label: (}
+        "0,1": {key: LSHIFT+DOT, label: '>'}
+        "0,2": {key: LSHIFT+1, label: '!'}
+        "0,3": {key: LSHIFT+6, label: ^}
+        "1,0": {key: LSHIFT+0, label: )}
+        "1,1": {key: LSHIFT+APOSTROPHE, label: '"'}
+        "1,2": {key: LSHIFT+2, label: '@'}
+        "1,3": {key: LSHIFT+7, label: '&'}
+        "2,0": {key: LSHIFT+LEFTBRACE, label: '{'}
+        "2,1": {key: LSHIFT+SEMICOLON, label: ':'}
+        "2,2": {key: LSHIFT+3, label: '#'}
+        "2,3": {key: LSHIFT+8, label: '*'}
+        "3,0": {key: LSHIFT+RIGHTBRACE, label: '}'}
+        "3,1": {key: LSHIFT+BACKSLASH, label: '|'}
+        "3,2": {key: LSHIFT+4, label: $}
+        "3,3": {key: LSHIFT+EQUAL, label: +}
+        "4,0": {key: LSHIFT+COMMA, label: <}
+        "4,1": {key: LSHIFT+MINUS, label: _}
+        "4,2": {key: LSHIFT+5, label: '%'}
+        "4,3": {key: LSHIFT+SLASH, label: '?'}
+  - name: window
+    label: ウィンドウ
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LGUI+TAB, label: "アプリ\n切替"}
+        "0,1": {key: LCTRL+LEFT, label: "左の\nスペース"}
+        "0,2": {key: LGUI+M, label: しまう}
+        "1,0": {key: LGUI+GRAVE, label: "同じアプリ\nの次"}
+        "1,1": {key: LCTRL+RIGHT, label: "右の\nスペース"}
+        "1,2": {key: LGUI+H, label: 隠す}
+        "2,0": {key: LCTRL+UP, label: "Mission\nControl"}
+        "2,1": {key: LCTRL+LGUI+F, label: "フル\nスクリーン"}
+        "2,2": {key: LGUI+W, label: 閉じる}
+        "3,0": {key: LCTRL+DOWN, label: "アプリの\nウィンドウ"}
+        "3,1": {key: LGUI+LSHIFT+5, label: "スクリーン\nショット"}
+        "3,2": {key: LGUI+SPACE, label: Spotlight}
+  - name: dashboard
+    label: ダッシュボード
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {widget: text, id: build, label: ビルド}
+        "1,0": {widget: text, id: deploy, label: デプロイ}
+        "2,0": {widget: clock, span: [2, 1]}
+        "0,1": {widget: todo, span: [2, 2], label: Todo}
+        "2,1": {widget: calendar, span: [2, 2], label: 予定}
+  - name: mouse
+    label: マウス
+    touch:
+      cols: 4
+      rows: 4
+      cells:
+        # 左の 3 列ぶんがトラックパッド。右端の 72 ドットがスクロールの帯
+        "0,0": {widget: trackpad, span: [3, 4], label: トラックパッド, speed: 1, accel: 1, scroll_width: 72, scroll_direction: natural}
+        "3,0": {mouse: left, label: 左}
+        "3,1": {mouse: right, label: 右}
+        "3,2": {mouse: middle, label: 中}
+        "3,3": {layer_to: base, label: 基本}
+display:
+  enabled: true
+  device: /dev/fb0
