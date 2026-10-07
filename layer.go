@@ -25,10 +25,13 @@ type View struct {
 	Cells      []*Action // row*Cols+col。割り当ての左上のセルにだけ入る。nil は割り当てなし
 	// Anchor は、セルを覆う割り当ての左上のセルの番号（row*Cols+col）。覆うものがなければ -1。
 	// span のないセルでは自分自身を指す
-	Anchor   []int
-	Soft     map[string]*Action
-	km       *Keymap // この View を作った割り当て（設定を差し替えると変わる）
-	stackKey string
+	Anchor []int
+	Soft   map[string]*Action
+	// Wallpaper は格子に敷く壁紙の id。格子を作ったレイヤーから下へ、セルと同じく透過する範囲で、
+	// いちばん上にある touch.background
+	Wallpaper string
+	km        *Keymap // この View を作った割り当て（設定を差し替えると変わる）
+	stackKey  string
 }
 
 // at は、セル (col, row) を覆う割り当てと、その左上のセルを返す。
@@ -73,6 +76,9 @@ func (km *Keymap) view(stack []int) *View {
 			anchors = map[cellPos]*Action{}
 		} else if g.Cols != v.Cols || g.Rows != v.Rows {
 			break
+		}
+		if v.Wallpaper == "" {
+			v.Wallpaper = g.Background
 		}
 		var claim []int
 		for p, a := range g.Cells {

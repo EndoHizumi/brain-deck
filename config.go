@@ -67,6 +67,8 @@ type GridConfig struct {
 	Cols  int                   `yaml:"cols,omitempty" json:"cols,omitempty"`
 	Rows  int                   `yaml:"rows,omitempty" json:"rows,omitempty"`
 	Cells map[string]ActionSpec `yaml:"cells,omitempty" json:"cells,omitempty"` // "列,行"
+	// Background は格子全体に敷く壁紙（背景画像の id）。セルの background があれば、そちらを上に描く
+	Background string `yaml:"background,omitempty" json:"background,omitempty"`
 }
 
 // ActionSpec はキー・セル・ソフトキー 1 つの割り当て。
@@ -84,6 +86,8 @@ type ActionSpec struct {
 	LayerTo      string `yaml:"layer_to,omitempty" json:"layer_to,omitempty"`
 	Label        string `yaml:"label,omitempty" json:"label,omitempty"`
 	Span         Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
+	// Background はセルの背景画像の id（/var/lib/lefthand/images/<id>.565）。タッチのセルだけ
+	Background string `yaml:"background,omitempty" json:"background,omitempty"`
 
 	// ウィジェット（タッチのセルだけ）。項目の意味は widget.go と docs/config.md
 	Widget     string   `yaml:"widget,omitempty" json:"widget,omitempty"`
@@ -115,7 +119,7 @@ func (s Span) MarshalYAML() (any, error) {
 var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
-	"page_reset": true, "stale": true, "calendars": true,
+	"page_reset": true, "stale": true, "calendars": true, "background": true,
 }
 
 func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
@@ -129,7 +133,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, background)", k.Line, k.Value)
 			}
 		}
 	}
@@ -146,7 +150,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 // MarshalYAML は、手で読み書きしやすい形で書き出す。
 // キーだけなら `LCTRL+Z`、それ以外は 1 行のフロー形式 `{ key: B, label: ブラシ }` にする。
 func (a ActionSpec) MarshalYAML() (any, error) {
-	if a.Key != "" && a.count() == 1 && a.Label == "" && a.Widget == "" && a.Span.IsZero() {
+	if a.Key != "" && a.count() == 1 && a.Label == "" && a.Widget == "" && a.Span.IsZero() && a.Background == "" {
 		return a.Key, nil
 	}
 	type plain ActionSpec
@@ -360,6 +364,7 @@ type cellPos struct{ Col, Row int }
 type Grid struct {
 	Cols, Rows int
 	Cells      map[cellPos]*Action
+	Background string // 壁紙の id。空ならなし
 }
 
 type Layer struct {
@@ -444,8 +449,11 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	action := func(path, where string, self int, s ActionSpec, cell bool) *Action {
 		a := &Action{Spec: s, SpanW: 1, SpanH: 1}
 		target := ""
-		if !cell && (s.Widget != "" || !s.Span.IsZero()) {
-			fail(path, "%s: widget and span can be used only in touch cells", where)
+		if !cell && (s.Widget != "" || !s.Span.IsZero() || s.Background != "") {
+			fail(path, "%s: widget, span and background can be used only in touch cells", where)
+		}
+		if s.Background != "" && !validImageID(s.Background) {
+			fail(path, "%s: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got %q", where, s.Background)
 		}
 		if s.Widget != "" || s.hasWidgetFields() {
 			w, err := compileWidget(s)
@@ -519,7 +527,10 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			if cfg.Touch == nil {
 				fail("/touch", "layer %q has touch, but the touch section (device and calibration) is missing", lc.Name)
 			}
-			g := &Grid{Cols: lc.Touch.Cols, Rows: lc.Touch.Rows, Cells: map[cellPos]*Action{}}
+			g := &Grid{Cols: lc.Touch.Cols, Rows: lc.Touch.Rows, Cells: map[cellPos]*Action{}, Background: lc.Touch.Background}
+			if g.Background != "" && !validImageID(g.Background) {
+				fail(tp+"/background", "layer %q touch background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got %q", lc.Name, g.Background)
+			}
 			if (g.Cols == 0) != (g.Rows == 0) {
 				fail(tp, "layer %q touch: write both cols and rows, or neither", lc.Name)
 			}

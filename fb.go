@@ -187,6 +187,8 @@ type Canvas struct {
 	stride, rot int
 	pf          PixelFormat
 	pix         []byte
+	// halo が nil でなければ、text は文字の周り 1 ドットをこの色で縁取る（背景画像の上の文字）
+	halo *RGB
 }
 
 func NewCanvas(pw, ph, stride int, pf PixelFormat, rot int) *Canvas {
@@ -259,7 +261,17 @@ func (cv *Canvas) frame(r image.Rectangle, t int, c RGB) {
 }
 
 // text は (x, y) を左上として、scale 倍で文字列を描く。範囲外ははみ出さない。
+// cv.halo があれば、先に文字列全体の縁取り（文字の点を上下左右と斜めに 1 ドット広げたもの）を描き、
+// その上に文字を描く。縁取りも clip の中だけに描く。gui/src/preview.ts の Pixels.text と同じ。
 func (cv *Canvas) text(x, y int, s string, scale int, c RGB, clip image.Rectangle) {
+	if cv.halo != nil {
+		cv.glyphs(x, y, s, scale, *cv.halo, clip, 1)
+	}
+	cv.glyphs(x, y, s, scale, c, clip, 0)
+}
+
+// glyphs は文字の点を、grow ドット広げて描く。
+func (cv *Canvas) glyphs(x, y int, s string, scale int, c RGB, clip image.Rectangle, grow int) {
 	for _, r := range s {
 		w, rows := font.glyphOrBox(r)
 		for gy, bits := range rows {
@@ -270,11 +282,42 @@ func (cv *Canvas) text(x, y int, s string, scale int, c RGB, clip image.Rectangl
 				if bits&(0x80>>gx) == 0 {
 					continue
 				}
-				px := image.Rect(x+gx*scale, y+gy*scale, x+(gx+1)*scale, y+(gy+1)*scale)
+				px := image.Rect(x+gx*scale-grow, y+gy*scale-grow, x+(gx+1)*scale+grow, y+(gy+1)*scale+grow)
 				cv.fill(px.Intersect(clip), c)
 			}
 		}
 		x += w * scale
+	}
+}
+
+// blitImage は、dst に置いた画像 img のうち、clip に入る部分を写す。
+// 裏画面が RGB565 で回転していなければ、行ごとにそのまま写す（Brain の画面）。
+func (cv *Canvas) blitImage(img *Image, dst, clip image.Rectangle) {
+	r := dst.Intersect(clip).Intersect(image.Rect(0, 0, cv.W, cv.H))
+	if r.Empty() {
+		return
+	}
+	if cv.rot == 0 && cv.pf == rgb565 {
+		n := r.Dx() * 2
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			src := ((y-dst.Min.Y)*img.W + (r.Min.X - dst.Min.X)) * 2
+			copy(cv.pix[y*cv.stride+r.Min.X*2:], img.Pix[src:src+n])
+		}
+		return
+	}
+	bpp := cv.pf.Bpp
+	px := make([]byte, bpp)
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			o := ((y-dst.Min.Y)*img.W + (x - dst.Min.X)) * 2
+			c := rgb565.unpack(uint32(img.Pix[o]) | uint32(img.Pix[o+1])<<8)
+			v := cv.pf.pack(RGB{c.R, c.G, c.B})
+			for i := range px {
+				px[i] = byte(v >> (8 * i))
+			}
+			X, Y := cv.phys(x, y)
+			copy(cv.pix[Y*cv.stride+X*bpp:], px)
+		}
 	}
 }
 

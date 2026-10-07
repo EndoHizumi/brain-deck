@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,9 @@ const (
 	errInternal   = "internal_error"  //
 	errNotFound   = "not_found"       // todo：その ID の項目がない
 	errConflict   = "conflict"        // todo：項目が、送った rev のあとに変わった
+	errQuota      = "quota_exceeded"  // 画像：合計の上限を超える
+	errNoSpace    = "no_space"        // 画像：SD カードの空きが足りない
+	errHash       = "hash_mismatch"   // 画像：受け取った中身の SHA-256 が違う。何も残していない
 )
 
 // 通知の種類（event）
@@ -131,6 +135,18 @@ type request struct {
 	Calendars json.RawMessage `json:"calendars,omitempty"`
 	From      string          `json:"from,omitempty"`
 	Days      int             `json:"days,omitempty"`
+	// 背景画像（image_*、get_image、prune_images）
+	SHA256 string   `json:"sha256,omitempty"` // image_begin：ファイル全体の SHA-256（16 進）
+	Bytes  int64    `json:"bytes,omitempty"`  // image_begin：ファイルの大きさ
+	W      int      `json:"w,omitempty"`      // image_begin：幅
+	H      int      `json:"h,omitempty"`      // image_begin：高さ
+	Upload string   `json:"upload,omitempty"` // image_chunk、image_end、image_abort：image_begin が返した名前
+	Offset *int64   `json:"offset,omitempty"` // image_chunk、get_image：ファイルの中の位置
+	Data   string   `json:"data,omitempty"`   // image_chunk：中身（base64）
+	Image  string   `json:"image,omitempty"`  // get_image：画像の id
+	Length int      `json:"length,omitempty"` // get_image：読む大きさ
+	DryRun bool     `json:"dry_run,omitempty"`
+	Keep   []string `json:"keep,omitempty"` // prune_images：今の設定のほかに残す id（GUI で編集中の設定が使うもの）
 }
 
 type response struct {
@@ -324,6 +340,7 @@ type Controller struct {
 	texts   *TextService
 	todos   *TodoService
 	cals    *CalendarService
+	images  *ImageStore
 	started time.Time
 }
 
@@ -352,7 +369,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"max_line": maxLineBytes, "config_path": c.store.path,
 			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
-				"set_calendar", "get_calendar"},
+				"set_calendar", "get_calendar",
+				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images"},
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -361,13 +379,15 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		if err != nil {
 			return errResp(id, errBadRequest, err.Error(), nil)
 		}
-		cfg, _, warns, err := c.store.Validate(raw)
-		res := map[string]any{"valid": err == nil, "errors": Problems{}, "warnings": nonNil(warns)}
+		cfg, km, warns, err := c.store.Validate(raw)
+		res := map[string]any{"valid": err == nil, "errors": Problems{}}
 		if err != nil {
 			res["errors"] = asProblems(err)
 		} else {
 			res["config"] = cfg // 旧形式や YAML を、layers の形にそろえたもの
+			warns = append(warns, c.imageWarnings(cfg, km)...)
 		}
+		res["warnings"] = nonNil(warns)
 		return ok(res)
 	case "set_config":
 		if req.Text != nil {
@@ -381,6 +401,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		var p Problems
 		switch {
 		case err == nil:
+			warns = append(warns, c.imageWarnings(c.store.Current(), c.store.Keymap())...)
 			return ok(map[string]any{"saved": c.store.path, "previous": c.store.path + ".prev",
 				"warnings": nonNil(warns), "status": c.engine.Status()})
 		case errors.As(err, &p):
@@ -426,6 +447,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.setCalendar(id, req)
 	case "get_calendar":
 		return ok(calendarJSON(c.cals.Snapshot(), calendarShown(c.store.Current())))
+	case "list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images":
+		return c.image(id, req)
 	case "subscribe_data":
 		on := req.Enable == nil || *req.Enable
 		if on {
@@ -590,6 +613,98 @@ func (c *Controller) todo(id json.RawMessage, req request) response {
 	return response{ID: id, OK: true, Result: res}
 }
 
+// imageWarnings は、設定の背景画像のうち、Brain にない・大きさが合わないものの警告。
+func (c *Controller) imageWarnings(cfg *Config, km *Keymap) []string {
+	if c.images == nil || km == nil {
+		return nil
+	}
+	w, h := screenSize(cfg)
+	var out []string
+	for _, p := range imageProblems(km, c.images, w, h) {
+		out = append(out, p.Message)
+	}
+	return out
+}
+
+// image は背景画像のコマンドを処理する。
+func (c *Controller) image(id json.RawMessage, req request) response {
+	if c.images == nil {
+		return errResp(id, errInternal, "background images are not available", nil)
+	}
+	ok := func(v any) response { return response{ID: id, OK: true, Result: v} }
+	var (
+		res any
+		err error
+	)
+	switch req.Cmd {
+	case "list_images":
+		res, err = c.images.List(imageRefs(c.store.Current()))
+	case "image_begin":
+		src := req.Source
+		if src == "" {
+			src = "unknown"
+		}
+		res, err = c.images.Begin(ImageBegin{SHA256: req.SHA256, Bytes: req.Bytes, W: req.W, H: req.H, Name: req.Name, Source: src}, time.Now())
+	case "image_chunk":
+		if req.Offset == nil || req.Data == "" {
+			return errResp(id, errBadRequest, `"upload", "offset" and "data" (base64) are required`, nil)
+		}
+		b, derr := base64.StdEncoding.DecodeString(req.Data)
+		if derr != nil {
+			c.images.Abort(req.Upload)
+			return errResp(id, errBadRequest, "data is not valid base64: "+derr.Error()+" (the upload was discarded)", nil)
+		}
+		var got int64
+		got, err = c.images.Chunk(req.Upload, *req.Offset, b)
+		res = map[string]any{"received": got}
+	case "image_end":
+		var iid string
+		iid, err = c.images.End(req.Upload)
+		res = map[string]any{"id": iid}
+	case "image_abort":
+		res = map[string]any{"aborted": c.images.Abort(req.Upload)}
+	case "get_image":
+		var off int64
+		if req.Offset != nil {
+			off = *req.Offset
+		}
+		data, total, sum, rerr := c.images.Read(req.Image, off, req.Length)
+		err = rerr
+		res = map[string]any{"image": req.Image, "offset": off, "bytes": total, "sha256": sum,
+			"data": base64.StdEncoding.EncodeToString(data)}
+	case "prune_images":
+		keep := map[string]bool{}
+		for i := range imageRefs(c.store.Current()) {
+			keep[i] = true
+		}
+		for _, k := range req.Keep {
+			keep[k] = true
+		}
+		removed, freed, perr := c.images.Prune(keep, req.DryRun)
+		err = perr
+		res = map[string]any{"removed": removed, "freed_bytes": freed, "dry_run": req.DryRun}
+		if perr == nil && !req.DryRun && len(removed) > 0 {
+			vlogf("control: prune_images removed %d images (%d bytes)", len(removed), freed)
+		}
+	}
+	switch {
+	case err == nil:
+		return ok(res)
+	case errors.Is(err, errImageBad), errors.Is(err, errImageUpload):
+		return errResp(id, errBadRequest, err.Error(), nil)
+	case errors.Is(err, errImageNotFound):
+		return errResp(id, errNotFound, err.Error(), nil)
+	case errors.Is(err, errImageQuota):
+		return errResp(id, errQuota, err.Error(), nil)
+	case errors.Is(err, errImageNoSpace):
+		return errResp(id, errNoSpace, err.Error(), nil)
+	case errors.Is(err, errImageHash):
+		return errResp(id, errHash, err.Error(), nil)
+	default:
+		return errResp(id, errInternal, err.Error(), nil)
+	}
+}
+
 // todoShown は、設定のどこかに Todo のセルがあるか。
 func todoShown(cfg *Config) bool {
 	for _, l := range cfg.Layers {
@@ -636,6 +751,9 @@ func errResp(id json.RawMessage, code, msg string, p Problems) response {
 func (c *Controller) Serve(rw io.ReadWriter) error {
 	events := make(chan []byte, eventQueueLen)
 	defer c.monitor.unsubscribeIf(events)
+	if c.images != nil {
+		defer c.images.Abort("") // 接続が切れたら、受け取りの途中の画像を残さない
+	}
 
 	out := make(chan []byte, 16)
 	writeErr := make(chan error, 1)

@@ -30,7 +30,7 @@ func TestHWDisplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := buildLayout(km, km.view([]int{0}))
-	d, err := StartDisplay(cfg.Display, l, nil)
+	d, err := StartDisplay(cfg.Display, l, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,9 @@ layers:
 	cs := NewCalendarService(OpenStore(t.TempDir()))
 	now := time.Now()
 	at := func(d time.Duration) *time.Time { x := now.Add(d).Truncate(time.Second); return &x }
-	ev := func(title string, a, b time.Duration) CalEvent { return CalEvent{Title: title, Start: at(a), End: at(b)} }
+	ev := func(title string, a, b time.Duration) CalEvent {
+		return CalEvent{Title: title, Start: at(a), End: at(b)}
+	}
 	// 6 秒後に始まって 9 秒後に終わる予定で、時刻での描き直しを確かめる（日付の変わり目の近くでは、今日に収まらないことがある）
 	work := []CalEvent{ev("朝会", -3*time.Hour, -150*time.Minute), ev("すぐ始まる会議", 6*time.Second, 9*time.Second),
 		ev("設計レビュー", -10*time.Minute, 50*time.Minute), ev("1on1", 2*time.Hour, 150*time.Minute), {Title: "社内イベント", Day: now.Format(calDayLayout)}}
@@ -240,7 +242,7 @@ layers:
 	env := func() WidgetEnv { return WidgetEnv{Now: time.Now(), TimeSynced: true, Calendar: cs.Snapshot()} }
 	rt.SetEnv(env)
 	l := buildLayout(km, e.View())
-	d, err := StartDisplay(cfg.Display, l, env)
+	d, err := StartDisplay(cfg.Display, l, env, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +328,7 @@ func TestHWTodo(t *testing.T) {
 	e.SetWidgets(rt)
 	env := func() WidgetEnv { return WidgetEnv{Now: time.Now(), TimeSynced: true, Todo: ts.Snapshot()} }
 	l := buildLayout(km, e.View())
-	d, err := StartDisplay(cfg.Display, l, env)
+	d, err := StartDisplay(cfg.Display, l, env, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

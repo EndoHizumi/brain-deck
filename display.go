@@ -25,6 +25,12 @@ type CellView struct {
 	SpanW, SpanH int
 	Covered      bool       // 左上以外の、span のセルに覆われた位置。描かない
 	Widget       *WidgetDef // ウィジェットのセル
+	Background   string     // セルの背景画像の id。空ならなし
+}
+
+// ImageSource は背景画像を返す（*ImageStore）。ない画像は nil。
+type ImageSource interface {
+	Image(id string) *Image
 }
 
 // cellSpan は、セル i の画面上の範囲 [lo, hi) を返す。
@@ -43,6 +49,60 @@ type Layout struct {
 	Mode       LayerMode
 	Press      string    // 押したときの見せ方。pressFill 以外は枠を光らせる
 	Env        WidgetEnv // ウィジェットを描くときの状態。描く側が描く前に入れる
+	Wallpaper  string    // 格子全体に敷く壁紙の id。空ならなし
+	// Images は背景画像の読み込み先。描く側が描く前に入れる。nil なら背景画像を描かない
+	Images ImageSource
+}
+
+// image は id の背景画像を返す。id が空、画像がないときは nil。
+func (l *Layout) image(id string) *Image {
+	if id == "" || l.Images == nil {
+		return nil
+	}
+	return l.Images.Image(id)
+}
+
+// placed は、画面に置いた画像。
+type placed struct {
+	img *Image
+	dst image.Rectangle
+}
+
+// centered は、画像を area の中央に置く。大きさが合わなければ、はみ出す分は切れ、足りない分は下の色が見える。
+// gui/src/preview.ts の centered と同じ（負の数の割り算は 0 に向けて切り捨てる）。
+func centered(img *Image, area image.Rectangle) placed {
+	if img == nil {
+		return placed{}
+	}
+	x := area.Min.X + (area.Dx()-img.W)/2
+	y := area.Min.Y + (area.Dy()-img.H)/2
+	return placed{img, image.Rect(x, y, x+img.W, y+img.H)}
+}
+
+// paintBack は r を、base の色の上に imgs を順に重ねた背景で塗る。
+// 後の画像が r を覆いきるときは、その下は描かない。
+func paintBack(cv *Canvas, r image.Rectangle, base RGB, imgs ...placed) {
+	first := 0
+	for i, p := range imgs {
+		if p.img != nil && r.In(p.dst) {
+			first = i
+		}
+	}
+	if first == 0 && (imgs[0].img == nil || !r.In(imgs[0].dst)) {
+		cv.fill(r, base)
+	}
+	for _, p := range imgs[first:] {
+		if p.img != nil {
+			cv.blitImage(p.img, p.dst, r)
+		}
+	}
+}
+
+// cellBack は、セル v の箱の中の背景（壁紙、その上にセルの背景画像）と、画像があるかどうかを返す。
+func (l *Layout) cellBack(v *CellView, box image.Rectangle) (wall, own placed, has bool) {
+	wall = centered(l.image(l.Wallpaper), image.Rect(0, 0, l.W, l.H))
+	own = centered(l.image(v.Background), box)
+	return wall, own, wall.img != nil || own.img != nil
 }
 
 func (l *Layout) pressFill() bool { return l.Press == pressFill }
@@ -93,6 +153,7 @@ var (
 	colPressedSub  = RGB{0x50, 0x40, 0x00}
 	colPressEdge   = RGB{0, 0, 0} // border の外側の暗い線
 	colEmptyBorder = RGB{0x30, 0x34, 0x3a}
+	colHalo        = RGB{0, 0, 0}          // 背景画像の上の文字の縁取り
 	colLayerCell   = RGB{0x2a, 0x22, 0x3c} // レイヤーを切り替えるセル
 
 	// レイヤーの入り方ごとの、枠と札の色
@@ -148,11 +209,16 @@ func fitScaleMax(lines []string, w, h, most int) int {
 }
 
 // drawCell はセルを裏画面に描き、書き換えた論理矩形を返す。
+//
+// 背景は、下から 黒（または壁紙）→ セルの塗り（壁紙があれば壁紙のまま）→ セルの背景画像 の順に重ねる。
+// 背景画像（壁紙かセルの画像）があるセルでは、文字に 1 ドットの縁取り（colHalo）を付ける。
+// fill で押しているあいだは、今までどおり黄色で塗りつぶす（画像は隠れる）。
 func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle {
 	cell := l.rect(col, row)
-	cv.fill(cell, colBG)
 	box := cell.Inset(cellGap)
 	v := l.Cells[row*l.Cols+col]
+	wall, own, hasImg := l.cellBack(&v, box)
+	paintBack(cv, cell, colBG, wall)
 	if !v.Mapped {
 		cv.frame(box, 1, colEmptyBorder)
 		return cell.Union(redrawBadge(cv, l, cell))
@@ -160,16 +226,24 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 	fillC, textC, subC := cellFill(v), colText, colSub
 	if pressed && l.pressFill() {
 		fillC, textC, subC = colPressed, colPressedText, colPressedSub
+		cv.fill(box, fillC)
+		hasImg = false
+	} else {
+		paintBack(cv, box, fillC, wall, own)
 	}
-	cv.fill(box, fillC)
 	cv.frame(box, borderW, modeBorder[l.Mode])
 	if pressed && !l.pressFill() {
-		drawRing(cv, box, true, fillC, l.Mode)
+		drawRing(cv, l, &v, box, true)
 	}
 
 	inner := box.Inset(textMargin)
+	if hasImg {
+		cv.halo = &colHalo
+		defer func() { cv.halo = nil }()
+	}
 	if v.Widget != nil {
 		drawWidget(cv, inner, &v, l.Env, textC, subC)
+		cv.halo = nil
 		return cell.Union(redrawBadge(cv, l, cell))
 	}
 	subH := 0
@@ -191,11 +265,11 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 		x := inner.Min.X + (inner.Dx()-font.textWidth(v.Sub)*ss)/2
 		cv.text(max(x, inner.Min.X), inner.Max.Y-fontH*ss, v.Sub, ss, subC, inner)
 	}
+	cv.halo = nil
 	return cell.Union(redrawBadge(cv, l, cell))
 }
 
-// cellFill は割り当てのあるセルの、ふだんの塗りの色。
-// 背景の画像に対応するときは、ここを画像の画素に置き換える。
+// cellFill は割り当てのあるセルの、ふだんの塗りの色（背景画像がないとき）。
 func cellFill(v CellView) RGB {
 	if v.Layer {
 		return colLayerCell
@@ -204,15 +278,18 @@ func cellFill(v CellView) RGB {
 }
 
 // drawRing は、box の内側 pressRingW の帯を描く。
-// on なら押したときの二重の枠、そうでなければふだんの枠と塗りに戻す。
-func drawRing(cv *Canvas, box image.Rectangle, on bool, fillC RGB, mode LayerMode) {
+// on なら押したときの二重の枠、そうでなければふだんの枠と、その内側の背景（塗りか画像）に戻す。
+func drawRing(cv *Canvas, l *Layout, v *CellView, box image.Rectangle, on bool) {
 	if on {
 		cv.frame(box, pressEdgeW, colPressEdge)
 		cv.frame(box.Inset(pressEdgeW), pressGlowW, colPressed)
 		return
 	}
-	cv.frame(box, borderW, modeBorder[mode])
-	cv.frame(box.Inset(borderW), pressRingW-borderW, fillC)
+	cv.frame(box, borderW, modeBorder[l.Mode])
+	wall, own, _ := l.cellBack(v, box)
+	for _, r := range ringRects(box.Inset(borderW), pressRingW-borderW) {
+		paintBack(cv, r, cellFill(*v), wall, own)
+	}
 }
 
 // ringRects は、box の内側 t の帯を、重ならない 4 つの矩形で返す。
@@ -234,7 +311,7 @@ func drawPress(cv *Canvas, l *Layout, col, row int, on bool) []image.Rectangle {
 		return nil
 	}
 	box := l.rect(col, row).Inset(cellGap)
-	drawRing(cv, box, on, cellFill(v), l.Mode)
+	drawRing(cv, l, &v, box, on)
 	rs := ringRects(box, pressRingW)
 	if b := redrawBadge(cv, l, box); !b.Empty() {
 		rs = append(rs, b)
@@ -297,6 +374,9 @@ type Display struct {
 	layoutCols int     // 描いている格子の列数（d.mu で守る）
 	vtSig      chan os.Signal
 
+	images  ImageSource // 背景画像。nil なら描かない
+	invalid bool        // 画面全体を描き直す（画像が増えた・減った）。d.mu で守る
+
 	// ウィジェット（描画の goroutine だけが触る）
 	env    func() WidgetEnv // 今の時刻など。nil なら時刻だけ
 	wkeys  []string         // セルごとに、前に描いたウィジェットの中身（widgetKey）
@@ -305,7 +385,8 @@ type Display struct {
 
 // StartDisplay はフレームバッファと専用 VT を開き、描画 goroutine を起動する。
 // env は、ウィジェットを描くときの状態を返す関数（nil なら時刻だけ使う）。
-func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv) (*Display, error) {
+// images は背景画像の読み込み先（nil なら背景画像を描かない）。
+func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv, images ImageSource) (*Display, error) {
 	fb, err := OpenFramebuffer(dc.Device)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", dc.Device, err)
@@ -317,7 +398,7 @@ func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv) (*Display,
 	d := &Display{
 		want: make([]bool, len(l.Cells)), wantGen: l.Gen, drawn: make([]bool, len(l.Cells)),
 		wake: make(chan struct{}, 1), fb: fb, cv: cv, layout: l, layoutCols: l.Cols,
-		vtSig: make(chan os.Signal, 4), env: env,
+		vtSig: make(chan os.Signal, 4), env: env, images: images,
 	}
 	// VT_PROCESS のシグナルは VT を設定する前に受けられるようにしておく
 	signal.Notify(d.vtSig, syscall.SIGUSR1, syscall.SIGUSR2)
@@ -378,6 +459,17 @@ func (d *Display) cols() int {
 		return d.next.Cols
 	}
 	return d.layoutCols
+}
+
+// Invalidate は、画面全体を描き直させる（背景画像を受け取った、消したなど）。描画は待たない。
+func (d *Display) Invalidate() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.invalid = true
+	d.mu.Unlock()
+	d.poke()
 }
 
 // Poke は、ウィジェットの中身を確かめ直させる（時刻を合わせた、データが変わったなど）。描画は待たない。
@@ -466,6 +558,7 @@ func (d *Display) widgetEnv() WidgetEnv {
 // drawAllLocked は格子 l の全体を裏画面に描き、ウィジェットの中身を覚える。drawMu を持って呼ぶ。
 func (d *Display) drawAllLocked(l *Layout) {
 	l.Env = d.widgetEnv()
+	l.Images = d.images
 	drawAll(d.cv, l, d.drawn)
 	d.wkeys = make([]string, len(l.Cells))
 	d.wakeAt = time.Time{}
@@ -554,6 +647,8 @@ func (d *Display) redraw() bool {
 		d.layoutCols = next.Cols
 	}
 	want := append([]bool(nil), d.want...)
+	invalid := d.invalid
+	d.invalid = false
 	d.mu.Unlock()
 	d.drawMu.Lock()
 	defer d.drawMu.Unlock()
@@ -570,6 +665,13 @@ func (d *Display) redraw() bool {
 			d.fb.Blit(d.cv, image.Rect(0, 0, d.cv.pw, d.cv.ph))
 		}
 		vlogf("display: layer %q redraw %v", next.Title, time.Since(t))
+	} else if invalid {
+		t := time.Now()
+		d.drawAllLocked(d.layout)
+		if d.active {
+			d.fb.Blit(d.cv, image.Rect(0, 0, d.cv.pw, d.cv.ph))
+		}
+		vlogf("display: full redraw (images changed) %v", time.Since(t))
 	}
 	for i := range want {
 		if want[i] == d.drawn[i] {

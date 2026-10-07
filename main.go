@@ -26,6 +26,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -593,7 +594,7 @@ func cellView(km *Keymap, a *Action) CellView {
 	label := a.Spec.Label
 	if a.Widget != nil {
 		// ウィジェットのセル。label は上に小さく出す見出し。タップで送るキーは出さない
-		return CellView{Mapped: true, Layer: a.Kind.isLayer(), Label: label, Widget: a.Widget}
+		return CellView{Mapped: true, Layer: a.Kind.isLayer(), Label: label, Widget: a.Widget, Background: a.Spec.Background}
 	}
 	var sub string
 	if a.Kind.isLayer() {
@@ -604,10 +605,10 @@ func cellView(km *Keymap, a *Action) CellView {
 		} else {
 			sub += ":" + dest
 		}
-		return CellView{Mapped: true, Layer: true, Label: label, Sub: sub}
+		return CellView{Mapped: true, Layer: true, Label: label, Sub: sub, Background: a.Spec.Background}
 	}
 	keys := prettyCombo(a.Spec.Key)
-	v := CellView{Mapped: true, Label: label, Sub: keys}
+	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background}
 	if v.Label == "" || v.Label == keys {
 		v.Label, v.Sub = keys, ""
 	}
@@ -617,7 +618,7 @@ func cellView(km *Keymap, a *Action) CellView {
 // buildLayout は今の重なりから、画面に描くセルの内容を作る。
 func buildLayout(km *Keymap, v *View) *Layout {
 	l := &Layout{Cols: v.Cols, Rows: v.Rows, Cells: make([]CellView, len(v.Cells)),
-		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode, Press: km.Press}
+		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode, Press: km.Press, Wallpaper: v.Wallpaper}
 	for i, a := range v.Cells {
 		switch anc := v.Anchor[i]; {
 		case anc == i:
@@ -633,7 +634,8 @@ func buildLayout(km *Keymap, v *View) *Layout {
 // renderPNG は実機なしで画面の見た目を PNG に書き出す（確認用）。
 // layer を指定すると、そのレイヤーを base の上に重ねた画面を描く（hold なら一時的な色）。
 // env はウィジェットを描くときの時刻など（-render-time、-render-unsynced）。
-func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h int, env WidgetEnv) error {
+// images は背景画像の読み込み先（-render-images。省略すると -data-dir の images）。
+func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h int, env WidgetEnv, images ImageSource) error {
 	if cfg.Touch == nil {
 		return errors.New("config has no touch section")
 	}
@@ -670,7 +672,7 @@ func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle stri
 	}
 	l := buildLayout(km, e.View())
 	cv := NewCanvas(w, h, w*rgb565.Bpp, rgb565, cfg.Display.Rotate)
-	l.W, l.H, l.Env = cv.W, cv.H, env
+	l.W, l.H, l.Env, l.Images = cv.W, cv.H, env, images
 	pressed := make([]bool, len(l.Cells))
 	for _, p := range strings.Fields(strings.ReplaceAll(pressedSpec, ";", " ")) {
 		var c, r int
@@ -707,7 +709,8 @@ func main() {
 	pngTodoPage := flag.Int("render-todo-page", 1, "-render-png で、Todo のセルに出すページ（1 から）")
 	pngCal := flag.String("render-calendar", "", "-render-png で、カレンダーのセルに出す予定（calendar.json の形のファイル）")
 	pngCalPage := flag.Int("render-calendar-page", 0, "-render-png で、カレンダーのセルに出すページ（1 から。0 なら触っていないときのページ）")
-	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータと時刻合わせの記録を置くディレクトリ")
+	pngImages := flag.String("render-images", "", "-render-png と -check で、背景画像を探すディレクトリ（省略すると -data-dir の images）")
+	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータ、背景画像、時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [-check] [-dump-json] [-restore-console] [-render-png out.png] [config.yaml]\n", os.Args[0])
@@ -754,9 +757,17 @@ func main() {
 		log.Printf("warning: %s", w)
 	}
 
+	imagesDir := filepath.Join(*dataDir, "images")
+	if *pngImages != "" {
+		imagesDir = *pngImages
+	}
 	switch {
 	case *check:
 		logLayers(km)
+		w, h := screenSize(cfg)
+		for _, p := range imageProblems(km, NewImageStore(imagesDir), w, h) {
+			log.Printf("warning: %s  [%s]", p.Message, p.Path)
+		}
 		log.Printf("%s: ok", cfgPath)
 		return
 	case *dumpJSON:
@@ -830,7 +841,12 @@ func main() {
 				}
 			}
 		}
-		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, env); err != nil {
+		images := NewImageStore(imagesDir)
+		w2, h2 := screenSize(cfg)
+		for _, p := range imageProblems(km, images, w2, h2) {
+			log.Printf("warning: %s  [%s]", p.Message, p.Path)
+		}
+		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, env, images); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -864,6 +880,12 @@ func main() {
 	texts := NewTextService(store)
 	todos := NewTodoService(store)
 	cals := NewCalendarService(store)
+	images := OpenImageStore(imagesDir)
+	if ps := imageProblems(km, images, 800, 480); len(ps) > 0 {
+		for _, p := range ps {
+			log.Printf("warning: %s", p.Message)
+		}
+	}
 	widgetRT := NewWidgetRT(todos)
 	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
@@ -902,7 +924,7 @@ func main() {
 		// 画面が使えなくても入力は動かす
 		if cfg.displayEnabled() {
 			first := buildLayout(km, e.View())
-			d, err := StartDisplay(cfg.Display, first, widgetEnv)
+			d, err := StartDisplay(cfg.Display, first, widgetEnv, images)
 			if err != nil {
 				log.Printf("display disabled: %v", err)
 			} else {
@@ -912,6 +934,7 @@ func main() {
 				texts.SetOnChange(d.Poke)
 				todos.SetOnChange(d.Poke)
 				cals.SetOnChange(d.Poke)
+				images.SetOnChange(d.Invalidate)
 				widgetRT.SetScreen(first.W, first.H, d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
@@ -931,6 +954,7 @@ func main() {
 			texts:   texts,
 			todos:   todos,
 			cals:    cals,
+			images:  images,
 			started: time.Now(),
 		}
 		todos.SetOnNotify(mon.TodoChanged)

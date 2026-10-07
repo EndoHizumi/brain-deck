@@ -167,6 +167,13 @@ func (s *configStore) Current() *Config {
 	return s.cfg
 }
 
+// Keymap は今の割り当てを返す。呼び出し側は書き換えないこと。
+func (s *configStore) Keymap() *Keymap {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.km
+}
+
 // Validate は raw（YAML か JSON）を、適用せずに検証する。
 func (s *configStore) Validate(raw []byte) (*Config, *Keymap, []string, error) {
 	cfg, km, warns, err := checkConfig(raw)
