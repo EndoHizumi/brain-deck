@@ -1,0 +1,9 @@
+# PC（Linux）用。ModemManager が Brain（1d6b:0104）のシリアルを調べないようにする。
+# ModemManager は、USB のシリアルをつなぐと AT コマンドを送ってモデムかどうかを調べる。
+# Brain の 1 つ目のシリアルではログイン画面が待っているので、AT がユーザー名とパスワードとして入力され、
+# Brain に「ログインの失敗」が残る（2 つ目の設定用では、lefthand がエラーを返して捨てる）。
+#   sudo install -m 0644 70-brain-modemmanager.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+# そのあと、Brain のケーブルを抜き差しする。
+# 1d6b:0104 は Linux の USB ガジェットの汎用の ID なので、同じ ID のほかのガジェットも調べなくなる。
+ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ENV{ID_MM_DEVICE_IGNORE}="1"
