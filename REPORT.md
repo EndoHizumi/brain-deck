@@ -6,6 +6,50 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：シリアルコンソールと、設定 GUI のコンソールのタブ（2026-10-07）
+
+Brain の 1 つ目のシリアル（/dev/ttyGS0）で getty を起動時に動かし、設定 GUI の「コンソール」タブ（xterm.js）からログインできるようにした。その前に、設定 GUI と brain-deck が、コンソール用のポートに何も書かずに設定用のポートを見分けるようにした（getty が動くと、`hello` がユーザー名として入力されてしまうため）。
+
+### ポートの見分け方
+
+| | 見分け方 |
+| --- | --- |
+| brain-deck（Linux） | `/dev/serial/by-id/usb-SHARP_Brain_<シリアル番号>-ifNN` のうち、同じ Brain のインターフェイス番号が大きいほう（`-if05`）だけを開く。`-if03`（コンソール用）は開かない。1 つしかなければ、どれも開かない |
+| brain-deck（macOS） | `/dev/cu.usbmodem0123456789N` の末尾の番号が大きいほう（コンソール用 4、設定用 6 の予定）。Brain のシリアル番号で始まらない機器は見ない。Mac がないので実機では確かめていない |
+| 設定 GUI | WebSerial の `getInfo()` は `usbVendorId` と `usbProductId` だけで、2 つの ACM は同じに見える（実機と Chromium 147 で確かめた）。`getPorts()` の順番も、実行するたびに変わった。そこで、役割の分からないポートには自動で書かず、ブラウザのポートの一覧（ttyACM0 / ttyACM1 の名前が出る）で選んでもらう。一覧で選んだポートは、`hello` の前に 0.3 秒何も書かずに待ち、JSON ではない文字が届いたら送らない。`hello` に答えたポートは設定用、コンソールのタブでログイン画面かシェルのプロンプトが届いたポートはコンソール用として、ページを開いているあいだ覚える。一方が分かれば、もう一方はその逆として一覧なしで使う |
+
+### Brain 側の変更（console-setup.sh）
+
+Brainux 本体のファイルは書き換えていない。`sudo sh console-setup.sh on` で次を置き、`off` で消す。
+
+| 置いたもの | 役目 |
+| --- | --- |
+| /etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service | 起動時に動かす（`systemctl enable`） |
+| /etc/systemd/system/dev-ttyGS0.device.wants/serial-getty@ttyGS0.service | ttyGS0 ができたとき（作り直されたときも）に動かす。デバイスのユニットには `systemctl add-wants` が使えないので、リンクを直接作る |
+| /etc/systemd/system/serial-getty@ttyGS0.service.d/lefthand.conf | `TERM=xterm-256color`（既定は vt220） |
+
+元に戻す：`ssh brain 'cd ~/lefthand && sudo sh console-setup.sh off'`（止めて、自動起動をやめ、3 つを消す）。パスワードと sudo の設定は変えていない。
+
+### 確認
+
+- **ホスト側のテスト**：設定 GUI 125 件、brain-deck（ポートの選び方の表のテスト。Linux と macOS の名前）がすべて通った。brain-deck は macOS 向けにも vet が通る。
+  - 設定 GUI（シリアルをモック）：分からないポートには書かず一覧を出す、分かったあとは聞かない、ページを開き直したときは自動で `hello` を送らない、ログイン画面が届いたら送らずにコンソール用と覚える、lefthand の返事の切れ端ではコンソール用と覚えない、ケーブルを抜くと忘れる。
+  - コンソールのタブ（シリアルと端末をモック）：自分からは何も送らない、打った文字を送る、UTF-8 を 1 バイトずつ届けても化けない、stty はボタンを押したときだけ、設定のタブと同時に開ける、設定用を選ぶとそう伝える、切断とケーブルが抜けたときの表示、別のタブに切り替えても端末を作り直さない。
+- **実機**：
+  - 再起動のあと（許可を得て実施）、ガジェット（起動から 71 秒）、lefthand（83 秒）、getty（83 秒）が自動で動いた。
+  - gadget-setup.sh が USB を付け直したとき（設定用の ACM のリンクを外してから実行）、getty はハングアップで終わり、`Restart=always` ですぐ起動し直した（PID 2458 → 2597）。ttyGS0 そのものは消えない。
+  - brain-deck を 6 回、設定 GUI（本物の WebSerial）で役割の分からない状態から「Brain に接続」を実行したあと、getty の PID は変わらず、ログインに関するログは 0 件だった。
+  - 設定 GUI のコンソールのタブ（本物の xterm.js と WebSerial）で、ログイン画面が出てコンソール用と分かり、設定のタブは一覧なしでもう一方につながった。2 つを同時に開いたまま、コンソール用のポートには 1 バイトも送っていない（WebSerial の書き込みを数えた）。
+- **見つけて直したこと**：getty を起動するたびに、systemd が端末をリセットして大きさを問い合わせる（`ESC[!p`、`ESC[6n` を 3 回）。つないだときに xterm.js がたまった問い合わせへカーソル位置を返し、それがログイン画面に `^[[4;1R…` と入力されていた。ユーザーが打つまで、端末の自動の報告は送らないようにした。
+- **PC の ModemManager**：つなぐたびに、2 つのシリアルを 20〜40 秒調べ、AT を送る。USB を付け直したときに、Brain に `FAILED LOGIN 1 FROM ttyGS0 FOR ORT?` が 1 件残った（GUI と brain-deck は動かしていない）。`contrib/udev/70-brain-modemmanager.rules` を PC に入れると調べなくなる（PC には未導入。入れるのはユーザー）。
+
+### 注意
+
+- **試験で Brain が止まった**：ttyGS0 が消えて作り直されたときの動きを、試験用のガジェット（ttyGS2）で確かめようとして、getty が開いている ACM のファンクションを rmdir した。カーネルは tty が閉じられるまで待ち、systemd の getty の停止も終わらず、SSH のログインが止まった（キー入力と設定用のシリアルは動いていた）。ユーザーに電源を入れ直してもらって戻った。gadget-setup.sh はファンクションを消さないので、ふだんはこの状態にならない。試験の残り（dev-ttyGS2.device.wants）は消した。
+- **getty の画面**：PC がポートを開いていないあいだに出たログイン画面は、つないでも届かないことが多い。コンソールのタブでは「ログイン画面が出ていなければ、Enter を押してください」と出す。
+- **初期パスワード**：README に、`passwd` で初期パスワード（brain）を変えるよう書いた。
+- **反映**：PC の `~/.local/bin/brain-deck` を新しい版にした（前の版は `brain-deck.prev`）。Brain のデーモンと gadget-setup.sh は変えていない。設定 GUI は `gui/dist/` を作り直した。
+
 ## 追記：背景画像（2026-10-07、フェーズ 5）
 
 タッチのセルごとの背景と、レイヤーごとの壁紙に、画像を置けるようにした。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
