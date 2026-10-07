@@ -15,8 +15,8 @@ import (
 // NCM（2 本）、HID（1 本）、ACM 2 つ（4 本）ですべて使っている。マウスのために別の HID のファンクションを
 // 足すとエンドポイントが足りず、ガジェット全体（NCM も）がつながらなくなる。
 // そのため、今の HID（hid.usb0、/dev/hidg0）1 つの中に、レポート ID でキーボード（1）とマウス（2）を入れる。
-// ブートキーボードの形ではなくなるので、BIOS や UEFI の画面ではキーボードが使えない。
-// gadget-setup.sh の HID_MOUSE=0 で、前の形（キーボードだけ、ブートキーボード）に戻せる。
+// その形はブートキーボードではなく、BIOS や UEFI の画面では使えないので、起動したときはキーボードだけ
+// （ブートキーボード）の形にし、マウスを使うときだけ切り替える（usbmode.go）。
 //
 // デーモンは、起動したときに configfs の report_desc を読んで、どちらの形かを決める（detectHID）。
 // 形を間違えると、PC には別のキーやマウスの動きとして届くので、分からないときはキーボードだけの形として扱う。
@@ -98,7 +98,7 @@ func layoutOf(desc []byte, where string) HIDLayout {
 	case bytes.Equal(desc, hidDescCombo):
 		return HIDLayout{KeyboardID: hidKeyboardID, MouseID: hidMouseID, Source: where + ": keyboard + mouse"}
 	case bytes.Equal(desc, hidDescKeyboard):
-		return HIDLayout{Source: where + ": keyboard only (run gadget-setup.sh to add the mouse)"}
+		return HIDLayout{Source: where + ": keyboard only (boot keyboard; usb_mode switches the mouse on)"}
 	}
 	return HIDLayout{Source: where + ": unknown report descriptor (keyboard only)"}
 }
