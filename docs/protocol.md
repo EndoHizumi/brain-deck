@@ -150,10 +150,12 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
    "stack":[{"layer":"edit","kind":"layer_hold"}],"cols":4,"rows":3},
    "uptime_sec":120,"subscribed":true,"suppressing":true,
    "time":{"now":"2026-10-06T19:04:27.13+09:00","timezone":"Asia/Tokyo","utc_offset_sec":32400,"synced":true,"ntp_synced":false,
-   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"}}}
+   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true}}}
 ```
 
 `time` は Brain の時刻の状態（下の `set_time` の結果と同じ形）。
+
+`hid.mouse` は、Brain の USB ガジェットにマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。gadget-setup.sh が古い（キーボードだけの形）と false。この項目がなければ、lefthand がマウスに対応する前の版。
 
 `mode` は `base`（base だけ）、`latched`（layer_toggle か layer_to で切り替えたまま）、`temp`（layer_hold か layer_oneshot で一時的）。画面の右上の札の色と同じ。
 

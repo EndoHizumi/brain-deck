@@ -1,11 +1,12 @@
 # lefthand
 
 Sharp Brain PW-SH2 を、PC 用の左手デバイスにするデーモン。
-Brain 上の Brainux で動き、本体のキーボードとタッチパネルの入力を、設定どおりのキー入力に変えて
-USB HID キーボードとして PC に送る。タッチパネルの画面には、どこを押すと何が送られるかを表示する。
+Brain 上の Brainux で動き、本体のキーボードとタッチパネルの入力を、設定どおりのキー入力やマウスの操作に変えて
+USB HID のキーボードとマウスとして PC に送る。タッチパネルの画面には、どこを押すと何が送られるかを表示する。
 
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
+- **トラックパッド**：タッチパネルのセルを、マウスのトラックパッドにできる（`widget: trackpad`）。指でカーソルを動かし、タップでクリック、右端の帯でスクロール。キーやセルにマウスのボタンも割り当てられる（`mouse: left`）。Android のスマホでもそのまま使える。
 - **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定を表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
 - **背景画像**：セルごとの背景と、レイヤーごとの壁紙に、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
 - **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、Brain の時刻を合わせたりする。
@@ -22,16 +23,17 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 4. [インストール](#インストール)
 5. [PC との接続](#pc-との接続)
 6. [設定](#設定)
-7. [設定 GUI](#設定-gui)
-8. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
-9. [時刻合わせ](#時刻合わせ)
-10. [タッチのキャリブレーション](#タッチのキャリブレーション)
-11. [日常の操作](#日常の操作)
-12. [シリアルコンソール](#シリアルコンソール)
-13. [画面とコンソール](#画面とコンソール)
-14. [困ったとき](#困ったとき)
-15. [開発](#開発)
-16. [フォントとライセンス](#フォントとライセンス)
+7. [マウスとトラックパッド](#マウスとトラックパッド)
+8. [設定 GUI](#設定-gui)
+9. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
+10. [時刻合わせ](#時刻合わせ)
+11. [タッチのキャリブレーション](#タッチのキャリブレーション)
+12. [日常の操作](#日常の操作)
+13. [シリアルコンソール](#シリアルコンソール)
+14. [画面とコンソール](#画面とコンソール)
+15. [困ったとき](#困ったとき)
+16. [開発](#開発)
+17. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -39,20 +41,20 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 
 ```
 本体キーボード (brain-kbd-i2c)  ─┐
-                                  ├─ lefthand ─→ /dev/hidg0 ─→ USB ─→ PC（キーボードとして認識）
+                                  ├─ lefthand ─→ /dev/hidg0 ─→ USB ─→ PC（キーボードとマウスとして認識）
 タッチパネル   (mxs-lradc-ts)   ─┘      │  │
                                          │  └─→ /dev/fb0（セルとラベルを表示）
 PC のブラウザ（設定 GUI） ←─ USB シリアル ─→ /dev/ttyGS1（設定の読み書き、学習モード）
 ```
 
 - **入力の専有**：デーモンは本体のキーボードとタッチパネルを専有する。動いているあいだ、Brain 自身のコンソールには入力が届かない。
-- **送信**：押したキーの組み合わせを、標準の 8 バイトのキーボードレポートで送る。同時に押せる通常キーは 6 つまで。オートリピートは PC 側に任せる。
-- **終了時**：すべてのキーを離したレポートを送ってから終わる。キーが押しっぱなしにならない。
+- **送信**：押したキーの組み合わせを、標準の 8 バイトのキーボードレポート（前にレポート ID 1 を付ける）で送る。同時に押せる通常キーは 6 つまで。オートリピートは PC 側に任せる。マウスは、レポート ID 2 のレポート（ボタン 3 つ、移動、縦と横のホイール）で送る。
+- **終了時**：すべてのキーとマウスのボタンを離したレポートを送ってから終わる。キーやボタンが押しっぱなしにならない。
 - **PC が応答しないとき**：PC が未接続やスリープ中でも、デーモンは止まらない。送れなかった状態は 0.2 秒ごとに送り直す。
 
 起動時は、次の順に動く。
 
-1. `ethernet_gadget.service` が USB ガジェットを作る。Brainux 標準の処理を drop-in で置き換え、ネットワーク（NCM）、キーボード（HID）、シリアル 2 つ（ACM。コンソール用と設定 GUI 用）の複合デバイスにする。Brain の usb0 には固定 IP 192.168.7.2 を付ける。
+1. `ethernet_gadget.service` が USB ガジェットを作る。Brainux 標準の処理を drop-in で置き換え、ネットワーク（NCM）、キーボードとマウス（HID）、シリアル 2 つ（ACM。コンソール用と設定 GUI 用）の複合デバイスにする。Brain の usb0 には固定 IP 192.168.7.2 を付ける。
 2. `lefthand.service` がデーモンを起動する。ガジェットの作成と、ログイン画面の ly の起動を待ってから動く。
 
 電源を入れてからキー入力を受け付けるまで、約 68 秒かかる。
@@ -117,12 +119,15 @@ install.sh は次のファイルを配置し、`systemctl daemon-reload` を行�
 
 USB でつなぐと、PC には次の 4 つが見える。
 
-| 機能 | PC 側の見え方 | Brain 側 | 用途 |
-| --- | --- | --- | --- |
-| HID キーボード | 「SHARP Brain」というキーボード | /dev/hidg0 | 左手デバイスとしての入力 |
-| NCM | ネットワークインターフェース（Linux では enx8a158b443a01） | usb0 | SSH |
-| CDC-ACM（1 つ目） | シリアルポート（Linux では /dev/ttyACM0） | /dev/ttyGS0 | シリアルコンソール（getty のログイン画面）。設定 GUI のコンソールのタブ |
-| CDC-ACM（2 つ目） | シリアルポート（Linux では /dev/ttyACM1） | /dev/ttyGS1 | 設定 GUI |
+| 機能 | インターフェイスの番号 | PC 側の見え方 | Brain 側 | 用途 |
+| --- | --- | --- | --- | --- |
+| NCM | 0、1 | ネットワークインターフェース（Linux では enx8a158b443a01） | usb0 | SSH |
+| HID | 2 | 「SHARP Brain Keyboard」と「SHARP Brain Mouse」（Linux の /dev/input/by-id/ では `…-if02-event-kbd` と `…-if02-event-mouse`） | /dev/hidg0 | 左手デバイスとしての入力 |
+| CDC-ACM（1 つ目） | 3、4 | シリアルポート（Linux では /dev/ttyACM0、by-id は `…-if03`） | /dev/ttyGS0 | シリアルコンソール（getty のログイン画面）。設定 GUI のコンソールのタブ |
+| CDC-ACM（2 つ目） | 5、6 | シリアルポート（Linux では /dev/ttyACM1、by-id は `…-if05`） | /dev/ttyGS1 | 設定 GUI、brain-deck |
+
+- **キーボードとマウスは 1 つの HID**：Brain の USB コントローラは、PC へ送るためのエンドポイント（IN）が 7 本しかなく、NCM（2 本）、HID（1 本）、ACM 2 つ（4 本）ですべて使っている。マウスを別の HID にすると足りなくなり、ガジェット全体がつながらなくなるので、1 つの HID の中に、レポート ID でキーボード（1）とマウス（2）を入れている。インターフェイスの番号は、マウスを足す前と同じ。
+- **BIOS では使えない**：そのため、キーボードはブートキーボードの形ではない。PC の BIOS や UEFI の設定画面では、Brain のキーボードは使えない。必要なら、`/etc/lefthand/gadget.env` に `HID_MOUSE=0` と書いて `sudo /usr/local/sbin/lefthand-gadget-setup` を実行すると、前の形（キーボードだけ、ブートキーボード）に戻る（[マウスとトラックパッド](#マウスとトラックパッド)）。
 
 キーボードとしては、つなぐだけで使える。SSH を使うには、PC 側のインターフェースに固定 IP を付ける。PC に DHCP サーバーは要らない。
 
@@ -338,6 +343,114 @@ display:
 - **設定 GUI から変えられる項目**：`display` のうち `press_style` だけは、GUI で保存すると再起動なしで反映する。
 
 画面が使えないときは、ログに理由を出して、入力の変換だけを続ける。
+
+## マウスとトラックパッド
+
+タッチのセルをトラックパッドにでき（`widget: trackpad`）、キー、セル、ソフトキーにマウスのボタンやスクロールを割り当てられる（`mouse: left`）。
+例は [config/trackpad-example.yaml](config/trackpad-example.yaml)（メニュー →「マウス」で入る。左 3 列ぶんがトラックパッド、右の列が左・右・中のボタンと「基本」）。
+
+```yaml
+- name: mouse
+  label: マウス
+  touch:
+    cols: 4
+    rows: 4
+    cells:
+      "0,0": { widget: trackpad, span: [3, 4], label: トラックパッド }   # 値を書かなければ既定値
+      "3,0": { mouse: left, label: 左 }
+      "3,1": { mouse: right, label: 右 }
+      "3,2": { mouse: middle, label: 中 }
+      "3,3": { layer_to: base, label: 基本 }
+```
+
+### 操作
+
+| 操作 | 動き |
+| --- | --- |
+| 指を動かす | カーソルが動く。速く動かすほど大きく動く（加速。`accel`） |
+| 短くタップする | 左クリック。ボタンは、タップの 0.2 秒あと（`drag_ms`）に離す（そのあいだに触れるとドラッグになるため） |
+| 2 回続けてタップする | ダブルクリック |
+| タップして、すぐ（0.2 秒以内に）触れて動かす | ドラッグ（左ボタンを押したまま動かす）。離すとボタンも離す |
+| 右端の帯（▲▼ の帯。幅は `scroll_width`）をなぞる | 縦のスクロール。既定はナチュラル（指を下へ動かすと中身が下へ動く。スマホと同じ）。`scroll_direction: traditional` でホイールと同じ向き |
+| 長押し | 既定では何もしない。`long_press: right` で、0.6 秒動かさずに押すと右クリック |
+| マウスのセルやキー（`mouse: left` など） | 押しているあいだボタンを押したまま（ドラッグにも使える）。`scroll_down` などは 1 段送り、押し続けると繰り返す |
+
+- **長押しを既定で使わない理由**：抵抗膜のパネルでは、指を止めて考えているときや、ゆっくり動かし始めるときにも「動かずに押している」状態になり、意図しない右クリックになりやすい。右クリックは、トラックパッドの横に `mouse: right` のセルを置くのを勧める。
+- **離す安全**：レイヤーが切り替わったとき、設定を保存して反映したとき、デーモンが終わるときに、押しているマウスのボタンをすべて離す（レイヤーを切り替えた入力そのもののボタンは残す）。トラックパッドのドラッグ中にレイヤーが変わると、そのタッチは指を離すまで何もしない。
+- **画面**：トラックパッドのセルには見出しと、右端のスクロールの帯を描く。触っているあいだは描き直さない（入力を遅らせない）。
+- **シングルタッチ**：パネルは 1 本の指しか分からないので、2 本指のスクロールやピンチはできない。
+
+### ブレ対策と既定値
+
+抵抗膜のタッチパネル（mxs-lradc-ts）は、触れた瞬間と離す瞬間に座標が跳ね、止めていても少し揺れる。次の順に処理する。
+値は設定（設定 GUI のトラックパッドの欄）で変えられる。単位のドットは画面の 1 ドット（800×480）。
+
+| 項目 | 既定値 | 内容 |
+| --- | --- | --- |
+| `settle_ms` | 30 | 触れてから、この時間のサンプルを捨てる（触れた瞬間の跳ね） |
+| `min_pressure` | 0（見ない） | 押す強さ（ABS_PRESSURE）がこれより小さいサンプルを捨てる |
+| `smooth` | 3 | 最後のこの数のサンプルの平均を使う |
+| `deadzone` | 1.5 | 平均の位置が、この距離（ドット）より動かなければ無視する（ヒステリシス。止めているときの揺れ） |
+| （固定） | | 離す直前のサンプル 1 つは使わない（離す瞬間の跳ね） |
+| `speed` | 1.0 | 画面の 1 ドットの動きを、マウスの何カウントにするか（ゆっくり動かしたとき） |
+| `accel` | 1.0 | 速さ v ドット/秒のとき、speed × (1 + accel × min(v/1000, 3)) 倍 |
+| `scroll_width` | 72 | 右端のスクロールの帯の幅（ドット）。0 で帯なし |
+| `scroll_step` | 24 | ホイール 1 段に当たる指の動き（ドット） |
+| `tap_ms`、`tap_move` | 180、12 | これより短く（ミリ秒）、これより動かずに（ドット）離せばタップ |
+| `drag_ms` | 200 | タップのあと、この時間のうちに触れるとドラッグ。0 にすると、タップですぐクリックする（タップでのドラッグはしない） |
+
+PC の OS も、マウスの動きに加速をかける（Windows の「ポインターの精度を高める」、Linux や macOS のマウスの速度）。Brain の `accel` と重なるので、速すぎるときはどちらかを弱める。
+
+### スマホで使う
+
+- **Android**：USB OTG のケーブル（または USB-C どうしのケーブル）でつなぐだけで、キーボードとマウスとして使える。画面にカーソルが出る。NCM とシリアルは、Android では使わない（無視される）。
+- **iPhone、iPad**：キーボードはそのまま使える。マウスのカーソルを出すには、「設定」→「アクセシビリティ」→「タッチ」→「AssistiveTouch」をオンにする（iPad は、オンにしなくてもカーソルが出る）。ケーブルは、Lightning なら「Lightning - USB カメラアダプタ」、USB-C なら USB-C どうし。
+- **電源**：Brain は自分の電池で動くので、スマホから給電しなくてよい。スマホが USB 機器に電気を送れないと言うときは、電源付きのアダプタを使う。
+
+### 今の Brain にマウスを足す
+
+gadget-setup.sh は、HID がマウスのない形なら、マウスのある形に作り直す（HID と、そのあとの ACM 2 つのリンクを外して、属性を書き、同じ順でリンクし直す。インターフェイスの番号は変わらない）。
+
+```sh
+scp gadget-setup.sh lefthand brain:lefthand/
+ssh brain 'cd ~/lefthand && sudo install -m 0755 lefthand /usr/local/bin/lefthand && sudo install -m 0755 gadget-setup.sh /usr/local/sbin/lefthand-gadget-setup'
+ssh brain sudo systemd-run --collect /usr/local/sbin/lefthand-gadget-setup   # USB を付け直す。SSH が数秒止まる
+```
+
+- **デーモンを先に新しくする**：デーモンは、起動したときに HID の形を読み取って、キーボードのレポートの書き方を決める（`journalctl -u lefthand` の `hid: ... keyboard + mouse`）。古いデーモンをマウスのある形で動かすと、キーが正しく届かない。
+- **元に戻す**：`/etc/lefthand/gadget.env` に `HID_MOUSE=0` と書き、もう一度 `lefthand-gadget-setup` を実行する。
+- **マウスがないとき**：設定に `mouse:` やトラックパッドがあると、ログに警告が出て、設定 GUI にも「Brain の USB にマウスがありません」と出る。
+
+### トラックパッドの調整（タッチの記録と再生）
+
+本物のタッチは自動では作れないので、タッチパネルの生のイベントを記録し（`lefthand -record-touch`）、PC で再生して判定を確かめる（`lefthand -replay-touch`、テスト）。
+記録は `tools/record-touch.sh` で、動きごとに順に行う。記録のあいだは lefthand.service を止め（PC へのキー入力も止まる）、終わったら戻す。
+画面には config/trackpad-example.yaml の「マウス」のレイヤーが出るので、そのトラックパッドの中で動かす。
+
+```sh
+scp lefthand brain:lefthand/
+scp config/trackpad-example.yaml brain:lefthand/config/
+scp tools/record-touch.sh brain:lefthand/tools/
+ssh -t brain 'cd ~/lefthand && sudo bash tools/record-touch.sh'      # 全部。tap scroll のように名前を並べると、その動きだけ
+scp 'brain:lefthand/touch-rec/*.touch' testdata/touch/
+go test -run PadRealRecordings -v .                                   # 動きごとに、期待どおりに判定できるか
+go run . -replay-touch -replay-ops testdata/touch/tap.touch          # 1 つずつ見る。送るマウスの操作も書く
+go run . -replay-touch -replay-params '{"smooth":4,"deadzone":2}' testdata/touch/*.touch   # 値を変えて試す
+```
+
+| 動き | やること | 確かめること |
+| --- | --- | --- |
+| slow | 左から右へゆっくり 5 回、上から下へゆっくり 5 回 | クリックしない。動いた量 |
+| fast | 左から右へ速く 5 回、右から左へ速く 5 回 | クリックしない。加速 |
+| tap | 1 秒以上あけて 10 回タップ | 10 回クリック。カーソルがほとんど動かない |
+| doubletap | 2 回続けてタップを 6 組 | ダブルクリック 6 回 |
+| tapdrag | タップしてすぐ触れて動かす、を 6 回 | ドラッグ 6 回 |
+| scroll | 右端の帯を上から下へ 4 回、下から上へ 4 回 | ホイールだけ。カーソルは動かない |
+| hold | 指を 3 秒止めて離す、を 4 回 | クリックしない。揺れでカーソルが動かない |
+| light | ごく軽く触れてなぞる・タップする | 押す強さの分布（`min_pressure` を決める） |
+
+`-replay-touch` は、タッチごとに長さ、サンプル数、最初と最後の位置、押す強さの範囲、最初の 1 歩の距離（触れた瞬間の跳ね）、いちばん大きな 1 歩を出し、最後に判定の結果（タップ、クリック、ドラッグ、動いた量、ホイール）をまとめる。
+記録のファイルの形は record.go の先頭に書いてある。
 
 ## 設定 GUI
 
@@ -881,6 +994,9 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | brain-deck が「Brain が見つかりません」で終わる | Linux は `ls /dev/serial/by-id/`、macOS は `ls /dev/cu.usbmodem*` に Brain があるか。`--port` で指定もできる |
 | テキストのタイルに「未設定」と出る | その id に一度も書いていない。`brain-deck text --list` で、Brain にある id を見る |
 | 背景画像が出ない | `brain-deck images` の「Brain にない画像」、ログの `images: background ... is not on this Brain`。GUI で画像を選び直して保存すると送る |
+| PC でカーソルが動かない | `journalctl -u lefthand` に `hid: ... keyboard + mouse` が出ているか（`keyboard only` なら [マウスを足す](#今の-brain-にマウスを足す)）。PC の `/proc/bus/input/devices` に「SHARP Brain Mouse」があるか。トラックパッドのセルの中で触っているか |
+| タップしてもクリックにならない、勝手にクリックする | [トラックパッドの調整](#トラックパッドの調整タッチの記録と再生)で記録して、`tap_ms`、`tap_move` を見直す |
+| ガジェットを付け直したら `ssh brain` がつながらない | PC の `journalctl -k` に `cdc_ncm ... failed to get mac address` が出ていないか。Brain で別のガジェット（NCM を含むもの）を作って消すと、このカーネルでは NCM の MAC アドレスの文字列が壊れる。Brain を再起動すると直る |
 | 背景画像を保存できない（容量） | `brain-deck images` で合計と SD カードの空きを見る。`brain-deck images prune` で使っていない画像を消す |
 
 ## 開発
@@ -889,7 +1005,11 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 
 | ファイル | 内容 |
 | --- | --- |
-| main.go | 入力の読み取り、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
+| main.go | 入力の読み取り（touchProc）、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
+| hid.go | HID の形（キーボードだけか、キーボードとマウスか）。レポートディスクリプタと、configfs から形を読み取る処理 |
+| mouse.go | マウスのレポート（ボタン、移動、ホイール）、マウスの割り当て（mouse:） |
+| trackpad.go | トラックパッドの判定（タップ、ドラッグ、スクロール、ブレ対策）と描画 |
+| record.go | タッチの記録（-record-touch）と再生（-replay-touch） |
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
 | control.go | 設定 GUI とのシリアル通信（/dev/ttyGS1） |
 | widget.go | ウィジェット（時計、テキスト）の書式、折り返し、描き直しの間隔、描画 |
@@ -918,6 +1038,9 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |
 | config/background-example.yaml、config/background-images/ | 背景画像の例（current.yaml に背景を足したもの）と、式で描いた例の画像 |
 | tools/mkbg/ | 例の画像（グラデーションと模様）を作るツール |
+| config/trackpad-example.yaml | トラックパッドとマウスのボタンの例（current.yaml に「マウス」のレイヤーを足したもの） |
+| tools/record-touch.sh | トラックパッドの調整のために、動きごとにタッチを記録する（Brain で実行） |
+| testdata/touch/ | Brain で記録したタッチ（テストで再生する） |
 | contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごとに実行する、ユーザー単位の systemd のタイマー |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
@@ -1005,6 +1128,17 @@ ssh brain 'sudo systemctl stop lefthand.service; cd ~/lefthand && sudo LEFTHAND_
 `TestHWTodo` は、Todo のセルの行と ▼ を（エンジンを通して）押し、長押しの黄色、完了の切り替え、ページ送りの描き直しの時間をログに出し、フレームバッファが全体を描き直したものと同じことを確かめる。
 `TestHWBackground` は、背景画像の例（`background-example.yaml` と `bgimages/` に画像を置く）で、レイヤーの切り替えと押下・解除の時間を、背景画像を除いた同じ設定と比べ、画面が全体を描き直したものと同じことを確かめる。
 
+トラックパッドのテストは、跳ねと揺れを入れて作った記録と、`testdata/touch/` の実機の記録を再生し、移動、タップ、ダブルタップ、ドラッグ、スクロール、レイヤーの切り替えでボタンを離すことを確かめる。
+トラックパッドの既定値を変えたら、`LEFTHAND_UPDATE_PADDEFAULTS=1 go test -run PadDefaults` で `gui/test/fixtures/pad-defaults.json` を書き直し、`gui/src/model.ts` の `PAD_DEFAULTS` も直す。
+トラックパッドのプレビューの PNG は、次のコマンドで書き出す。
+
+```sh
+C=config/trackpad-example.yaml
+go run . -render-png gui/test/fixtures/trackpad.png -render-layer mouse $C
+go run . -render-png gui/test/fixtures/trackpad-pressed.png -render-layer mouse -render-pressed "0,0 3,1" $C
+go run . -render-png gui/test/fixtures/trackpad-pressed-fill.png -render-layer mouse -render-press-style fill -render-pressed "0,0 3,1" $C
+```
+
 `TestHWCalendar` は、6 秒後に始まって 9 秒後に終わる予定で、予定の始まりと終わりに自分で描き直すことと、▲▼、PC から送り直したときの描き直しの時間を測る。
 
 ### コマンドラインのオプション
@@ -1032,6 +1166,15 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-calendar calendar.json      カレンダーのセルの予定（calendar.json と同じ形）
          -render-calendar-page 2             カレンダーのセルに出すページ（1 から。省略すると触っていないときのページ）
          -render-images dir                  背景画像を探すディレクトリ（-check でも使う。省略すると -data-dir の images）
+lefthand -record-touch out.touch [config.yaml]  タッチの生のイベントを記録して終わる（lefthand.service を止めてから）
+         -record-gesture name                見出しに書く動きの名前（slow、tap など）
+         -record-note text                   見出しに書くメモ
+         -record-layer name                  画面に出すレイヤー（省略するとトラックパッドのある最初のレイヤー）
+         -record-for 60s                     記録する時間（最大 10m）
+lefthand -replay-touch file.touch ...        記録を再生し、トラックパッドの判定の結果を書いて終わる（実機不要）
+         -replay-config config.yaml          トラックパッドの設定を読む設定ファイル（省略すると既定値）
+         -replay-params '{"speed":1.5}'      上書きするトラックパッドの項目（JSON）
+         -replay-ops                         送るマウスの操作を 1 つずつ書く
 ```
 
 ## フォントとライセンス
