@@ -14,8 +14,12 @@ if (new URLSearchParams(location.search).has('demo')) {
     for (const text of ['牛乳を買う', 'PR #42 のレビュー', '歯医者の予約']) daemon.todoCmd({ cmd: 'todo_add', text, source: 'brain-deck' })
     // カレンダーを試すための予定（brain-deck calendar sync で送るものと同じ形）
     daemon.calendar = demo.demoCalendar()
-    const { serial } = demo.fakeSerial()
-    const app = new App(root, { serial, openTransport: async () => new demo.FakeTransport(daemon) })
+    // ポートの一覧では、開いているタブに合わせて、設定用かコンソール用を選んだことにする
+    const { serial, consolePort } = demo.fakeSerial(() => (app.section === 'console' ? 'console' : 'settings'))
+    const app: App = new App(root, {
+      serial,
+      openTransport: async (p) => (p === consolePort ? new demo.FakeConsole() : new demo.FakeTransport(daemon)),
+    })
     document.title = 'lefthand 設定（デモ）'
     // コンソールから lefthandDemo.pressKey('KEY_Q') などで、Brain で押したことにできる
     Object.assign(window as any, { lefthand: app, lefthandDemo: daemon })

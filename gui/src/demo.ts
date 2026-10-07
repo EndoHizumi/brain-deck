@@ -442,21 +442,104 @@ export class FakeTransport implements Transport {
 }
 
 // fakeSerial は navigator.serial の代わり。ポートを 1 つだけ持つ。
-export function fakeSerial(): { serial: Serial; port: SerialPort } {
-  const port = {
-    getInfo: () => ({ usbVendorId: 0x1d6b, usbProductId: 0x0104 }),
-  } as unknown as SerialPort
-  let granted = false
+// fakeSerial は模擬の navigator.serial。Brain と同じく、ポートは 2 つ（設定用の port と、コンソール用の consolePort）。
+// requestPort（ポートの一覧で選ぶ）は、choose が返すポートを選んだことにする（既定は設定用）。
+export function fakeSerial(choose?: () => 'settings' | 'console'): { serial: Serial; port: SerialPort; consolePort: SerialPort } {
+  const mk = () => ({ getInfo: () => ({ usbVendorId: 0x1d6b, usbProductId: 0x0104 }) }) as unknown as SerialPort
+  const port = mk()
+  const consolePort = mk()
+  const granted: SerialPort[] = []
   const serial = {
-    getPorts: async () => (granted ? [port] : []),
+    getPorts: async () => [...granted],
     requestPort: async () => {
-      granted = true
-      return port
+      const p = choose?.() === 'console' ? consolePort : port
+      if (!granted.includes(p)) granted.push(p)
+      return p
     },
     addEventListener: () => {},
     removeEventListener: () => {},
   } as unknown as Serial
-  return { serial, port }
+  return { serial, port, consolePort }
+}
+
+// FakeConsole はコンソール用のポート（getty とシェル）のまね。デモで、コンソールのタブを試すためのもの。
+// ログイン画面、パスワード（何でも通す）、いくつかのコマンドの出力（日本語を含む）だけを返す。
+export class FakeConsole implements Transport {
+  onData: (chunk: Uint8Array) => void = () => {}
+  onClose: (reason: string) => void = () => {}
+  private enc = new TextEncoder()
+  private dec = new TextDecoder()
+  private stage: 'login' | 'password' | 'shell' = 'login'
+  private line = ''
+  private rows = 24
+  private cols = 80
+  private closed = false
+
+  constructor() {
+    setTimeout(() => this.out('\r\nDebian GNU/Linux 13 brain ttyGS0（デモ）\r\n\r\nbrain login: '), 50)
+  }
+
+  private out(s: string): void {
+    if (!this.closed) this.onData(this.enc.encode(s))
+  }
+
+  private prompt(): string {
+    return '\x1b[1;32muser@brain\x1b[0m:\x1b[1;34m~\x1b[0m$ '
+  }
+
+  async send(bytes: Uint8Array): Promise<void> {
+    if (this.closed) throw new Error('closed')
+    for (const ch of this.dec.decode(bytes, { stream: true })) {
+      if (ch === '\r') {
+        this.enter(this.line)
+        this.line = ''
+      } else if (ch === '\x7f') {
+        if (this.line) {
+          this.line = this.line.slice(0, -1)
+          if (this.stage !== 'password') this.out('\b \b')
+        }
+      } else if (ch === '\x03') {
+        this.line = ''
+        this.out('^C\r\n' + (this.stage === 'shell' ? this.prompt() : 'brain login: '))
+        if (this.stage === 'password') this.stage = 'login'
+      } else if (ch >= ' ') {
+        this.line += ch
+        if (this.stage !== 'password') this.out(ch)
+      }
+    }
+  }
+
+  private enter(cmd: string): void {
+    if (this.stage === 'login') {
+      if (!cmd) return this.out('\r\nbrain login: ')
+      this.stage = 'password'
+      return this.out('\r\nPassword: ')
+    }
+    if (this.stage === 'password') {
+      this.stage = 'shell'
+      return this.out('\r\nLinux brain 6.1.0（デモ）\r\n' + this.prompt())
+    }
+    const [name, ...args] = cmd.trim().split(/\s+/)
+    let r = ''
+    if (!name) r = ''
+    else if (name === 'ls') r = 'lefthand  メモ.txt  写真  設定のバックアップ.yaml\r\n'
+    else if (name === 'cat') r = '牛乳を買う\r\n歯医者の予約（金曜 18:00）\r\n'
+    else if (name === 'stty' && args[0] === 'size') r = `${this.rows} ${this.cols}\r\n`
+    else if (name === 'stty' && args[0] === 'rows') {
+      this.rows = Number(args[1]) || this.rows
+      this.cols = Number(args[3]) || this.cols
+    } else if (name === 'exit' || name === 'logout') {
+      this.stage = 'login'
+      return this.out('\r\n\r\nDebian GNU/Linux 13 brain ttyGS0（デモ）\r\n\r\nbrain login: ')
+    } else r = `${name}: デモでは ls、cat、stty size、exit だけが使えます\r\n`
+    this.out('\r\n' + r + this.prompt())
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    this.onClose('closed by user')
+  }
 }
 
 // demoCalendar は、デモで見せる予定（今日の今の前後と、明日）。brain-deck calendar sync が送るものと同じ形。

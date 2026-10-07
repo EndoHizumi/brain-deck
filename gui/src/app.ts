@@ -26,6 +26,7 @@ import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calw
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './ports'
+import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, BrainImage, Config, EngineStatus, GetTextResult, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind,
@@ -90,6 +91,7 @@ export interface AppDeps {
   validateDelayMs?: number
   helloTimeoutMs?: number
   keepaliveMs?: number
+  createTerminal?: () => Promise<TermLike> // コンソールのタブの端末（xterm.js）。テストでは模擬
   // 一覧から選んだポートに hello を送る前に、何も書かずに待つ時間。コンソール（ログイン画面）の文字が届いたら、送らない
   sniffMs?: number
 }
@@ -142,8 +144,11 @@ export class App {
   previewPress: string | null = null
   // テキストのタイルの中身（接続したときに Brain から読む）。GUI の接続中は brain-deck が書けないので、読み直さない
   texts: Record<string, TextEntry> = {}
-  // 画面の切り替え：設定（キーとタッチ）か、Todo か
-  section: 'config' | 'todo' = 'config'
+  // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
+  section: 'config' | 'todo' | 'console' = 'config'
+  // コンソールのタブ（Brain の 1 つ目のシリアル。設定のタブとは別のポートで、同時に開いておける）
+  console: ConsoleSession
+  private main: HTMLElement // 作り直す画面。端末（console.host）はその外に置き、作り直さない
   // Todo の一覧（Brain のデータが正。接続したときに読み、Brain で変わると通知が届く）
   todo: TodoList | null = null
   // カレンダーの予定（Brain のデータ。接続したときに読む。brain-deck calendar sync が送る）
@@ -186,8 +191,18 @@ export class App {
       helloTimeoutMs: deps.helloTimeoutMs ?? 1500,
       keepaliveMs: deps.keepaliveMs ?? 10000,
       sniffMs: deps.sniffMs ?? 300,
+      createTerminal: deps.createTerminal ?? (() => import('./terminal').then((m) => m.createXterm())),
       decodeImage: deps.decodeImage ?? decodeFile,
     }
+    this.main = document.createElement('div')
+    this.console = new ConsoleSession({
+      serial: this.deps.serial,
+      openTransport: this.deps.openTransport,
+      ports: this.ports,
+      createTerminal: this.deps.createTerminal,
+      onChange: () => this.render(),
+    })
+    this.root.replaceChildren(this.main, this.console.host)
     this.deps
       .loadFont()
       .then((f) => {
@@ -203,7 +218,10 @@ export class App {
     this.deps.serial?.addEventListener?.('disconnect', (e: Event) => {
       // ケーブルを抜くと、つなぎ直したときには別の SerialPort になるので、覚えた役割を忘れる。
       // 接続していれば、読み込みループの終わりで onClose が呼ばれる
-      if (e.target) this.ports.forget(e.target as SerialPort)
+      if (e.target) {
+        this.ports.forget(e.target as SerialPort)
+        this.console.forget(e.target as SerialPort)
+      }
     })
     this.render()
   }
@@ -1255,7 +1273,10 @@ export class App {
   // ---------- 描画 ----------
 
   render(): void {
-    replaceKeepingFocus(this.root, this.view())
+    replaceKeepingFocus(this.main, this.view())
+    const showConsole = this.section === 'console'
+    this.console.host.hidden = !showConsole
+    if (showConsole) void this.console.shown()
     this.drawPreview()
     this.drawImageEdit()
   }
@@ -1266,7 +1287,7 @@ export class App {
       { class: 'app' },
       this.viewHeader(),
       this.viewMessages(),
-      this.cfg ? this.viewEditor() : this.viewStart(),
+      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' ? this.viewEditor() : this.viewStart(),
       this.diff ? this.viewDiff() : null,
       this.imageEdit ? this.viewImageEdit() : null,
     )
@@ -1324,6 +1345,7 @@ export class App {
     return h(
       'main',
       { class: 'start' },
+      this.viewSections(),
       h('h2', null, 'はじめに'),
       h('ol', null,
         h('li', null, 'Brain と PC を USB ケーブルでつなぎ、「Brain に接続」を押します。'),
@@ -1355,9 +1377,10 @@ export class App {
     )
   }
 
-  showSection(s: 'config' | 'todo'): void {
+  showSection(s: 'config' | 'todo' | 'console'): void {
     this.section = s
     this.render()
+    if (s === 'console') this.console.focus()
   }
 
   // viewSections は、設定（キーとタッチ）と Todo の切り替え。
@@ -1368,7 +1391,42 @@ export class App {
         'aria-selected': this.section === 'config' ? 'true' : 'false', onclick: () => this.showSection('config') }, 'キーとタッチ'),
       h('button', { role: 'tab', id: 'section-todo', class: ['section', this.section === 'todo' && 'active'],
         'aria-selected': this.section === 'todo' ? 'true' : 'false', onclick: () => this.showSection('todo') },
-        'Todo', open ? h('span', { class: 'count' }, String(open)) : null))
+        'Todo', open ? h('span', { class: 'count' }, String(open)) : null),
+      h('button', { role: 'tab', id: 'section-console', class: ['section', this.section === 'console' && 'active'],
+        'aria-selected': this.section === 'console' ? 'true' : 'false', onclick: () => this.showSection('console') },
+        'コンソール', this.console.open ? h('span', { class: 'count ok' }, '接続中') : null))
+  }
+
+  // viewConsole は「コンソール」タブの上の帯。端末そのもの（console.host）は、作り直さない別の要素に置く。
+  private viewConsole(): HTMLElement {
+    const c = this.console
+    const size = c.size
+    const synced = !!size && !!c.sentSize && size.rows === c.sentSize.rows && size.cols === c.sentSize.cols
+    return h(
+      'main',
+      { class: 'console-main' },
+      this.viewSections(),
+      h('section', { class: 'panel console-bar' },
+        h('div', { class: 'panel-head' },
+          h('h2', null, 'Brain のコンソール'),
+          h('span', { class: ['conn', c.open ? 'ok' : 'off'], id: 'console-state' },
+            c.open ? '● 接続中' : c.state === 'connecting' ? '… 接続中' : '○ 未接続'),
+          c.open
+            ? h('button', { id: 'console-disconnect', onclick: () => void c.disconnect() }, '切断')
+            : h('button', { class: 'primary', id: 'console-connect', disabled: c.state !== 'idle' || !this.deps.serial, onclick: () => void c.connect() }, '接続'),
+          h('button', { id: 'console-size', disabled: !c.open || !size, onclick: () => void c.sendSize(),
+            title: 'シリアルでは端末の大きさが伝わらないので、シェルのプロンプトが出ているときに押して伝えます' },
+            size ? `大きさを合わせる（${sttyCommand(size)} を送る）` : '大きさを合わせる'),
+          size ? h('span', { class: 'hint', id: 'console-size-state' },
+            `端末 ${size.cols}×${size.rows}　`, c.open ? (synced ? 'Brain に伝えてあります' : 'Brain にはまだ伝えていません') : '') : null,
+        ),
+        c.status ? h('div', { class: `msg ${c.status.level}`, id: 'console-status' }, c.status.text) : null,
+        h('p', { class: 'hint' },
+          'Brain の 1 つ目のシリアル（/dev/ttyGS0）のログイン画面です。ユーザー名とパスワードでログインします。',
+          '「大きさを合わせる」は、シェルのプロンプトが出ているときだけ押してください（ログイン画面やエディタの中では、そのまま入力されます）。',
+          'Ctrl+W、Ctrl+T、Ctrl+N などはブラウザが先に使うので、Brain には届きません。'),
+      ),
+    )
   }
 
   // viewTodo は「Todo」タブ。項目は Brain のデータで、ここで変えるとすぐ Brain に書く（設定の保存とは別）。

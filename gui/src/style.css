@@ -203,3 +203,15 @@ canvas.crop-preview { width: 100%; max-width: 640px; height: auto; image-renderi
 table.images { border-collapse: collapse; font-size: 12px; margin: 6px 0; }
 table.images th, table.images td { padding: 3px 8px; border-bottom: 1px solid #eef0f3; text-align: left; }
 .mono { font-family: ui-monospace, monospace; }
+
+/* コンソールのタブ。端末（.console-host）は画面を作り直しても残す別の要素で、帯（main）のすぐ下に置く */
+main.console-main { padding-bottom: 0; }
+.console-bar { margin-bottom: 0; }
+.console-bar .conn.ok { color: var(--ok); }
+.console-bar .conn.off { color: var(--muted); }
+.console-bar .msg { box-shadow: none; margin-bottom: 6px; }
+.console-bar .hint { margin: 4px 0 0; }
+.console-host { margin: 8px 16px 16px; height: calc(100vh - 320px); min-height: 260px; padding: 6px; background: #10161f; border-radius: 8px; }
+.console-host[hidden] { display: none; }
+.console-host .xterm { height: 100%; }
+.section .count.ok { background: var(--ok); }
