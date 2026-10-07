@@ -792,7 +792,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | systemd/ | サービスと drop-in |
 | install.sh | Brain 上での配置 |
 | config.yaml | 設定の例。実機と同じ値 |
-| config/current.yaml | Brain で動いている本番の設定の写し（2026-10-06 に退避） |
+| config/current.yaml | Brain で動いている本番の設定の写し（2026-10-07 にダッシュボードのレイヤーを足して反映。メニューの「ダッシュボード」から入り、HOME で戻る） |
 | config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |

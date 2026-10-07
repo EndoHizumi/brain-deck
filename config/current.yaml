@@ -121,6 +121,7 @@ layers:
         "1,0": {layer_to: browser, label: ブラウザ}
         "1,1": {layer_to: window, label: ウィンドウ}
         "2,0": {layer_to: debug, label: デバッグ}
+        "2,1": {layer_to: dashboard, label: "ダッシュ\nボード"}
         "3,0": {layer_to: move, label: 移動}
         "3,1": {layer_to: base, label: 基本}
   - name: code
@@ -252,6 +253,17 @@ layers:
         "3,0": {key: LCTRL+DOWN, label: "アプリの\nウィンドウ"}
         "3,1": {key: LGUI+LSHIFT+5, label: "スクリーン\nショット"}
         "3,2": {key: LGUI+SPACE, label: Spotlight}
+  - name: dashboard
+    label: ダッシュボード
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {widget: text, id: build, label: ビルド}
+        "1,0": {widget: text, id: deploy, label: デプロイ}
+        "2,0": {widget: clock, span: [2, 1]}
+        "0,1": {widget: todo, span: [2, 2], label: Todo}
+        "2,1": {widget: calendar, span: [2, 2], label: 予定}
 display:
   enabled: true
   device: /dev/fb0
