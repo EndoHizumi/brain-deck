@@ -25,7 +25,7 @@ import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
-import { PortRoles, isBrainPort, looksLikeConsole } from './ports'
+import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './ports'
 import type {
   ActionSpec, BrainImage, Config, EngineStatus, GetTextResult, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind,
@@ -269,7 +269,7 @@ export class App {
       const r = await this.tryPort(port, true)
       if (r.result === 'open_failed') this.say(openFailedMessage(r.error), 'error')
       else if (r.result === 'console')
-        this.say('このポートからは、ログイン画面かシェルの文字が届きました。コンソール用のポートなので、何も送っていません。もう一度「Brain に接続」を押して、もう一方を選んでください', 'error')
+        this.say('このポートからは、lefthand ではない文字（ログイン画面やシェル）が届きました。コンソール用のポートかもしれないので、何も送っていません。もう一度「Brain に接続」を押して、もう一方を選んでください', 'error')
       else if (r.result === 'no_answer')
         this.say(
           'このポートは開けましたが、lefthand が答えません。Brain のシリアルは 2 つあり、もう一方（コンソール用）を選んだかもしれません。' +
@@ -298,8 +298,10 @@ export class App {
       t.onData = (b) => (got += dec.decode(b, { stream: true }))
       t.onClose = () => {}
       await new Promise((r) => setTimeout(r, this.deps.sniffMs))
+      // lefthand は、聞かれるまで何も送らない。JSON ではない文字が届いたら送らない（コンソールの可能性がある）。
+      // 役割を覚えるのは、ログイン画面かシェルのプロンプトが見えたときだけ
       if (looksLikeConsole(got)) {
-        this.ports.learn(port, 'console')
+        if (looksLikePrompt(got)) this.ports.learn(port, 'console')
         this.ports.release(port)
         await t.close().catch(() => {})
         return { result: 'console' }

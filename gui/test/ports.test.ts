@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app'
 import { FakeDaemon, FakeTransport } from '../src/demo'
-import { PortRoles, looksLikeConsole, looksLikeLefthand } from '../src/ports'
+import { PortRoles, looksLikeConsole, looksLikeLefthand, looksLikePrompt } from '../src/ports'
 import { ConsoleTransport, sampleConfig, testFont, twoPortSerial } from './helpers'
 
 beforeEach(() => vi.spyOn(console, 'debug').mockImplementation(() => {}))
@@ -50,6 +50,12 @@ describe('PortRoles', () => {
     expect(looksLikeConsole('user@brain:~$ ')).toBe(true)
     expect(looksLikeConsole('{"id":3,"ok":tr')).toBe(false) // 途中で切れた JSON
     expect(looksLikeConsole('')).toBe(false)
+    // 役割を覚えるのは、プロンプトが見えたときだけ（lefthand の返事の切れ端では覚えない）
+    expect(looksLikePrompt('\r\nbrain login: ')).toBe(true)
+    expect(looksLikePrompt('Password: ')).toBe(true)
+    expect(looksLikePrompt('user@brain:~$ ')).toBe(true)
+    expect(looksLikePrompt('ok":true,"result":{"x":1}}\n')).toBe(false)
+    expect(looksLikePrompt('Brainux 6.1')).toBe(false)
   })
 })
 
@@ -121,7 +127,7 @@ describe('設定のタブ：ポートの見分け方', () => {
     await t.app.connect()
     expect(t.app.connected).toBe(false)
     expect(t.consoleWrites()).toBe(0)
-    expect(t.root.textContent).toContain('コンソール用のポートなので、何も送っていません')
+    expect(t.root.textContent).toContain('コンソール用のポートかもしれないので、何も送っていません')
     expect(t.app.ports.role(t.s.consolePort)).toBe('console')
 
     // コンソール用だと分かったので、次は一覧を出さずに、もう一方を使う
@@ -129,6 +135,25 @@ describe('設定のタブ：ポートの見分け方', () => {
     expect(t.app.connected).toBe(true)
     expect(t.s.state.requests).toBe(1)
     expect(t.consoleWrites()).toBe(0)
+  })
+
+  it('lefthand の返事の切れ端が残っていても、コンソール用とは覚えない（送らずに断るだけ）', async () => {
+    const t = setup()
+    const s2 = t.s
+    // 設定用のポートに、前の接続の返事の切れ端が残っている
+    const app = new App(t.root, {
+      serial: s2.serial,
+      openTransport: async () => {
+        const c = new ConsoleTransport('ok":true,"result":{}}\n')
+        t.consoles.push(c)
+        return c
+      },
+      loadFont: async () => testFont(), confirm: () => true, helloTimeoutMs: 100, sniffMs: 20,
+    })
+    await app.connect()
+    expect(app.connected).toBe(false)
+    expect(t.consoleWrites()).toBe(0)
+    expect(app.ports.role(s2.settingsPort)).toBeUndefined()
   })
 
   it('コンソール用だと分かっているポートを一覧で選ぶと、開かずに断る', async () => {

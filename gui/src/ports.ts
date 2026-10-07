@@ -110,3 +110,10 @@ export function looksLikeConsole(text: string): boolean {
   if (!s) return false
   return !s.startsWith('{')
 }
+
+// looksLikePrompt は、届いた文字にログイン画面かシェルのプロンプトがあるか。コンソール用だと決めるのは、これが見えたときだけ。
+// 設定のタブは、この判定をもとにもう一方のポートへ hello を送るので、lefthand の返事の切れ端（`ok":true}` など）と
+// 間違えないよう、はっきりしたものだけにする。
+export function looksLikePrompt(text: string): boolean {
+  return looksLikeConsole(text) && /(login|Password): ?$|\S+@\S+:[^\r\n]*[$#] ?$/m.test(text)
+}
