@@ -637,3 +637,66 @@ describe('背景画像', () => {
     expect(prune.keep).toContain(id)
   })
 })
+
+describe('マウスとトラックパッド', () => {
+  it('キーとセルにマウスの操作を割り当て、保存できる', async () => {
+    const t = await connected()
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'mouse')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ mouse: 'left', label: '消しゴム' })
+    t.change('#mouse', 'scroll_down')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ mouse: 'scroll_down', label: '消しゴム' })
+    expect(t.$('.inspector').textContent).toContain('押し続けると繰り返します')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.click('#save')
+    expect(t.$('.modal').textContent).toContain('mouse: scroll_down')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect(t.daemon.config.layers[0].touch!.cells!['1,0']).toEqual({ mouse: 'scroll_down', label: '消しゴム' })
+    // 時計のセルのタップにも使える
+    t.change('#kind', 'widget')
+    t.change('#tap', 'mouse')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toMatchObject({ widget: 'clock', mouse: 'left' })
+  })
+
+  it('セルをトラックパッドにすると、タップの動きは選べず、項目を編集できる。誤った値は欄に出す', async () => {
+    const t = await connected()
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    t.change('#tap', 'mouse')
+    t.change('#widget', 'trackpad')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'trackpad', label: '消しゴム' })
+    expect(t.root.querySelector('#tap')).toBeNull()
+    expect(t.$<HTMLInputElement>('#pad-speed').placeholder).toBe('1')
+    t.change('#pad-speed', '2.5')
+    t.change('#pad-scroll_width', '0')
+    t.change('#pad-scroll_direction', 'traditional')
+    t.change('#pad-long_press', 'right')
+    t.change('#pad-settle_ms', '40')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'trackpad', label: '消しゴム', speed: 2.5, scroll_width: 0,
+      scroll_direction: 'traditional', long_press: 'right', settle_ms: 40 })
+    // YAML に書き出しても数のまま
+    expect(toYAML(t.app.cfg!)).toContain('speed: 2.5')
+    t.change('#pad-smooth', '30')
+    expect(t.$('.inspector').textContent).toContain('平均するサンプル数は 1〜10の整数です')
+    t.change('#pad-smooth', '')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0'].smooth).toBeUndefined()
+    t.change('#pad-scroll_direction', '')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0'].scroll_direction).toBeUndefined()
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    // 時計に戻すと、トラックパッドの項目は消える
+    t.change('#widget', 'clock')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
+  })
+
+  it('Brain の USB にマウスがなければ伝える', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    const orig = daemon.handle.bind(daemon)
+    daemon.handle = (line: string) =>
+      orig(line).replace('"hid":{"mouse":true}', '"hid":{"mouse":false}')
+    const t = await connected(setup({ daemon }))
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'mouse')
+    expect(t.$('.inspector').textContent).toContain('Brain の USB にマウスがありません')
+  })
+})

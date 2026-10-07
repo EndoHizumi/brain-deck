@@ -1,8 +1,8 @@
 // 設定の操作。透過の解決は layer.go の view / lookupKey と同じ規則にする。
 
-import type { ActionSpec, Config, GridConfig, LayerConfig, TouchConfig, WidgetKind } from './types'
+import type { ActionSpec, Config, GridConfig, LayerConfig, MouseAction, TouchConfig, WidgetKind } from './types'
 
-export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'widget'
+export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'widget'
 export const LAYER_KINDS = ['layer_hold', 'layer_toggle', 'layer_oneshot', 'layer_to'] as const
 export type LayerKind = (typeof LAYER_KINDS)[number]
 
@@ -13,16 +13,52 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   layer_toggle: '押すたびに出し入れ（layer_toggle）',
   layer_oneshot: '次の 1 キーだけ（layer_oneshot）',
   layer_to: 'そのレイヤーへ移る（layer_to）',
-  widget: 'ウィジェット（時計、テキスト、Todo、カレンダー）',
+  mouse: 'マウス（ボタン、スクロール）',
+  widget: 'ウィジェット（時計、テキスト、Todo、カレンダー、トラックパッド）',
+}
+
+// マウスの操作と、画面に出す名前（mouse.go の mouseActions）
+export const MOUSE_LABELS: Record<MouseAction, string> = {
+  left: '左クリック',
+  right: '右クリック',
+  middle: '中クリック',
+  scroll_up: 'スクロール↑',
+  scroll_down: 'スクロール↓',
+  scroll_left: 'スクロール←',
+  scroll_right: 'スクロール→',
 }
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
-export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー' }
+export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド' }
+// トラックパッドの項目（数）
+export const PAD_NUM_FIELDS = ['speed', 'accel', 'scroll_width', 'scroll_step', 'settle_ms', 'smooth', 'deadzone', 'min_pressure', 'tap_ms', 'tap_move', 'drag_ms'] as const
+// トラックパッドの項目
+export const PAD_FIELDS = [...PAD_NUM_FIELDS, 'scroll_direction', 'long_press'] as const
+// トラックパッドの既定値（trackpad.go の defaultPad。gui/test/fixtures/pad-defaults.json で Go と比べる）
+export const PAD_DEFAULTS = {
+  speed: 1.0,
+  accel: 1.0,
+  scroll_width: 72,
+  scroll_direction: 'natural',
+  scroll_step: 24,
+  settle_ms: 30,
+  smooth: 3,
+  deadzone: 1.5,
+  min_pressure: 0,
+  tap_ms: 180,
+  tap_move: 12,
+  drag_ms: 200,
+  long_press: 'none',
+} as const
+// ウィジェットが押した位置で働く（タップしたときのキーやレイヤーを書けない）
+export function ownsTouch(w: WidgetKind | undefined): boolean {
+  return w === 'todo' || w === 'calendar' || w === 'trackpad'
+}
 // widget.go の既定の書式
 export const DEFAULT_CLOCK_FORMAT = '15:04'
 export const DEFAULT_DATE_FORMAT = '1月2日({wday})'
 // ウィジェットにだけ書ける項目
-export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars'] as const
+export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars', ...PAD_FIELDS] as const
 // ウィジェットの種類ごとの項目
 export const CLOCK_FIELDS = ['format', 'date_format', 'tz'] as const
 
@@ -39,13 +75,14 @@ export const LAYER_VERB: Record<LayerKind, string> = {
 export function actionKind(a: ActionSpec): ActionKind {
   if (a.key !== undefined) return a.key.toLowerCase() === 'none' ? 'none' : 'key'
   for (const k of LAYER_KINDS) if (a[k] !== undefined) return k
+  if (a.mouse !== undefined) return 'mouse'
   if (a.widget !== undefined) return 'widget'
   return 'none'
 }
 
 // isIncomplete は、送るキーや行き先をまだ選んでいない割り当てかどうか。
 export function isIncomplete(a: ActionSpec): boolean {
-  const fields = (['key', ...LAYER_KINDS] as const).filter((k) => a[k] !== undefined)
+  const fields = (['key', ...LAYER_KINDS, 'mouse'] as const).filter((k) => a[k] !== undefined)
   if (a.widget !== undefined) return !a.widget || (a.widget === 'text' && !a.id) || fields.some((k) => a[k] === '')
   return fields.length === 0 || fields.some((k) => a[k] === '')
 }
@@ -73,6 +110,7 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   if (k === 'key') s = a.key!
   else if (k === 'none') s = 'none'
   else if (k === 'widget') s = ''
+  else if (k === 'mouse') s = `mouse: ${a.mouse}`
   else s = `${k}: ${actionTarget(a)}`
   if (a.widget !== undefined) {
     const opts = (['format', 'date_format', 'tz', 'id', 'rows'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
@@ -93,8 +131,8 @@ export function normalizeAction(v: unknown): ActionSpec {
     const out: Record<string, unknown> = {}
     for (const [k, x] of Object.entries(v)) {
       if (x === undefined || x === null) continue
-      // 数で書いたキー（`1`）は文字にする。todo の rows は数のまま
-      out[k] = typeof x === 'number' && k !== 'rows' ? String(x) : x
+      // 数で書いたキー（`1`）は文字にする。todo の rows とトラックパッドの項目は数のまま
+      out[k] = typeof x === 'number' && k !== 'rows' && !(PAD_NUM_FIELDS as readonly string[]).includes(k) ? String(x) : x
     }
     return out as ActionSpec
   }

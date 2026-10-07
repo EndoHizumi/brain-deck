@@ -4,6 +4,7 @@ process.env.TZ = 'Asia/Tokyo'
 import { cellSpan, cellView, renderPreview, type Mode } from '../src/preview'
 import type { PressStyle } from '../src/types'
 import { parseConfigText } from '../src/yamlio'
+import { PAD_DEFAULTS } from '../src/model'
 import { decodePNG, repoFile, repoRoot, sampleConfig, testFont } from './helpers'
 import { decodeImageFile, type Image565 } from '../src/image'
 import { readdirSync } from 'node:fs'
@@ -163,6 +164,43 @@ describe('Brain の画面のプレビュー', () => {
     expect(at(fill, 204 + 10, 240)).toEqual([0xff, 0xd0, 0x40])
   })
 
+  // トラックパッドとマウスのボタンのセル。config/trackpad-example.yaml の「マウス」レイヤー
+  // go run . -render-png gui/test/fixtures/trackpad.png -render-layer mouse config/trackpad-example.yaml
+  const pcfg = parseConfigText(repoFile('config/trackpad-example.yaml').toString('utf8'))
+  const mouseLayer = pcfg.layers.findIndex((l) => l.name === 'mouse')
+  const pcases: { file: string; pressed?: string[]; pressStyle?: PressStyle }[] = [
+    { file: 'trackpad.png' },
+    { file: 'trackpad-pressed.png', pressed: ['0,0', '3,1'] },
+    { file: 'trackpad-pressed-fill.png', pressed: ['0,0', '3,1'], pressStyle: 'fill' },
+  ]
+  for (const c of pcases) {
+    it(`トラックパッドも lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: pcfg, stack: [0, mouseLayer], mode: 'latched', pressed: new Set(c.pressed), pressStyle: c.pressStyle })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
+  it('トラックパッドの既定値は Go と同じ（fixtures/pad-defaults.json）', () => {
+    expect(JSON.parse(repoFile('gui/test/fixtures/pad-defaults.json').toString('utf8'))).toEqual({ ...PAD_DEFAULTS })
+  })
+
+  it('スクロールの帯は scroll_width で変わり、0 なら描かない', () => {
+    const at = (pixels: Uint8ClampedArray, x: number, y: number) => Array.from(pixels.slice((y * 800 + x) * 4, (y * 800 + x) * 4 + 3))
+    const cfg2 = structuredClone(pcfg)
+    const cell = cfg2.layers[mouseLayer].touch!.cells!['0,0']
+    cell.scroll_width = 0
+    const none = renderPreview(font, { cfg: cfg2, stack: [0, mouseLayer], mode: 'latched' }).pixels
+    expect(at(none, 560, 240)).toEqual([0x1c, 0x28, 0x38])
+    cell.scroll_width = 120
+    const wide = renderPreview(font, { cfg: cfg2, stack: [0, mouseLayer], mode: 'latched' }).pixels
+    expect(at(wide, 490, 240)).toEqual([0x26, 0x34, 0x48])
+    expect(at(wide, 470, 240)).toEqual([0x1c, 0x28, 0x38])
+  })
+
   it('セルの境界はタッチの判定と同じ', () => {
     expect(cellSpan(0, 3, 800)).toEqual([0, 267])
     expect(cellSpan(1, 3, 800)).toEqual([267, 534])
@@ -174,6 +212,8 @@ describe('Brain の画面のプレビュー', () => {
     expect(cellView(cfg, { key: 'B', label: 'ブラシ' })).toMatchObject({ label: 'ブラシ', sub: 'B' })
     expect(cellView(cfg, { layer_toggle: 'view' })).toMatchObject({ layer: true, label: '表示', sub: '切替' })
     expect(cellView(cfg, { layer_hold: 'edit', label: 'E' })).toMatchObject({ label: 'E', sub: '押す間:編集' })
+    expect(cellView(cfg, { mouse: 'left' })).toMatchObject({ label: '左クリック', sub: '' })
+    expect(cellView(cfg, { mouse: 'scroll_down', label: '下' })).toMatchObject({ label: '下', sub: 'スクロール↓' })
   })
 
   it('フォントにない文字が分かる', () => {

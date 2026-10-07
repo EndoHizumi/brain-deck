@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -532,5 +534,42 @@ func TestPadConfigValidation(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "speed: 2.5") || !strings.Contains(out.String(), "accel: 0") {
 		t.Errorf("YAML: %s", out.String())
+	}
+}
+
+// padDefaultsJSON は、トラックパッドの既定値を設定の項目の名前で書いたもの。GUI（gui/src/model.ts の PAD_DEFAULTS）と比べる。
+func padDefaultsJSON() map[string]any {
+	p := defaultPad
+	dir, lp := scrollWheel, longPressNone
+	if p.Natural {
+		dir = scrollNatural
+	}
+	if p.LongPress {
+		lp = longPressR
+	}
+	return map[string]any{
+		"speed": p.Speed, "accel": p.Accel, "scroll_width": p.ScrollWidth, "scroll_direction": dir, "scroll_step": p.ScrollStep,
+		"settle_ms": p.Settle.Milliseconds(), "smooth": p.Smooth, "deadzone": p.Deadzone, "min_pressure": p.MinPressure,
+		"tap_ms": p.TapTime.Milliseconds(), "tap_move": p.TapMove, "drag_ms": p.DragGap.Milliseconds(), "long_press": lp,
+	}
+}
+
+// TestPadDefaultsFixture は、gui/test/fixtures/pad-defaults.json が Go の既定値と同じことを確かめる。
+// 既定値を変えたら LEFTHAND_UPDATE_PADDEFAULTS=1 go test -run PadDefaults で書き直し、gui/src/model.ts の PAD_DEFAULTS も直す。
+func TestPadDefaultsFixture(t *testing.T) {
+	const path = "gui/test/fixtures/pad-defaults.json"
+	want, _ := json.MarshalIndent(padDefaultsJSON(), "", "  ")
+	want = append(want, '\n')
+	if os.Getenv("LEFTHAND_UPDATE_PADDEFAULTS") == "1" {
+		if err := os.WriteFile(path, want, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s is stale (LEFTHAND_UPDATE_PADDEFAULTS=1 go test -run PadDefaults):\n%s", path, want)
 	}
 }

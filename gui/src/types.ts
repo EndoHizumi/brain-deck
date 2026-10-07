@@ -7,6 +7,7 @@ export interface ActionSpec {
   layer_toggle?: string
   layer_oneshot?: string
   layer_to?: string
+  mouse?: MouseAction // マウスの操作。押しているあいだボタンを押す
   label?: string
   span?: [number, number] // セルの大きさ [列数, 行数]。タッチのセルだけ
   background?: string // セルの背景画像の id（Brain の /var/lib/lefthand/images/<id>.565）。タッチのセルだけ
@@ -20,9 +21,25 @@ export interface ActionSpec {
   page_reset?: string // todo、calendar：触らなければ最初のページに戻るまでの時間（30s、2m など）。off で戻らない
   stale?: string // calendar：最終更新がこれより古ければ、古いと出す（3h など）
   calendars?: string[] // calendar：出すカレンダーの名前。省略するとすべて
+  // trackpad：トラックパッド（trackpad.go）。省略すると既定値
+  speed?: number // 感度（画面の 1 ドットを、PC のマウスの何カウントにするか）
+  accel?: number // 加速（0 で加速しない）
+  scroll_width?: number // 右端のスクロールの帯の幅（ドット）。0 で帯なし
+  scroll_direction?: 'natural' | 'traditional'
+  scroll_step?: number // ホイール 1 段に当たる指の動き（ドット）
+  settle_ms?: number // 触れた直後に捨てる時間
+  smooth?: number // 平均を取るサンプルの数
+  deadzone?: number // これより小さな動きを無視する（ドット）
+  min_pressure?: number // 押す強さがこれより弱いサンプルを捨てる
+  tap_ms?: number // これより短く触れて離せばタップ
+  tap_move?: number // タップとみなす動きの上限（ドット）
+  drag_ms?: number // タップのあと、これより早く触れればドラッグ
+  long_press?: 'none' | 'right' // 長押しで右クリック
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad'
+
+export type MouseAction = 'left' | 'right' | 'middle' | 'scroll_up' | 'scroll_down' | 'scroll_left' | 'scroll_right'
 
 export interface SoftArea {
   x: [number, number]

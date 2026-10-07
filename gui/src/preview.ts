@@ -3,7 +3,7 @@
 import { FONT_H, type BitmapFont } from './font'
 import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
-import { LAYER_VERB, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
+import { LAYER_VERB, MOUSE_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
@@ -26,6 +26,9 @@ const colPressEdge: RGB = [0, 0, 0] // border の外側の暗い線
 const colEmptyBorder: RGB = [0x30, 0x34, 0x3a]
 const colLayerCell: RGB = [0x2a, 0x22, 0x3c]
 const colHalo: RGB = [0, 0, 0] // 背景画像の上の文字の縁取り
+// trackpad.go
+const colPadBand: RGB = [0x26, 0x34, 0x48] // スクロールの帯
+const colPadRail: RGB = [0x50, 0x60, 0x74] // 帯の中の線
 const colUnsynced: RGB = [0xff, 0x80, 0x20] // 時刻を合わせていない時計
 // todowidget.go
 const colTodoDone: RGB = [0x6a, 0x74, 0x80] // 完了した項目
@@ -65,6 +68,7 @@ export interface CellView {
   textId?: string // テキストのウィジェットの id
   todoRows?: number // Todo のウィジェット（0 なら高さで決める）
   cal?: CalWidget // カレンダーのウィジェット
+  padScroll?: number // トラックパッドのスクロールの帯の幅（0 なら帯なし）
   background?: string // セルの背景画像の id
 }
 
@@ -97,9 +101,10 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'text') v.textId = a.id ?? ''
     if (a.widget === 'todo') v.todoRows = typeof a.rows === 'number' ? a.rows : 0
     if (a.widget === 'calendar') v.cal = calWidgetOf(a)
+    if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
     return v
   }
-  if (k !== 'key' && k !== 'none') {
+  if (k !== 'key' && k !== 'none' && k !== 'mouse') {
     const t = actionTarget(a)
     const dest = cfg.layers.find((l) => l.name === t)
     const destTitle = dest ? layerTitle(dest) : (t ?? '')
@@ -108,7 +113,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     else sub += ':' + destTitle
     return { mapped: true, layer: true, label, sub }
   }
-  const keys = prettyCombo(a.key ?? '')
+  const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : prettyCombo(a.key ?? '')
   if (label === '' || label === keys) return { mapped: true, layer: false, label: keys, sub: '' }
   return { mapped: true, layer: false, label, sub: keys }
 }
@@ -333,9 +338,44 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
   const inner = inset(box, textMargin)
   px.halo = hasImg
   try {
-    drawCellContent(font, px, inner, v, env, textC, subC)
+    if (v.widget === 'trackpad') drawPad(font, px, cell, box, inner, v, subC)
+    else drawCellContent(font, px, inner, v, env, textC, subC)
   } finally {
     px.halo = false
+  }
+}
+
+// drawPad は trackpad.go の drawPad と同じ。見出しと、右端のスクロールの帯（タッチの判定と同じく、セルの右端から scroll_width ドット）。
+function drawPad(font: BitmapFont, px: Pixels, cell: Rect, box: Rect, inner: Rect, v: CellView, subInk: RGB): void {
+  const sw = v.padScroll ?? 0
+  const area = { ...inner }
+  if (sw > 0) {
+    const inb = inset(box, borderW)
+    const band = { x0: Math.max(cell.x1 - sw, inb.x0), y0: inb.y0, x1: inb.x1, y1: inb.y1 }
+    if (band.x0 < band.x1 && band.y0 < band.y1) {
+      area.x1 = Math.min(area.x1, band.x0 - textMargin)
+      const halo = px.halo
+      px.halo = false
+      px.fill(band, colPadBand)
+      const bw = band.x1 - band.x0
+      const bh = band.y1 - band.y0
+      const cx = band.x0 + Math.trunc(bw / 2)
+      const s = Math.min(fitScale(font, ['▲'], bw - 4, Math.trunc(bh / 4), 2), 2)
+      const top = band.y0 + textMargin
+      const bottom = band.y1 - textMargin - FONT_H * s
+      const railTop = top + FONT_H * s + 4
+      const railBottom = bottom - 4
+      if (railBottom > railTop) px.fill({ x0: cx - 1, y0: railTop, x1: cx + 1, y1: railBottom }, colPadRail)
+      drawCentered(font, px, band, top, '▲', s, colSub)
+      drawCentered(font, px, band, bottom, '▼', s, colSub)
+      px.halo = halo
+    }
+  }
+  const aw = area.x1 - area.x0
+  if (v.label && aw > 0) {
+    const cap = v.label.replace(/\n/g, ' ')
+    const s = Math.min(fitScale(font, [cap], aw, FONT_H * captionScale), captionScale)
+    drawCentered(font, px, area, area.y0, cap, s, subInk)
   }
 }
 

@@ -215,3 +215,20 @@ main.console-main { padding-bottom: 0; }
 .console-host[hidden] { display: none; }
 .console-host .xterm { height: 100%; padding: 6px; background: #10161f; }
 .section .count.ok { background: var(--ok); }
+
+/* トラックパッドの項目のまとまり。長い選択肢でも欄からはみ出さない */
+.pad-group {
+  min-width: 0;
+  margin: 0 0 8px;
+  padding: 4px 10px 6px;
+  border: 1px solid #d6dbe1;
+  border-radius: 6px;
+}
+.pad-group legend {
+  font-size: 13px;
+  color: #556;
+}
+.pad-group select {
+  min-width: 0;
+  max-width: 100%;
+}

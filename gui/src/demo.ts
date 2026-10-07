@@ -4,7 +4,7 @@
 
 import { ALL_KEYS, MODIFIERS } from './keys'
 import keymapJSON from './keymap-pwsh2.json'
-import { LAYER_KINDS, actionKind, actionTarget, parseCellKey, spanOf } from './model'
+import { LAYER_KINDS, MOUSE_LABELS, PAD_FIELDS, actionKind, actionTarget, parseCellKey, spanOf } from './model'
 import type { Transport } from './protocol'
 import { TEXT_ID_PATTERN } from './textwidget'
 import type { ActionSpec, CalendarData, Config, KeymapInfo, Problem, TextEntry, TodoItem, TodoList } from './types'
@@ -70,7 +70,7 @@ export class FakeDaemon {
       case 'get_keymap':
         return ok(keymap)
       case 'get_status':
-        return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress, time: this.timeInfo() })
+        return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress, time: this.timeInfo(), hid: { mouse: true } })
       case 'set_time': {
         if (typeof req.unix_ms !== 'number') return err('bad_request', '"unix_ms" is required')
         const offset = req.unix_ms - (Date.now() - this.clockOffsetMs)
@@ -321,13 +321,19 @@ export function validate(cfg: Config): Problem[] {
     names.add(l.name)
   })
   const action = (path: string, where: string, a: ActionSpec, cell = false) => {
-    const n = (['key', ...LAYER_KINDS] as const).filter((k) => a[k]).length
+    const n = (['key', ...LAYER_KINDS, 'mouse'] as const).filter((k) => a[k]).length
     if (n > 1 || (n === 0 && !a.widget))
-      return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to (a widget cell may omit them)` })
+      return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse (a widget cell may omit them)` })
+    if (a.mouse !== undefined && !Object.hasOwn(MOUSE_LABELS, a.mouse))
+      out.push({ path, message: `${where}: unknown mouse action "${a.mouse}" (${Object.keys(MOUSE_LABELS).join(', ')})` })
+    if (a.widget === 'trackpad' && n > 0)
+      out.push({ path, message: `${where}: widget: trackpad handles taps itself (tap to click); remove key, layer_* and mouse (put mouse buttons in other cells)` })
+    if (a.widget !== 'trackpad' && PAD_FIELDS.some((f) => a[f] !== undefined))
+      out.push({ path, message: `${where}: speed, accel, scroll_*, settle_ms, smooth, deadzone, min_pressure, tap_*, drag_ms and long_press are for widget: trackpad` })
     if (!cell && (a.widget || a.span || a.background)) return out.push({ path, message: `${where}: widget, span and background can be used only in touch cells` })
     if (a.background !== undefined && !/^[0-9a-f]{16}$/.test(a.background))
       out.push({ path, message: `${where}: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got "${a.background}"` })
-    if (a.widget && !['clock', 'text', 'todo', 'calendar'].includes(a.widget)) out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar)` })
+    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad'].includes(a.widget)) out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad)` })
     if (a.widget === 'todo' && n > 0) out.push({ path, message: `${where}: widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*` })
     if (a.widget === 'calendar' && n > 0) out.push({ path, message: `${where}: widget: calendar handles taps itself (▲▼ to turn pages); remove key and layer_*` })
     const paged = a.widget === 'todo' || a.widget === 'calendar'
@@ -352,7 +358,7 @@ export function validate(cfg: Config): Problem[] {
         if (!ALL_KEYS.has(u) && !(MODIFIERS as readonly string[]).includes(u))
           out.push({ path, message: `${where}: unknown key "${u}" in "${a.key}"` })
       }
-    } else if (k !== 'none' && k !== 'widget') {
+    } else if (k !== 'none' && k !== 'widget' && k !== 'mouse') {
       const t = actionTarget(a)!
       if (!names.has(t)) out.push({ path, message: `${where}: ${k} refers to unknown layer "${t}"` })
       else if (k === 'layer_toggle' && t === cfg.layers[0].name)

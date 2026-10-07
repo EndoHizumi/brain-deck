@@ -8,7 +8,8 @@ import {
 } from './keys'
 import defaultKeymap from './keymap-pwsh2.json'
 import {
-  CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, WIDGET_FIELDS, WIDGET_LABELS,
+  CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
+  PAD_NUM_FIELDS, WIDGET_FIELDS, WIDGET_LABELS, ownsTouch,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
   isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
   resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
@@ -29,7 +30,7 @@ import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './por
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, BrainImage, Config, EngineStatus, GetTextResult, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind,
+  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MouseAction,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -139,6 +140,7 @@ export class App {
   // 学習モード・Brain の状態
   learning = false
   brainStatus: EngineStatus | null = null
+  brainMouse: boolean | null = null // Brain のガジェットにマウスがあるか（get_status の hid.mouse。古い lefthand なら null）
   flash: Selection | null = null
   // プレビューで、マウスで押さえているセル（"列,行"）。押したときの見た目で描く
   previewPress: string | null = null
@@ -362,6 +364,7 @@ export class App {
       this.hello = null
       this.stopLearning(false)
       this.brainStatus = null
+      this.brainMouse = null
       this.todo = null
       this.calendar = null
       this.brainImages = null
@@ -403,6 +406,7 @@ export class App {
     this.client = null
     this.hello = null
     this.brainStatus = null
+    this.brainMouse = null
     this.todo = null
     this.calendar = null
     this.brainImages = null
@@ -426,7 +430,9 @@ export class App {
       this.layer = 0
       this.sel = null
     }
-    this.brainStatus = (await c.request<{ status: EngineStatus }>('get_status')).status
+    const st = await c.request<{ status: EngineStatus; hid?: { mouse: boolean } }>('get_status')
+    this.brainStatus = st.status
+    this.brainMouse = st.hid ? st.hid.mouse : null
     if (this.hello?.commands?.includes('get_text')) this.texts = (await c.request<GetTextResult>('get_text')).texts ?? {}
     await this.loadTodo()
     this.calendar = this.hello?.commands?.includes('get_calendar') ? await c.request<CalendarData>('get_calendar') : null
@@ -935,6 +941,9 @@ export class App {
       case 'widget':
         a = { widget: 'clock' }
         break
+      case 'mouse':
+        a = { mouse: cur?.mouse ?? 'left' }
+        break
       case 'key':
         a = { key: cur && actionKind(cur) === 'key' ? cur.key : '' }
         break
@@ -957,6 +966,7 @@ export class App {
     const a: ActionSpec = {}
     for (const f of [...WIDGET_FIELDS, 'label', 'span', 'background'] as const) if (cur[f] !== undefined) (a as any)[f] = cur[f]
     if (kind === 'key') a.key = cur.key && cur.key.toLowerCase() !== 'none' ? cur.key : ''
+    else if (kind === 'mouse') a.mouse = cur.mouse ?? 'left'
     else if (LAYER_KINDS.includes(kind as LayerKind)) {
       const others = this.cfg!.layers.filter((_, i) => i !== this.layer && !(kind === 'layer_toggle' && i === 0))
       a[kind as LayerKind] = actionTarget(cur) || others[0]?.name || ''
@@ -996,6 +1006,9 @@ export class App {
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
     for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale'] as const) if (a[f] === '') delete a[f]
+    for (const f of PAD_NUM_FIELDS) if (a[f] === undefined || !Number.isFinite(a[f])) delete a[f]
+    if (!a.scroll_direction) delete a.scroll_direction
+    if (!a.long_press) delete a.long_press
     if (!(Number.isInteger(a.rows) && a.rows! > 0)) delete a.rows
     if (a.calendars && !a.calendars.length) delete a.calendars
     this.setAction(a)
@@ -1018,8 +1031,10 @@ export class App {
       delete a.stale
       delete a.calendars
     }
-    // Todo とカレンダーは押した位置で働く（長押しで完了、▲▼ でページ送り）ので、タップしたときのキーやレイヤーは書けない
-    if (paged) for (const k of ['key', ...LAYER_KINDS] as const) delete a[k]
+    if (w !== 'trackpad') for (const f of PAD_FIELDS) delete a[f]
+    // Todo、カレンダー、トラックパッドは押した位置で働く（長押しで完了、▲▼ でページ送り、タップでクリック）ので、
+    // タップしたときのキーやレイヤーは書けない
+    if (ownsTouch(w)) for (const k of ['key', ...LAYER_KINDS, 'mouse'] as const) delete a[k]
     this.setAction(a)
   }
 
@@ -2076,7 +2091,7 @@ export class App {
     const errs = this.problemsAt((loc) => this.selMatches(loc, sel, this.layer))
     const kind: ActionKind | 'inherit' = own ? (own.widget !== undefined ? 'widget' : actionKind(own)) : 'inherit'
     // ウィジェットのセルで、タップしたときに働くもの
-    const tap: ActionKind | null = own?.widget !== undefined && own.widget !== 'todo' && own.widget !== 'calendar' ? actionKind(own) : null
+    const tap: ActionKind | null = own?.widget !== undefined && !ownsTouch(own.widget) ? actionKind(own) : null
     const inheritLabel = this.layer === 0 ? '割り当てなし' : '透過（下のレイヤーのものを使う）'
     const notes = sel.kind === 'key' ? this.keymap.keys.filter((k) => k.code === sel.code || k.symbol === sel.code).map((k) => k.note).filter(Boolean) : []
 
@@ -2094,10 +2109,11 @@ export class App {
       body.push(h('label', { class: 'row' }, 'タップしたとき ', h('select', { 'data-focus': 'tap', id: 'tap',
         onchange: (e: Event) => this.setTap((e.target as HTMLSelectElement).value as ActionKind) },
         h('option', { value: 'widget', selected: tap === 'widget' }, '何もしない'),
-        (['key', ...LAYER_KINDS] as ActionKind[]).map((k) => h('option', { value: k, selected: tap === k }, KIND_LABELS[k])))))
+        (['key', ...LAYER_KINDS, 'mouse'] as ActionKind[]).map((k) => h('option', { value: k, selected: tap === k }, KIND_LABELS[k])))))
     }
     const act = tap ?? kind
     if (own && act === 'key') body.push(this.viewComboEditor(own))
+    if (own && act === 'mouse') body.push(...this.viewMouseEditor(own))
     if (own && LAYER_KINDS.includes(act as LayerKind)) {
       const lk = act as LayerKind
       body.push(h('label', { class: 'row' }, '行き先 ', h('select', { 'data-focus': 'target', id: 'target',
@@ -2139,7 +2155,8 @@ export class App {
         onchange: (e: Event) => this.setWidgetKind((e.target as HTMLSelectElement).value as WidgetKind) },
         (Object.keys(WIDGET_LABELS) as WidgetKind[]).map((w) => h('option', { value: w, selected: own.widget === w }, WIDGET_LABELS[w])))),
       own.widget === 'text' ? this.viewTextEditor(own) : own.widget === 'todo' ? this.viewTodoEditor(own)
-        : own.widget === 'calendar' ? this.viewCalendarEditor(own) : this.viewClockEditor(text, missing),
+        : own.widget === 'calendar' ? this.viewCalendarEditor(own) : own.widget === 'trackpad' ? this.viewPadEditor(own)
+        : this.viewClockEditor(text, missing),
     )
   }
 
@@ -2242,6 +2259,72 @@ export class App {
       text('tz', 'タイムゾーン ', 'Brain のタイムゾーン', '例：Asia/Tokyo、America/Los_Angeles、UTC。省略すると Brain のタイムゾーン'),
       h('p', { class: 'hint' }, '書式は Go の書き方です（2006=年、01 か 1=月、02 か 2=日、15=時、04=分、05=秒、Mon=曜日、{wday}=日本語の曜日）。時刻を一度も合わせていないあいだは、Brain では「時刻未設定」と橙色で出ます。'),
       missing.length ? h('div', { class: 'warn' }, `Brain のフォントにない文字があります（□ になります）：${missing.join(' ')}`) : null,
+    ]
+  }
+
+  // mouseWarning は、Brain の USB にマウスがないときの注意（古い gadget-setup.sh）。
+  private mouseWarning(): HTMLElement | null {
+    if (!this.connected || this.brainMouse !== false) return null
+    return h('div', { class: 'warn' }, 'Brain の USB にマウスがありません。Brain で sudo /usr/local/sbin/lefthand-gadget-setup を実行してください（README の「マウスとトラックパッド」）')
+  }
+
+  // viewMouseEditor は、マウスの操作の欄。
+  private viewMouseEditor(own: ActionSpec): HTMLElement[] {
+    return [
+      h('label', { class: 'row' }, 'マウスの操作 ', h('select', { 'data-focus': 'mouse', id: 'mouse',
+        onchange: (e: Event) => this.patchAction({ mouse: (e.target as HTMLSelectElement).value as MouseAction }) },
+        (Object.keys(MOUSE_LABELS) as MouseAction[]).map((m) => h('option', { value: m, selected: own.mouse === m }, `${MOUSE_LABELS[m]}（${m}）`)))),
+      h('p', { class: 'hint' }, 'ボタンは押しているあいだ押したままになります（ドラッグにも使えます）。スクロールは 1 段送り、押し続けると繰り返します。' +
+        'レイヤーが変わると、押しているボタンは離します。'),
+      ...[this.mouseWarning()].filter((x): x is HTMLElement => !!x),
+    ]
+  }
+
+  // viewPadEditor は、トラックパッドの欄。空の欄は既定値（placeholder に出す）。
+  private viewPadEditor(own: ActionSpec): HTMLElement[] {
+    type NumField = (typeof PAD_NUM_FIELDS)[number]
+    const num = (f: NumField, label: string, min: number, max: number, step: number, title: string, int = false) => {
+      const v = own[f]
+      const bad = v !== undefined && (v < min || v > max || (int && !Number.isInteger(v)))
+      return [
+        h('label', { class: 'row', title }, label,
+          h('input', { type: 'number', min, max, step, value: v ?? '', placeholder: String(PAD_DEFAULTS[f]), 'data-focus': f, id: `pad-${f}`, class: 'num',
+            onchange: (e: Event) => {
+              const t = (e.target as HTMLInputElement).value.trim()
+              this.patchAction({ [f]: t === '' ? undefined : Number(t) })
+            } })),
+        bad ? h('div', { class: 'err' }, `${label.trim()}は ${min}〜${max}${int ? 'の整数' : ''}です`) : null,
+      ]
+    }
+    const sel = <F extends 'scroll_direction' | 'long_press'>(f: F, label: string, opts: [string, string][], title: string) =>
+      h('label', { class: 'row', title }, label, h('select', { 'data-focus': f, id: `pad-${f}`,
+        onchange: (e: Event) => this.patchAction({ [f]: (e.target as HTMLSelectElement).value || undefined }) },
+        opts.map(([v, t]) => h('option', { value: v, selected: (own[f] ?? '') === v }, t))))
+    const group = (title: string, ...items: (HTMLElement | null | (HTMLElement | null)[])[]) =>
+      h('fieldset', { class: 'pad-group' }, h('legend', null, title), items.flat())
+    return [
+      group('動き',
+        num('speed', '感度 ', 0.05, 20, 0.1, '画面の 1 ドットの動きを、PC のマウスの何カウントにするか（ゆっくり動かしたとき）'),
+        num('accel', '加速 ', 0, 10, 0.1, '速く動かしたときに大きく動かす強さ。0 で加速しない。速さ 1000 ドット/秒で (1 + 加速) 倍、3000 ドット/秒以上で (1 + 3×加速) 倍')),
+      group('スクロール（右端の帯）',
+        num('scroll_width', '帯の幅 ', 0, 400, 1, 'セルの右端の、スクロールに使う帯の幅（ドット）。0 で帯なし', true),
+        sel('scroll_direction', '向き ', [['', `既定（${PAD_DEFAULTS.scroll_direction === 'natural' ? 'ナチュラル' : 'ホイールと同じ'}）`], ['natural', 'ナチュラル（指と同じ向きに中身が動く）'], ['traditional', 'ホイールと同じ（指を下へ＝下へスクロール）']],
+          'ナチュラル：スマホと同じく、指を下へ動かすと中身が下へ動く（上へスクロール）'),
+        num('scroll_step', '1 段の動き ', 2, 400, 1, 'ホイール 1 段に当たる指の動き（ドット）。小さいほど速くスクロールする')),
+      group('タップ',
+        num('tap_ms', 'タップの長さ ', 30, 1000, 10, 'これより短く触れて離せばタップ（ミリ秒）', true),
+        num('tap_move', 'タップの動き ', 0, 200, 1, 'タップとみなす動きの上限（ドット）'),
+        num('drag_ms', 'ドラッグの待ち ', 0, 1000, 10, 'タップのあと、この時間のうちに触れて動かすとドラッグ（ミリ秒）。0 にすると、タップしたらすぐクリックし、タップでのドラッグはしない', true),
+        sel('long_press', '長押し ', [['', '既定（何もしない）'], ['none', '何もしない'], ['right', '右クリック（0.6 秒）']],
+          '指を止めて 0.6 秒押すと右クリック。指を止めたまま考えているときにも右クリックになるので、既定では使わない')),
+      group('ブレ対策',
+        num('settle_ms', '触れた直後に捨てる ', 0, 500, 5, '触れてから、この時間のサンプルを使わない（ミリ秒）。触れた瞬間の座標の跳ねを捨てる', true),
+        num('smooth', '平均するサンプル数 ', 1, 10, 1, '最後のこの数のサンプルの平均を使う。大きいほど滑らかで、少し遅れる', true),
+        num('deadzone', '無視する動き ', 0, 50, 0.5, '止めているときの揺れとして無視する動き（ドット）'),
+        num('min_pressure', '押す強さの下限 ', 0, 4095, 10, 'ABS_PRESSURE がこれより小さいサンプルを捨てる。0 で見ない', true)),
+      h('p', { class: 'hint' }, '指を動かすとカーソルが動きます。短いタップで左クリック、タップしてすぐ触れて動かすとドラッグ、右端の帯をなぞるとスクロールします。' +
+        '右クリックなどのボタンは、ほかのセルに「マウス」の割り当てで置きます。空の欄は既定値（薄く出している値）を使います。値の決め方は README の「トラックパッドの調整」。'),
+      ...[this.mouseWarning()].filter((x): x is HTMLElement => !!x),
     ]
   }
 
@@ -2353,6 +2436,7 @@ export function shortAction(cfg: Config, a: ActionSpec | null): string {
   const k = actionKind(a)
   if (k === 'none') return '✕'
   if (k === 'key') return a.label ? a.label.replace(/\n/g, ' ') : prettyCombo(a.key ?? '')
+  if (k === 'mouse') return a.label ? a.label.replace(/\n/g, ' ') : (MOUSE_LABELS[a.mouse!] ?? a.mouse ?? '')
   const t = actionTarget(a)
   const dest = cfg.layers.find((l) => l.name === t)
   return `${LAYER_VERB[k as LayerKind]}→${dest ? layerTitle(dest) : (t ?? '?')}`
