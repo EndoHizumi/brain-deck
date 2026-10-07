@@ -7,6 +7,7 @@ import { LAYER_VERB, actionKind, actionTarget, isLayerAction, layerTitle, resolv
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
+import { unpack565, type Image565 } from './image'
 import type { ActionSpec, CalendarData, Config, PressStyle, TextEntry, TodoItem, TodoList } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
@@ -24,6 +25,7 @@ const colPressedSub: RGB = [0x50, 0x40, 0x00]
 const colPressEdge: RGB = [0, 0, 0] // border の外側の暗い線
 const colEmptyBorder: RGB = [0x30, 0x34, 0x3a]
 const colLayerCell: RGB = [0x2a, 0x22, 0x3c]
+const colHalo: RGB = [0, 0, 0] // 背景画像の上の文字の縁取り
 const colUnsynced: RGB = [0xff, 0x80, 0x20] // 時刻を合わせていない時計
 // todowidget.go
 const colTodoDone: RGB = [0x6a, 0x74, 0x80] // 完了した項目
@@ -37,6 +39,7 @@ const modeBadge: Record<Mode, RGB> = { base: [0x3a, 0x48, 0x5c], latched: [0x2e,
 const modeBadgeText: Record<Mode, RGB> = { base: colText, latched: colText, temp: [0, 0, 0] }
 
 const cellGap = 4
+export const CELL_GAP = cellGap // セルの箱は、セルの範囲からこれだけ内側（セルの背景画像の大きさ）
 const textMargin = 8
 const maxScale = 6
 const subScale = 2
@@ -62,6 +65,7 @@ export interface CellView {
   textId?: string // テキストのウィジェットの id
   todoRows?: number // Todo のウィジェット（0 なら高さで決める）
   cal?: CalWidget // カレンダーのウィジェット
+  background?: string // セルの背景画像の id
 }
 
 interface Rect {
@@ -79,6 +83,12 @@ export function cellSpan(i: number, n: number, size: number): [number, number] {
 // cellView は main.go の cellView と同じ。
 export function cellView(cfg: Config, a: ActionSpec | null): CellView {
   if (!a) return { mapped: false, layer: false, label: '', sub: '' }
+  const v = cellView1(cfg, a)
+  if (a.background) v.background = a.background
+  return v
+}
+
+function cellView1(cfg: Config, a: ActionSpec): CellView {
   const k = actionKind(a)
   let label = a.label ?? ''
   if (a.widget) {
@@ -103,8 +113,28 @@ export function cellView(cfg: Config, a: ActionSpec | null): CellView {
   return { mapped: true, layer: false, label, sub: keys }
 }
 
+// Placed は、画面に置いた画像（display.go の placed）。
+interface Placed {
+  img: Image565
+  dst: Rect
+}
+
+// centered は、画像を area の中央に置く（display.go の centered。負の数の割り算は 0 に向けて切り捨てる）。
+export function centered(img: Image565 | undefined, area: Rect): Placed | null {
+  if (!img) return null
+  const x = area.x0 + Math.trunc((area.x1 - area.x0 - img.w) / 2)
+  const y = area.y0 + Math.trunc((area.y1 - area.y0 - img.h) / 2)
+  return { img, dst: { x0: x, y0: y, x1: x + img.w, y1: y + img.h } }
+}
+
+function inside(r: Rect, d: Rect): boolean {
+  if (r.x0 >= r.x1 || r.y0 >= r.y1) return true
+  return r.x0 >= d.x0 && r.y0 >= d.y0 && r.x1 <= d.x1 && r.y1 <= d.y1
+}
+
 class Pixels {
   data: Uint8ClampedArray
+  halo = false // true なら、text は文字の周り 1 ドットを colHalo で縁取る（fb.go の Canvas.halo）
   constructor(
     public w: number,
     public h: number,
@@ -132,7 +162,36 @@ class Pixels {
     this.fill({ x0: r.x0, y0: r.y0, x1: r.x0 + t, y1: r.y1 }, c)
     this.fill({ x0: r.x1 - t, y0: r.y0, x1: r.x1, y1: r.y1 }, c)
   }
+  // blit は、dst に置いた画像のうち clip に入る部分を写す（fb.go の blitImage）。
+  blit(img: Image565, dst: Rect, clip: Rect): void {
+    const r = intersect(intersect(dst, clip), { x0: 0, y0: 0, x1: this.w, y1: this.h })
+    for (let y = r.y0; y < r.y1; y++) {
+      let o = (y * this.w + r.x0) * 4
+      let i = (y - dst.y0) * img.w + (r.x0 - dst.x0)
+      for (let x = r.x0; x < r.x1; x++, o += 4, i++) {
+        const [R, G, B] = unpack565(img.pix[i])
+        this.data[o] = R
+        this.data[o + 1] = G
+        this.data[o + 2] = B
+        this.data[o + 3] = 255
+      }
+    }
+  }
+  // paintBack は display.go の paintBack と同じ。base の色の上に imgs を順に重ねる。
+  paintBack(r: Rect, base: RGB, ...imgs: (Placed | null)[]): void {
+    let first = 0
+    imgs.forEach((p, i) => {
+      if (p && inside(r, p.dst)) first = i
+    })
+    if (first === 0 && !(imgs[0] && inside(r, imgs[0].dst))) this.fill(r, base)
+    for (const p of imgs.slice(first)) if (p) this.blit(p.img, p.dst, r)
+  }
+  // text は fb.go の text と同じ。halo なら、先に文字列全体の縁取りを描いてから文字を描く。
   text(font: BitmapFont, x: number, y: number, s: string, scale: number, c: RGB, clip: Rect): void {
+    if (this.halo) this.glyphs(font, x, y, s, scale, colHalo, clip, 1)
+    this.glyphs(font, x, y, s, scale, c, clip, 0)
+  }
+  private glyphs(font: BitmapFont, x: number, y: number, s: string, scale: number, c: RGB, clip: Rect, grow: number): void {
     for (const ch of s) {
       const g = font.glyph(ch.codePointAt(0)!)
       for (let gy = 0; gy < g.rows.length; gy++) {
@@ -140,7 +199,7 @@ class Pixels {
         if (!bits) continue
         for (let gx = 0; gx < 8; gx++) {
           if (!(bits & (0x80 >> gx))) continue
-          const px = { x0: x + gx * scale, y0: y + gy * scale, x1: x + (gx + 1) * scale, y1: y + (gy + 1) * scale }
+          const px = { x0: x + gx * scale - grow, y0: y + gy * scale - grow, x1: x + (gx + 1) * scale + grow, y1: y + (gy + 1) * scale + grow }
           this.fill(intersect(px, clip), c)
         }
       }
@@ -181,6 +240,7 @@ export interface PreviewParams {
   todoPage?: number // Todo のセルに出すページ（0 から）
   calendar?: CalendarData | null // カレンダーの予定（Brain の get_calendar）
   calendarPage?: number // カレンダーのセルに出すページ（0 から）。省略すると、触っていないときのページ
+  images?: (id: string) => Image565 | undefined // 背景画像。ない id は背景なしで描く（Brain と同じ）
 }
 
 export interface WidgetEnv {
@@ -224,12 +284,14 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
     return { x0, y0, x1, y1 }
   }
   px.fill({ x0: 0, y0: 0, x1: W, y1: H }, colBG)
+  const image = (id?: string) => (id ? p.images?.(id) : undefined)
+  const wall = centered(image(g.wallpaper), { x0: 0, y0: 0, x1: W, y1: H })
   for (let r = 0; r < g.rows; r++) {
     for (let c = 0; c < g.cols; c++) {
       const i = r * g.cols + c
       if (g.anchor[i] >= 0 && g.anchor[i] !== i) continue // span のセルに覆われている
       const v = cellView(p.cfg, g.cells[i]?.action ?? null)
-      drawCell(font, px, rect(c, r), v, p.mode, p.pressed?.has(`${c},${r}`) ?? false, fill, env)
+      drawCell(font, px, rect(c, r), v, p.mode, p.pressed?.has(`${c},${r}`) ?? false, fill, env, wall, image(v.background))
     }
   }
   if (title) {
@@ -242,9 +304,14 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   return { pixels: px.data, layout: { cols: g.cols, rows: g.rows, w: W, h: H, rect, anchor: g.anchor } }
 }
 
-function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: Mode, pressed: boolean, pressFill: boolean, env: WidgetEnv): void {
-  px.fill(cell, colBG)
+// drawCell は display.go の drawCell と同じ。背景は 黒（または壁紙）→ セルの塗り（壁紙があれば壁紙）→ セルの画像。
+// 背景画像があるセルでは、文字を縁取る。fill で押しているあいだは黄色で塗りつぶす。
+function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: Mode, pressed: boolean, pressFill: boolean, env: WidgetEnv,
+  wall: Placed | null, ownImg: Image565 | undefined): void {
   const box = inset(cell, cellGap)
+  const own = centered(ownImg, box)
+  let hasImg = !!wall || !!own
+  px.paintBack(cell, colBG, wall)
   if (!v.mapped) {
     px.frame(box, 1, colEmptyBorder)
     return
@@ -252,8 +319,11 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
   let fillC = v.layer ? colLayerCell : colCell
   let textC = colText
   let subC = colSub
-  if (pressed && pressFill) [fillC, textC, subC] = [colPressed, colPressedText, colPressedSub]
-  px.fill(box, fillC)
+  if (pressed && pressFill) {
+    ;[fillC, textC, subC] = [colPressed, colPressedText, colPressedSub]
+    px.fill(box, fillC)
+    hasImg = false
+  } else px.paintBack(box, fillC, wall, own)
   px.frame(box, borderW, modeBorder[mode])
   if (pressed && !pressFill) {
     // display.go の drawRing と同じ。帯はラベルの余白（textMargin）より細い
@@ -261,6 +331,15 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
     px.frame(inset(box, pressEdgeW), pressGlowW, colPressed)
   }
   const inner = inset(box, textMargin)
+  px.halo = hasImg
+  try {
+    drawCellContent(font, px, inner, v, env, textC, subC)
+  } finally {
+    px.halo = false
+  }
+}
+
+function drawCellContent(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env: WidgetEnv, textC: RGB, subC: RGB): void {
   if (v.widget) {
     drawWidget(font, px, inner, v, env, textC, subC)
     return

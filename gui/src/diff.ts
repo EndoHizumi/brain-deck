@@ -18,7 +18,11 @@ function keyName(code: string, km?: KeymapInfo): string {
   return all.length ? `キー ${all.join('・')}（${code}）` : `キー ${code}`
 }
 
-function leaves(cfg: Config, km?: KeymapInfo): Leaves {
+function leaves(cfg: Config, km?: KeymapInfo, imageName?: (id: string) => string): Leaves {
+  const img = (id: string) => {
+    const n = imageName?.(id)
+    return n && n !== id ? `${n}（${id}）` : id
+  }
   const out: Leaves = new Map()
   const put = (path: string, where: string, v: unknown) => {
     if (v === undefined) return
@@ -48,7 +52,11 @@ function leaves(cfg: Config, km?: KeymapInfo): Leaves {
     if (l.touch) {
       const size = l.touch.cols && l.touch.rows ? `${l.touch.cols}×${l.touch.rows}` : 'base と同じ大きさ'
       put(`${lp}/touch`, `${lw} / タッチの格子`, size)
-      for (const [c, a] of Object.entries(l.touch.cells ?? {})) act(`${lp}/cells/${c}`, `${lw} / セル ${c}`, a)
+      put(`${lp}/touch/background`, `${lw} / 壁紙`, l.touch.background ? img(l.touch.background) : undefined)
+      for (const [c, a] of Object.entries(l.touch.cells ?? {})) {
+        act(`${lp}/cells/${c}`, `${lw} / セル ${c}`, a)
+        put(`${lp}/cells/${c}/background`, `${lw} / セル ${c} の背景画像`, a.background ? img(a.background) : undefined)
+      }
     }
     for (const [n, a] of Object.entries(l.soft_keys ?? {})) act(`${lp}/soft/${n}`, `${lw} / ソフトキー ${n}`, a)
   })
@@ -56,9 +64,10 @@ function leaves(cfg: Config, km?: KeymapInfo): Leaves {
 }
 
 // diffConfigs は before から after への変更を返す。並びは after の順（消したものは最後）。
-export function diffConfigs(before: Config, after: Config, km?: KeymapInfo): Change[] {
-  const a = leaves(before, km)
-  const b = leaves(after, km)
+// imageName は、背景画像の id から分かりやすい名前（元のファイル名など）を返す。
+export function diffConfigs(before: Config, after: Config, km?: KeymapInfo, imageName?: (id: string) => string): Change[] {
+  const a = leaves(before, km, imageName)
+  const b = leaves(after, km, imageName)
   const out: Change[] = []
   for (const [p, nv] of b) {
     const ov = a.get(p)

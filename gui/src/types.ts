@@ -9,6 +9,7 @@ export interface ActionSpec {
   layer_to?: string
   label?: string
   span?: [number, number] // セルの大きさ [列数, 行数]。タッチのセルだけ
+  background?: string // セルの背景画像の id（Brain の /var/lib/lefthand/images/<id>.565）。タッチのセルだけ
   // ウィジェット（タッチのセルだけ）。key と layer_* は省略でき、書けばタップしたときに働く
   widget?: WidgetKind
   format?: string // clock：時刻の行（Go の書式）
@@ -46,6 +47,33 @@ export interface GridConfig {
   cols?: number
   rows?: number
   cells?: Record<string, ActionSpec>
+  background?: string // 格子全体に敷く壁紙の id。セルの background があれば、そちらを上に描く
+}
+
+// list_images の結果（image.go の ImageList）
+export interface BrainImage {
+  id: string
+  name?: string
+  w: number
+  h: number
+  bytes: number
+  sha256?: string
+  added?: string
+  source?: string
+  refs: string[] // 今の設定で使っている場所（JSON Pointer）
+}
+
+export interface ImageListResult {
+  images: BrainImage[]
+  total_bytes: number
+  limit_bytes: number
+  max_image_bytes: number
+  max_side: number
+  max_pixels: number
+  free_bytes: number
+  reserve_bytes: number
+  chunk_bytes: number
+  missing: string[]
 }
 
 export interface LayerConfig {

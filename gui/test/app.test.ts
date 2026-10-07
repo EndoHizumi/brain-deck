@@ -3,9 +3,19 @@ import { App } from '../src/app'
 import { FakeDaemon, FakeTransport, demoCalendar, fakeSerial } from '../src/demo'
 import type { Transport } from '../src/protocol'
 import { toYAML } from '../src/yamlio'
+import { decodeImageFile, encodeImageFile, sha256Hex, type SourceImage } from '../src/image'
 import { sampleConfig, testFont } from './helpers'
 
 // Brain の代わりに、FakeDaemon につながったシリアルを使う
+// 画像ファイルの代わり（jsdom には画像のデコーダがない）。左が赤、右が青の 400×300
+function fakeSource(): SourceImage {
+  const w = 400
+  const h = 300
+  const data = new Uint8ClampedArray(w * h * 4)
+  for (let i = 0; i < w * h; i++) data.set(i % w < w / 2 ? [220, 40, 40, 255] : [40, 60, 220, 255], i * 4)
+  return { w, h, data }
+}
+
 function setup(opts: { daemon?: FakeDaemon; transport?: () => Transport; confirm?: boolean } = {}) {
   const root = document.createElement('div')
   document.body.replaceChildren(root)
@@ -21,6 +31,7 @@ function setup(opts: { daemon?: FakeDaemon; transport?: () => Transport; confirm
     validateDelayMs: 5,
     helloTimeoutMs: 100,
     keepaliveMs: 20,
+    decodeImage: async () => fakeSource(),
   })
   const $ = <T extends HTMLElement = HTMLElement>(sel: string) => root.querySelector<T>(sel)!
   const click = (sel: string) => $(sel).click()
@@ -487,5 +498,141 @@ describe('Todo', () => {
     t.change('#cal-page-reset', 'off')
     t.change('#widget', 'clock')
     expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
+  })
+})
+
+describe('背景画像', () => {
+  // 隠れた file の欄に、ファイルを選んだことにする
+  const pick = (t: ReturnType<typeof setup>, sel: string, name = 'photo.png') => {
+    const input = t.$<HTMLInputElement>(sel)
+    Object.defineProperty(input, 'files', { value: [new File([new Uint8Array([1, 2, 3])], name, { type: 'image/png' })], configurable: true })
+    input.dispatchEvent(new Event('change'))
+  }
+
+  it('セルに画像を選び、切り抜いて、保存すると画像を先に送ってから設定を保存する', async () => {
+    const t = await connected()
+    t.click('[data-cell="0,0"]')
+    expect(t.$('.bg-cell').textContent).toContain('192×152') // 4×3 のセルの枠の内側
+    pick(t, '#bg-file-cell')
+    await vi.waitFor(() => expect(t.app.imageEdit?.result).toBeTruthy())
+    expect(t.$('.image-edit').textContent).toContain('192×152')
+    // 明るさとディザリングを変える（明るさは画像に焼き込む）
+    const bright = t.$<HTMLInputElement>('#img-bright')
+    bright.value = '-50'
+    bright.dispatchEvent(new Event('input'))
+    expect(t.app.imageEdit!.params.brightness).toBe(-0.5)
+    t.change('#img-dither', 'none')
+    expect(t.app.imageEdit!.params.dither).toBe('none')
+    const zoom = t.$<HTMLInputElement>('#img-zoom')
+    zoom.value = '2'
+    zoom.dispatchEvent(new Event('input'))
+    t.click('#img-apply')
+    await vi.waitFor(() => expect(t.app.imageEdit).toBeNull())
+    const id = t.app.cfg!.layers[0].touch!.cells!['0,0'].background!
+    expect(id).toMatch(/^[0-9a-f]{16}$/)
+    const local = t.app.images.get(id)!
+    expect([local.img.w, local.img.h, local.name]).toEqual([192, 152, 'photo.png'])
+    expect((await sha256Hex(local.file!)).slice(0, 16)).toBe(id)
+    // 拡大 2 倍で中央を切り抜いたので、左半分は赤、右半分は青。50% 暗くしてある
+    expect(local.img.pix[0] >> 11).toBe(Math.round((110 * 31) / 255))
+    expect(t.$('.bg-cell').textContent).toContain('photo.png')
+    expect(t.$('.bg-cell').textContent).toContain('保存すると Brain に送ります')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+
+    t.click('#save')
+    expect(t.$('.modal').textContent).toContain('セル 0,0 の背景画像')
+    expect(t.$('.modal').textContent).toContain(`photo.png（${id}）`)
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    const cmds = t.cmds()
+    const begin = cmds.lastIndexOf('image_begin')
+    expect(begin).toBeGreaterThan(0)
+    expect(cmds.indexOf('image_end', begin)).toBeLessThan(cmds.lastIndexOf('set_config'))
+    expect(t.daemon.config.layers[0].touch!.cells!['0,0'].background).toBe(id)
+    const sent = t.daemon.images.get(id)!
+    expect(sent.name).toBe('photo.png')
+    expect(Buffer.from(sent.data).equals(Buffer.from(local.file!))).toBe(true)
+    await vi.waitFor(() => expect(t.app.brainImages?.images.some((i) => i.id === id)).toBe(true))
+    expect(t.$('.bg-cell').textContent).toContain('Brain にあります')
+
+    // 2 回目の保存では送らない（もうある）
+    t.click('[data-cell="1,0"]')
+    pick(t, '#bg-file-cell', 'other.webp')
+    await vi.waitFor(() => expect(t.app.imageEdit?.result).toBeTruthy())
+    t.click('#img-apply')
+    await vi.waitFor(() => expect(t.app.imageEdit).toBeNull())
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.click('#save')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect(t.daemon.received.filter((r) => r.cmd === 'image_begin').length).toBe(2)
+  })
+
+  it('レイヤーの壁紙を選び、外す。壁紙のためだけに作った touch は消える', async () => {
+    const t = await connected()
+    t.click('.tab.add') // touch のないレイヤーを足す
+    const li = t.app.cfg!.layers.length - 1
+    expect(t.app.cfg!.layers[li].touch).toBeUndefined()
+    t.click(`[data-layer="${li}"]`)
+    expect(t.$('.bg-wallpaper').textContent).toContain('800×480')
+    pick(t, '#bg-file-wallpaper', 'wall.jpg')
+    await vi.waitFor(() => expect(t.app.imageEdit?.result).toBeTruthy())
+    expect(t.root.querySelector('#img-pressed')).toBeNull() // 壁紙には押したときの枠はない
+    t.click('#img-apply')
+    await vi.waitFor(() => expect(t.app.imageEdit).toBeNull())
+    const id = t.app.cfg!.layers[li].touch!.background!
+    expect(t.app.images.get(id)!.img.w).toBe(800)
+    expect(t.$('.bg-wallpaper').textContent).toContain('wall.jpg')
+    // 切り抜きを直す
+    t.click('#bg-recrop-wallpaper')
+    expect(t.app.imageEdit?.params.brightness).toBeCloseTo(-0.35)
+    t.click('#img-cancel')
+    expect(t.app.imageEdit).toBeNull()
+    t.click('#bg-remove-wallpaper')
+    expect(t.app.cfg!.layers[li].touch).toBeUndefined()
+  })
+
+  it('Brain の容量が足りなければ、設定を保存しない', async () => {
+    const t = await connected()
+    t.daemon.quota = 1000
+    t.click('[data-cell="0,0"]')
+    pick(t, '#bg-file-cell')
+    await vi.waitFor(() => expect(t.app.imageEdit?.result).toBeTruthy())
+    t.click('#img-apply')
+    await vi.waitFor(() => expect(t.app.imageEdit).toBeNull())
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.click('#save')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.root.textContent).toContain('設定は保存していません'))
+    expect(t.root.textContent).toContain('使っていない画像を消す')
+    expect(t.cmds()).not.toContain('set_config')
+    expect(t.app.dirty).toBe(true)
+  })
+
+  it('接続すると、設定で使っている Brain の画像を読んでプレビューに使う。使っていない画像を消せる', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    const pix = new Uint16Array(192 * 152).fill(0x07e0)
+    const file = encodeImageFile({ w: 192, h: 152, pix })
+    const id = (await sha256Hex(file)).slice(0, 16)
+    daemon.images.set(id, { name: '緑.png', w: 192, h: 152, data: file, added: '2026-10-07T00:00:00Z' })
+    const unused = encodeImageFile({ w: 2, h: 2, pix: new Uint16Array(4) })
+    const uid = (await sha256Hex(unused)).slice(0, 16)
+    daemon.images.set(uid, { name: '古い.png', w: 2, h: 2, data: unused, added: '2026-10-06T00:00:00Z' })
+    daemon.config.layers[0].touch!.cells!['0,0'].background = id
+    const t = await connected(setup({ daemon }))
+    await vi.waitFor(() => expect(t.app.images.get(id)).toBeTruthy())
+    expect(decodeImageFile(t.app.images.get(id)!.file!)!.pix[0]).toBe(0x07e0)
+    expect(t.cmds()).toContain('get_image')
+    t.click('[data-cell="0,0"]')
+    expect(t.$('.bg-cell').textContent).toContain('緑.png')
+    expect(t.$('.images-panel').textContent).toContain('2 枚')
+    expect(t.$(`[data-image="${uid}"]`).textContent).toContain('使っていない')
+    expect(t.$(`[data-image="${id}"]`).textContent).toContain('1 か所')
+    t.click('#prune-images')
+    await vi.waitFor(() => expect(t.root.textContent).toContain('背景画像を 1 枚消しました'))
+    expect([...daemon.images.keys()]).toEqual([id])
+    // 編集中の設定で使っている画像は消さない（Brain の設定ではまだ使っていなくても）
+    const prune = daemon.received.filter((r) => r.cmd === 'prune_images').at(-1)
+    expect(prune.keep).toContain(id)
   })
 })

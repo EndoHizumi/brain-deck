@@ -4,7 +4,10 @@ process.env.TZ = 'Asia/Tokyo'
 import { cellSpan, cellView, renderPreview, type Mode } from '../src/preview'
 import type { PressStyle } from '../src/types'
 import { parseConfigText } from '../src/yamlio'
-import { decodePNG, repoFile, sampleConfig, testFont } from './helpers'
+import { decodePNG, repoFile, repoRoot, sampleConfig, testFont } from './helpers'
+import { decodeImageFile, type Image565 } from '../src/image'
+import { readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 // Brain の画面は RGB565。Go の -render-png は、その丸めた色で書き出す（fb.go の pack / unpack）
 function to565(px: Uint8ClampedArray): Uint8Array {
@@ -113,6 +116,40 @@ describe('Brain の画面のプレビュー', () => {
       expect(diff).toBe(0)
     })
   }
+
+  // 背景画像（セルの画像、壁紙、文字の縁取り、押したときの枠）。config/background-example.yaml と config/background-images/
+  // TZ=Asia/Tokyo go run . -render-png ... -render-images config/background-images config/background-example.yaml（README の「開発」）
+  const bcfg = parseConfigText(repoFile('config/background-example.yaml').toString('utf8'))
+  const bimages = new Map<string, Image565>()
+  for (const f of readdirSync(resolve(repoRoot, 'config/background-images'))) {
+    if (!f.endsWith('.565')) continue
+    bimages.set(f.slice(0, -4), decodeImageFile(new Uint8Array(repoFile(`config/background-images/${f}`)))!)
+  }
+  const blayer = (n: string) => bcfg.layers.findIndex((l) => l.name === n)
+  const bcases: { file: string; stack: number[]; mode: Mode; pressed?: string[]; pressStyle?: PressStyle; widgets?: boolean }[] = [
+    { file: 'bg-base-pressed.png', stack: [0], mode: 'base', pressed: ['0,0', '3,2'] },
+    { file: 'bg-base-pressed-fill.png', stack: [0], mode: 'base', pressed: ['0,0', '1,1'], pressStyle: 'fill' },
+    { file: 'bg-menu.png', stack: [0, blayer('menu')], mode: 'latched', pressed: ['1,1'] },
+    { file: 'bg-dashboard.png', stack: [0, blayer('dashboard')], mode: 'latched', widgets: true },
+  ]
+  for (const c of bcases) {
+    it(`背景画像も lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: bcfg, stack: c.stack, mode: c.mode, pressed: new Set(c.pressed), pressStyle: c.pressStyle,
+        now, texts: c.widgets ? texts : undefined, todo: c.widgets ? todo : undefined, calendar: c.widgets ? calJSON('calendar.json') : null,
+        images: (id) => bimages.get(id) })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
+  it('Brain にない背景画像は、背景なしで描く（Brain と同じ）', () => {
+    const none = renderPreview(font, { cfg: bcfg, stack: [0], mode: 'base', images: () => undefined }).pixels
+    const plain = parseConfigText(repoFile('config/current.yaml').toString('utf8'))
+    expect(Buffer.from(none).equals(Buffer.from(renderPreview(font, { cfg: plain, stack: [0], mode: 'base' }).pixels))).toBe(true)
+  })
 
   it('press_style を省略すると枠を光らせ、設定の press_style に従う', () => {
     const at = (pixels: Uint8ClampedArray, x: number, y: number) => Array.from(pixels.slice((y * 800 + x) * 4, (y * 800 + x) * 4 + 3))

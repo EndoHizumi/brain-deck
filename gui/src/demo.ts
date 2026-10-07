@@ -25,6 +25,10 @@ export class FakeDaemon {
   texts: Record<string, TextEntry> = {} // テキストのタイルの中身
   todo: TodoList = { rev: 0, items: [] } // Todo の一覧
   calendar: CalendarData = { rev: 0, calendars: [] } // カレンダーの予定（brain-deck calendar sync が送るもの）
+  // 背景画像（id → 名前と中身）。image_begin〜image_end で受け取る
+  images = new Map<string, { name: string; w: number; h: number; data: Uint8Array; added: string }>()
+  private upload: { token: string; id: string; name: string; w: number; h: number; bytes: number; parts: Uint8Array[]; got: number } | null = null
+  quota = 16 << 20
   private nextTodo = 1
   dataSubscribed = false
   // 通知を送る先（FakeTransport が設定する）
@@ -60,7 +64,7 @@ export class FakeDaemon {
         return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
           commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
-            'set_calendar', 'get_calendar'] })
+            'set_calendar', 'get_calendar', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
@@ -115,6 +119,16 @@ export class FakeDaemon {
         this.stack = []
         return ok({ saved: this.path, previous: this.path + '.prev', warnings: [], status: this.status() })
       }
+      case 'list_images':
+      case 'image_begin':
+      case 'image_chunk':
+      case 'image_end':
+      case 'image_abort':
+      case 'get_image':
+      case 'prune_images': {
+        const r = this.imageCmd(req)
+        return Array.isArray(r) ? err(r[0], r[1]) : ok(r)
+      }
       case 'subscribe_input':
         this.subscribed = req.enable !== false
         this.suppress = this.subscribed && !!req.suppress
@@ -122,6 +136,83 @@ export class FakeDaemon {
       default:
         return err('unknown_command', `unknown command ${JSON.stringify(req.cmd)}`)
     }
+  }
+
+  // imageCmd は image.go の ImageStore をまねる（SHA-256 は確かめず、送る側が言った値を信じる）。誤りなら [code, message]。
+  imageCmd(req: any): Record<string, unknown> | [string, string] {
+    const refs = (): Map<string, string[]> => {
+      const m = new Map<string, string[]>()
+      this.config.layers.forEach((l, i) => {
+        if (l.touch?.background) m.set(l.touch.background, [...(m.get(l.touch.background) ?? []), `/layers/${i}/touch/background`])
+        for (const [k, a] of Object.entries(l.touch?.cells ?? {}))
+          if (a.background) m.set(a.background, [...(m.get(a.background) ?? []), `/layers/${i}/touch/cells/${k}`])
+      })
+      return m
+    }
+    const total = () => [...this.images.values()].reduce((a, x) => a + x.data.length, 0)
+    switch (req.cmd) {
+      case 'list_images': {
+        const r = refs()
+        return { images: [...this.images].map(([id, x]) => ({ id, name: x.name, w: x.w, h: x.h, bytes: x.data.length, added: x.added, refs: r.get(id) ?? [] })),
+          total_bytes: total(), limit_bytes: this.quota, max_image_bytes: 768008, max_side: 800, max_pixels: 384000,
+          free_bytes: 140 << 20, reserve_bytes: 64 << 20, chunk_bytes: 98304, missing: [...r.keys()].filter((id) => !this.images.has(id)) }
+      }
+      case 'image_begin': {
+        if (!/^[0-9a-f]{64}$/.test(req.sha256 ?? '')) return ['bad_request', '"sha256" must be the 64-digit hex SHA-256 of the file']
+        if (req.bytes !== 8 + req.w * req.h * 2) return ['bad_request', '"bytes" does not match w and h']
+        const id = req.sha256.slice(0, 16)
+        this.upload = null
+        if (this.images.has(id)) return { id, exists: true }
+        if (total() + req.bytes > this.quota) return ['quota_exceeded', `the images would take ${total() + req.bytes} bytes, over the limit of ${this.quota}`]
+        this.upload = { token: `u${Date.now()}`, id, name: req.name ?? '', w: req.w, h: req.h, bytes: req.bytes, parts: [], got: 0 }
+        return { id, exists: false, upload: this.upload.token, chunk_bytes: 98304 }
+      }
+      case 'image_chunk': {
+        const u = this.upload
+        if (!u || u.token !== req.upload) return ['bad_request', 'upload is not in progress']
+        if (req.offset !== u.got) return ['bad_request', `offset ${req.offset}: expected ${u.got}`]
+        const d = Uint8Array.from(atob(req.data), (c) => c.charCodeAt(0))
+        u.parts.push(d)
+        u.got += d.length
+        return { received: u.got }
+      }
+      case 'image_end': {
+        const u = this.upload
+        this.upload = null
+        if (!u || u.token !== req.upload) return ['bad_request', 'upload is not in progress']
+        if (u.got !== u.bytes) return ['bad_request', `received ${u.got} of ${u.bytes} bytes`]
+        const data = new Uint8Array(u.got)
+        let o = 0
+        for (const p of u.parts) {
+          data.set(p, o)
+          o += p.length
+        }
+        this.images.set(u.id, { name: u.name, w: u.w, h: u.h, data, added: new Date().toISOString() })
+        return { id: u.id }
+      }
+      case 'image_abort': {
+        const had = !!this.upload && (!req.upload || this.upload.token === req.upload)
+        if (had) this.upload = null
+        return { aborted: had }
+      }
+      case 'get_image': {
+        const x = this.images.get(req.image)
+        if (!x) return ['not_found', `image ${req.image} is not on this Brain`]
+        const off = req.offset ?? 0
+        const part = x.data.subarray(off, Math.min(off + 98304, x.data.length))
+        let bin = ''
+        for (const b of part) bin += String.fromCharCode(b)
+        return { image: req.image, offset: off, bytes: x.data.length, data: btoa(bin) }
+      }
+      case 'prune_images': {
+        const keep = new Set([...refs().keys(), ...(req.keep ?? [])])
+        const removed = [...this.images.keys()].filter((id) => !keep.has(id)).sort()
+        const freed = removed.reduce((a, id) => a + this.images.get(id)!.data.length, 0)
+        if (!req.dry_run) for (const id of removed) this.images.delete(id)
+        return { removed, freed_bytes: freed, dry_run: !!req.dry_run }
+      }
+    }
+    return ['unknown_command', String(req.cmd)]
   }
 
   timeInfo() {
@@ -233,7 +324,9 @@ export function validate(cfg: Config): Problem[] {
     const n = (['key', ...LAYER_KINDS] as const).filter((k) => a[k]).length
     if (n > 1 || (n === 0 && !a.widget))
       return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to (a widget cell may omit them)` })
-    if (!cell && (a.widget || a.span)) return out.push({ path, message: `${where}: widget and span can be used only in touch cells` })
+    if (!cell && (a.widget || a.span || a.background)) return out.push({ path, message: `${where}: widget, span and background can be used only in touch cells` })
+    if (a.background !== undefined && !/^[0-9a-f]{16}$/.test(a.background))
+      out.push({ path, message: `${where}: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got "${a.background}"` })
     if (a.widget && !['clock', 'text', 'todo', 'calendar'].includes(a.widget)) out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar)` })
     if (a.widget === 'todo' && n > 0) out.push({ path, message: `${where}: widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*` })
     if (a.widget === 'calendar' && n > 0) out.push({ path, message: `${where}: widget: calendar handles taps itself (▲▼ to turn pages); remove key and layer_*` })

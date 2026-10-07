@@ -6,7 +6,8 @@ import { BitmapFont } from '../src/font'
 import { parseConfigText } from '../src/yamlio'
 
 // リポジトリのいちばん上（gui/ の親）
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const root = repoRoot
 
 export function repoFile(path: string): Buffer {
   return readFileSync(resolve(root, path))

@@ -187,3 +187,19 @@ tr.removed td.after, tr.added td.before { color: var(--muted); }
 .todo-item.done .todo-text { color: var(--muted); text-decoration: line-through; }
 .todo-item input[type='checkbox'] { width: 18px; height: 18px; }
 .todo-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0 6px; font-size: 13px; }
+
+/* 背景画像 */
+.bg-editor { margin-top: 8px; padding: 6px 8px; border: 1px dashed var(--line); border-radius: 6px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bg-editor .hint, .bg-editor .warn { flex-basis: 100%; margin: 0; }
+.bg-editor .bg-name { font-weight: 600; }
+.layer-props .bg-editor { flex-basis: 100%; }
+.modal.image-edit { width: min(1000px, 96vw); overflow: auto; }
+.crop-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.crop-box canvas { width: 480px; max-width: 100%; height: auto; background: #222; border-radius: 6px; cursor: grab; touch-action: none; }
+.crop-controls { display: flex; flex-direction: column; gap: 8px; min-width: 240px; flex: 1; }
+.crop-controls input[type=range] { width: 160px; vertical-align: middle; }
+canvas.crop-preview { width: 100%; max-width: 640px; height: auto; image-rendering: pixelated; border-radius: 6px; margin-top: 8px; }
+.images-panel { margin-top: 10px; }
+table.images { border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+table.images th, table.images td { padding: 3px 8px; border-bottom: 1px solid #eef0f3; text-align: left; }
+.mono { font-family: ui-monospace, monospace; }

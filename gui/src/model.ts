@@ -161,6 +161,9 @@ export interface ResolvedGrid {
   // anchor は、セルを覆う割り当ての左上のセルの番号。覆うものがなければ -1（span のないセルは自分自身）
   anchor: number[]
   owner: number // 格子の大きさを決めたレイヤー
+  // wallpaper は格子に敷く壁紙の id（layer.go の View.Wallpaper と同じ）。格子を作ったレイヤーから下へ、
+  // セルと同じく透過する範囲で、いちばん上にある touch.background
+  wallpaper?: string
 }
 
 export interface ResolvedAction {
@@ -195,6 +198,7 @@ export function resolveGrid(cfg: Config, stack: number[]): ResolvedGrid {
   let rows = 0
   let owner = -1
   let taken: boolean[] = []
+  let wallpaper: string | undefined
   const anchors = new Map<number, ResolvedAction>()
   for (let i = stack.length - 1; i >= 0; i--) {
     const li = stack[i]
@@ -207,6 +211,7 @@ export function resolveGrid(cfg: Config, stack: number[]): ResolvedGrid {
     } else if (size.cols !== cols || size.rows !== rows) {
       break
     }
+    wallpaper ||= cfg.layers[li].touch?.background || undefined
     const claim: number[] = []
     for (const [k, a] of Object.entries(cfg.layers[li].touch?.cells ?? {})) {
       const p = parseCellKey(k)
@@ -232,7 +237,7 @@ export function resolveGrid(cfg: Config, stack: number[]): ResolvedGrid {
     const r0 = Math.floor(i / cols)
     for (let y = r0; y < Math.min(r0 + h, rows); y++) for (let x = c0; x < Math.min(c0 + w, cols); x++) anchor[y * cols + x] = i
   }
-  return { cols, rows, cells, anchor, owner }
+  return { cols, rows, cells, anchor, owner, wallpaper }
 }
 
 // anchorOf は、セル (col, row) を覆う割り当ての左上のセルを返す（タッチの判定、学習モード）。

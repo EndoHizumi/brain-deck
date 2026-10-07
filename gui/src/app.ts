@@ -15,14 +15,18 @@ import {
   type Location, type ResolvedAction,
 } from './model'
 import { hasSeconds } from './clock'
-import { cellSpan, renderPreview, type Mode } from './preview'
+import { CELL_GAP, cellSpan, renderPreview, type Mode } from './preview'
+import {
+  DEFAULT_BRIGHTNESS, DITHER_LABELS, MAX_ZOOM, checkTarget, convert, decodeFile, decodeImageFile, encodeImageFile, fitCrop, fromBase64,
+  sha256Hex, toBase64, type ConvertParams, type Crop, type Dither, type Image565, type SourceImage,
+} from './image'
 import { TEXT_ID_PATTERN, TEXT_STYLES, textExpired } from './textwidget'
 import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import type {
-  ActionSpec, Config, EngineStatus, GetTextResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
+  ActionSpec, BrainImage, Config, EngineStatus, GetTextResult, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
@@ -38,8 +42,47 @@ interface Message {
   level: 'info' | 'ok' | 'error'
 }
 
+// 背景画像を置く場所：セルか、レイヤーの壁紙
+export type BgTarget = { kind: 'cell'; layer: number; col: number; row: number } | { kind: 'wallpaper'; layer: number }
+
+// このタブで持っている背景画像。file は Brain に送るファイル（このタブで変換したもの、または Brain から読んだもの）
+interface LocalImage {
+  id: string
+  name: string
+  img: Image565
+  file?: Uint8Array
+  source?: { src: SourceImage; params: ConvertParams; name: string } // 切り抜きを直すための元の画像
+}
+
+// 切り抜きの画面の状態
+interface ImageEdit {
+  target: BgTarget
+  src: SourceImage
+  name: string
+  tw: number
+  th: number
+  params: ConvertParams
+  result: { img: Image565; file: Uint8Array; crop: Crop } | null
+  showPressed: boolean
+}
+
+// referencedImages は、設定で使っている背景画像の id。
+export function referencedImages(cfg: Config | null): Set<string> {
+  const out = new Set<string>()
+  for (const l of cfg?.layers ?? []) {
+    if (l.touch?.background) out.add(l.touch.background)
+    for (const a of Object.values(l.touch?.cells ?? {})) if (a.background) out.add(a.background)
+  }
+  return out
+}
+
+export function kb(n: number): string {
+  return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`
+}
+
 export interface AppDeps {
   serial?: Serial | null // navigator.serial。テストではモック
+  decodeImage?: (file: Blob) => Promise<SourceImage> // 画像ファイルを読む。テストではモック
   openTransport?: (port: SerialPort) => Promise<Transport>
   loadFont?: () => Promise<BitmapFont>
   confirm?: (msg: string) => boolean
@@ -113,6 +156,15 @@ export class App {
   messages: Message[] = []
   private msgId = 0
   font: BitmapFont | null = null
+  // 背景画像
+  images = new Map<string, LocalImage>()
+  brainImages: ImageListResult | null = null // Brain にある画像（list_images）
+  imageEdit: ImageEdit | null = null
+  imageBusy: string | null = null // 画像を送っているあいだの表示
+  private imageFetching = new Set<string>()
+  private editSrcCanvas: HTMLCanvasElement | null = null
+  private editDrag: { x: number; y: number; cx: number; cy: number; scale: number } | null = null
+  private editFrame = 0
   private deps: Required<AppDeps>
 
   constructor(
@@ -127,6 +179,7 @@ export class App {
       validateDelayMs: deps.validateDelayMs ?? 250,
       helloTimeoutMs: deps.helloTimeoutMs ?? 1500,
       keepaliveMs: deps.keepaliveMs ?? 10000,
+      decodeImage: deps.decodeImage ?? decodeFile,
     }
     this.deps
       .loadFont()
@@ -251,6 +304,7 @@ export class App {
       this.brainStatus = null
       this.todo = null
       this.calendar = null
+      this.brainImages = null
       if (reason !== 'closed by user') this.say(`Brain との接続が切れました（${reason}）。編集中の内容は残っています`, 'error')
       this.validation = 'offline'
       this.render()
@@ -285,6 +339,7 @@ export class App {
     this.brainStatus = null
     this.todo = null
     this.calendar = null
+    this.brainImages = null
     await c?.close()
     this.validation = 'offline'
     this.render()
@@ -311,6 +366,238 @@ export class App {
     this.calendar = this.hello?.commands?.includes('get_calendar') ? await c.request<CalendarData>('get_calendar') : null
     this.render()
     this.scheduleValidate(0)
+    void this.loadImages()
+  }
+
+  // ---------- 背景画像 ----------
+
+  get imagesSupported(): boolean {
+    return !!this.hello?.commands?.includes('image_begin')
+  }
+
+  // loadImages は Brain にある画像の一覧を読み、設定で使っていてこのタブにない画像を、プレビューのために読む。
+  async loadImages(): Promise<void> {
+    if (!this.connected || !this.imagesSupported) {
+      this.brainImages = null
+      return
+    }
+    try {
+      this.brainImages = await this.client!.request<ImageListResult>('list_images')
+    } catch (e: any) {
+      this.say(`Brain の背景画像の一覧を読めません：${e?.message ?? e}`, 'error')
+      return
+    }
+    this.render()
+    const want = new Set([...referencedImages(this.cfg), ...referencedImages(this.saved)])
+    for (const id of want) {
+      if (this.images.has(id) || this.imageFetching.has(id) || !this.onBrain(id)) continue
+      await this.fetchImage(id)
+    }
+  }
+
+  // fetchImage は Brain の画像を get_image で分けて読む（プレビュー用）。
+  private async fetchImage(id: string): Promise<void> {
+    this.imageFetching.add(id)
+    try {
+      const parts: Uint8Array[] = []
+      let off = 0
+      for (;;) {
+        const r = await this.client!.request<{ data: string; bytes: number; sha256: string }>('get_image', { image: id, offset: off }, 15000)
+        const d = fromBase64(r.data)
+        parts.push(d)
+        off += d.length
+        if (!d.length || off >= r.bytes) break
+      }
+      const file = new Uint8Array(off)
+      let o = 0
+      for (const p of parts) {
+        file.set(p, o)
+        o += p.length
+      }
+      const img = decodeImageFile(file)
+      if (!img || (await sha256Hex(file)).slice(0, 16) !== id) throw new Error('壊れています')
+      this.images.set(id, { id, name: this.brainImage(id)?.name ?? '', img, file })
+      this.render()
+    } catch (e: any) {
+      this.say(`背景画像 ${id} を Brain から読めません（プレビューには出ません）：${e?.message ?? e}`, 'error')
+    } finally {
+      this.imageFetching.delete(id)
+    }
+  }
+
+  brainImage(id: string): BrainImage | undefined {
+    return this.brainImages?.images.find((i) => i.id === id)
+  }
+
+  onBrain(id: string): boolean {
+    return !!this.brainImage(id)
+  }
+
+  imageName(id: string): string {
+    return this.images.get(id)?.name || this.brainImage(id)?.name || id
+  }
+
+  // bgTargetSize は、背景画像の大きさ（セルの箱か、画面全体）。display.go と同じ範囲。
+  bgTargetSize(t: BgTarget): { w: number; h: number } {
+    const W = this.keymap.screen.w
+    const H = this.keymap.screen.h
+    if (t.kind === 'wallpaper') return { w: W, h: H }
+    const g = resolveGrid(this.cfg!, editStack(t.layer))
+    const [sw, sh] = spanOf(this.cfg!.layers[t.layer].touch?.cells?.[cellKey(t.col, t.row)])
+    const [x0] = cellSpan(t.col, g.cols, W)
+    const [, x1] = cellSpan(Math.min(t.col + sw, g.cols) - 1, g.cols, W)
+    const [y0] = cellSpan(t.row, g.rows, H)
+    const [, y1] = cellSpan(Math.min(t.row + sh, g.rows) - 1, g.rows, H)
+    return { w: x1 - x0 - 2 * CELL_GAP, h: y1 - y0 - 2 * CELL_GAP }
+  }
+
+  bgOf(t: BgTarget): string | undefined {
+    const l = this.cfg?.layers[t.layer]
+    if (t.kind === 'wallpaper') return l?.touch?.background
+    return l?.touch?.cells?.[cellKey(t.col, t.row)]?.background
+  }
+
+  // setBg は背景画像を設定する（id が undefined なら外す）。描き直しと検証は呼び出し側で。
+  setBg(t: BgTarget, id: string | undefined): void {
+    const l = this.cfg?.layers[t.layer]
+    if (!l) return
+    if (t.kind === 'cell') {
+      const a = l.touch?.cells?.[cellKey(t.col, t.row)]
+      if (!a) return
+      if (id) a.background = id
+      else delete a.background
+      return
+    }
+    if (id) (l.touch ??= {}).background = id
+    else if (l.touch) {
+      delete l.touch.background
+      // 壁紙のためだけに作った touch は消す（base と同じ大きさで、セルもない）
+      if (t.layer !== 0 && Object.keys(l.touch).length === 0) delete l.touch
+    }
+  }
+
+  // openBgFile は画像ファイルを読み、切り抜きの画面を開く。
+  async openBgFile(t: BgTarget, file: Blob & { name?: string }): Promise<void> {
+    const { w, h: hh } = this.bgTargetSize(t)
+    const bad = checkTarget(w, hh)
+    if (bad) return this.say(bad, 'error')
+    let src: SourceImage
+    try {
+      src = await this.deps.decodeImage(file)
+    } catch (e: any) {
+      return this.say(`画像を読み込めません（PNG、JPEG、WebP が使えます）：${e?.message ?? e}`, 'error')
+    }
+    this.startImageEdit(t, src, file.name || '画像', { cx: src.w / 2, cy: src.h / 2, zoom: 1, brightness: DEFAULT_BRIGHTNESS, dither: 'fs' })
+  }
+
+  // reEditBg は、このタブで選んだ画像の切り抜きを直す。
+  reEditBg(t: BgTarget): void {
+    const id = this.bgOf(t)
+    const s = id ? this.images.get(id)?.source : undefined
+    if (s) this.startImageEdit(t, s.src, s.name, { ...s.params })
+  }
+
+  private startImageEdit(t: BgTarget, src: SourceImage, name: string, params: ConvertParams): void {
+    const { w, h: hh } = this.bgTargetSize(t)
+    this.imageEdit = { target: t, src, name, tw: w, th: hh, params, result: null, showPressed: t.kind === 'cell' }
+    this.editSrcCanvas = null
+    this.updateImageEdit({})
+    this.render()
+  }
+
+  // updateImageEdit は、切り抜きの設定を変えて変換し直す。DOM は作り直さず、絵だけを描き直す。
+  updateImageEdit(p: Partial<ConvertParams>): void {
+    const e = this.imageEdit
+    if (!e) return
+    Object.assign(e.params, p)
+    e.params.zoom = Math.min(Math.max(e.params.zoom, 1), MAX_ZOOM)
+    const c = fitCrop(e.src.w, e.src.h, e.tw, e.th, e.params.zoom, e.params.cx, e.params.cy)
+    e.params.cx = c.x + c.w / 2
+    e.params.cy = c.y + c.h / 2
+    e.result = convert(e.src, e.tw, e.th, e.params)
+    this.drawImageEdit()
+  }
+
+  // applyImageEdit は、切り抜いた画像をセルかレイヤーの背景にする。Brain には保存するときに送る。
+  async applyImageEdit(): Promise<void> {
+    const e = this.imageEdit
+    if (!e?.result) return
+    const file = e.result.file
+    const id = (await sha256Hex(file)).slice(0, 16)
+    this.images.set(id, { id, name: e.name, img: e.result.img, file, source: { src: e.src, params: { ...e.params }, name: e.name } })
+    this.setBg(e.target, id)
+    this.imageEdit = null
+    this.editSrcCanvas = null
+    this.say(`背景画像「${e.name}」を${e.target.kind === 'wallpaper' ? '壁紙に' : 'セルに'}しました。「Brain に保存」で送ります`, 'ok')
+    this.changed()
+  }
+
+  cancelImageEdit(): void {
+    this.imageEdit = null
+    this.editSrcCanvas = null
+    this.render()
+  }
+
+  // uploadImages は、設定で使っていて Brain にない画像を送る。送れなければ false（保存しない）。
+  private async uploadImages(cfg: Config): Promise<boolean> {
+    if (!this.imagesSupported) return true
+    const c = this.client!
+    this.brainImages = await c.request<ImageListResult>('list_images')
+    const need = [...referencedImages(cfg)].filter((id) => !this.onBrain(id))
+    let n = 0
+    try {
+      for (const id of need) {
+        const local = this.images.get(id)
+        const file = local?.file ?? (local ? encodeImageFile(local.img) : null)
+        if (!file) {
+          this.say(`背景画像 ${id} のデータがこのタブにも Brain にもありません。背景なしで描かれます（画像を選び直してください）`, 'error')
+          continue
+        }
+        n++
+        this.imageBusy = `背景画像を送っています（${n}/${need.length}）：${this.imageName(id)}`
+        this.render()
+        const sha = await sha256Hex(file)
+        const img = local!.img
+        const b = await c.request<{ exists: boolean; upload: string; chunk_bytes: number }>('image_begin',
+          { sha256: sha, bytes: file.length, w: img.w, h: img.h, name: local!.name, source: 'gui' })
+        if (b.exists) continue
+        try {
+          for (let off = 0; off < file.length; off += b.chunk_bytes) {
+            const end = Math.min(off + b.chunk_bytes, file.length)
+            await c.request('image_chunk', { upload: b.upload, offset: off, data: toBase64(file.subarray(off, end)) }, 15000)
+          }
+          await c.request('image_end', { upload: b.upload }, 30000)
+        } catch (e) {
+          await c.request('image_abort', { upload: b.upload }).catch(() => {})
+          throw e
+        }
+      }
+    } catch (e: any) {
+      const why = e instanceof ProtocolError && (e.code === 'quota_exceeded' || e.code === 'no_space')
+        ? `${e.message}。「Brain の背景画像」で使っていない画像を消すか、画像を減らしてください` : (e?.message ?? String(e))
+      this.say(`背景画像を送れなかったので、設定は保存していません：${why}`, 'error')
+      return false
+    } finally {
+      this.imageBusy = null
+    }
+    return true
+  }
+
+  // pruneImages は、編集中の設定と Brain の設定のどちらでも使っていない画像を、Brain から消す。
+  async pruneImages(): Promise<void> {
+    if (!this.connected || !this.imagesSupported) return
+    const keep = [...referencedImages(this.cfg)]
+    try {
+      const dry = await this.client!.request<{ removed: string[]; freed_bytes: number }>('prune_images', { dry_run: true, keep })
+      if (!dry.removed.length) return this.say('使っていない背景画像はありません')
+      const names = dry.removed.map((id) => this.imageName(id)).join('、')
+      if (!this.deps.confirm(`使っていない背景画像 ${dry.removed.length} 枚（${kb(dry.freed_bytes)}）を Brain から消します。よいですか？\n${names}`)) return
+      const r = await this.client!.request<{ removed: string[]; freed_bytes: number }>('prune_images', { keep })
+      this.say(`背景画像を ${r.removed.length} 枚消しました（${kb(r.freed_bytes)}）`, 'ok')
+    } catch (e: any) {
+      this.say(`背景画像を消せませんでした：${e?.message ?? e}`, 'error')
+    }
+    await this.loadImages()
   }
 
   // ---------- Todo ----------
@@ -593,6 +880,7 @@ export class App {
     }
     if (a && label) a.label = label
     if (a && cur?.span && kind !== 'none') a.span = cur.span
+    if (a && cur?.background && kind !== 'none') a.background = cur.background
     this.setAction(a)
   }
 
@@ -601,7 +889,7 @@ export class App {
     const cur = this.ownAction()
     if (!cur?.widget) return
     const a: ActionSpec = {}
-    for (const f of [...WIDGET_FIELDS, 'label', 'span'] as const) if (cur[f] !== undefined) (a as any)[f] = cur[f]
+    for (const f of [...WIDGET_FIELDS, 'label', 'span', 'background'] as const) if (cur[f] !== undefined) (a as any)[f] = cur[f]
     if (kind === 'key') a.key = cur.key && cur.key.toLowerCase() !== 'none' ? cur.key : ''
     else if (LAYER_KINDS.includes(kind as LayerKind)) {
       const others = this.cfg!.layers.filter((_, i) => i !== this.layer && !(kind === 'layer_toggle' && i === 0))
@@ -840,7 +1128,7 @@ export class App {
 
   reviewSave(): void {
     if (!this.cfg || !this.saved) return
-    const changes = diffConfigs(clean(this.saved), this.forBrain(), this.keymap)
+    const changes = diffConfigs(clean(this.saved), this.forBrain(), this.keymap, (id) => this.imageName(id))
     if (changes.length === 0) {
       this.say('Brain の設定と同じです。保存するものはありません')
       return
@@ -854,9 +1142,15 @@ export class App {
     this.saving = true
     this.render()
     try {
+      const cfg = this.forBrain()
+      // 背景画像は、設定より先に送る（設定を保存した瞬間に、画像が Brain にあるように）
+      if (!(await this.uploadImages(cfg))) {
+        this.diff = null
+        return
+      }
       const r = await this.client!.request<{ saved: string; previous: string; warnings: string[] }>(
         'set_config',
-        { config: this.forBrain() },
+        { config: cfg },
         15000,
       )
       this.diff = null
@@ -867,6 +1161,7 @@ export class App {
       if (this.layer >= this.cfg.layers.length) this.layer = 0
       this.warnings = r.warnings
       this.scheduleValidate(0)
+      void this.loadImages()
     } catch (e: any) {
       this.diff = null
       if (e instanceof ProtocolError && e.code === 'invalid_config') {
@@ -914,6 +1209,7 @@ export class App {
   render(): void {
     replaceKeepingFocus(this.root, this.view())
     this.drawPreview()
+    this.drawImageEdit()
   }
 
   private view(): HTMLElement {
@@ -924,6 +1220,7 @@ export class App {
       this.viewMessages(),
       this.cfg ? this.viewEditor() : this.viewStart(),
       this.diff ? this.viewDiff() : null,
+      this.imageEdit ? this.viewImageEdit() : null,
     )
   }
 
@@ -970,7 +1267,9 @@ export class App {
   }
 
   private viewMessages(): HTMLElement {
-    return h('div', { class: 'messages' }, this.messages.map((m) => h('div', { class: `msg ${m.level}` }, m.text)))
+    return h('div', { class: 'messages' },
+      this.imageBusy ? h('div', { class: 'msg info', id: 'image-busy' }, this.imageBusy) : null,
+      this.messages.map((m) => h('div', { class: `msg ${m.level}` }, m.text)))
   }
 
   private viewStart(): HTMLElement {
@@ -1109,8 +1408,208 @@ export class App {
             h('span', { class: 'hint' }, how ? `入り方：${how}` : ''),
             h('button', { class: 'danger', onclick: () => this.deleteLayer() }, 'このレイヤーを消す'),
           ],
+      this.cfg!.touch ? this.viewBgEditor({ kind: 'wallpaper', layer: this.layer }) : null,
       errs.map((p) => h('div', { class: 'err' }, p.message)),
     )
+  }
+
+  // ---------- 背景画像の欄 ----------
+
+  // viewBgEditor は、セルの背景画像かレイヤーの壁紙を選ぶ欄。画像ファイルはドロップしてもよい。
+  private viewBgEditor(t: BgTarget): HTMLElement {
+    const id = this.bgOf(t)
+    const { w, h: hh } = this.bgTargetSize(t)
+    const what = t.kind === 'wallpaper' ? '壁紙' : '背景画像'
+    const input = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/*', class: 'hidden', id: `bg-file-${t.kind}`,
+      onchange: (e: Event) => {
+        const el = e.target as HTMLInputElement
+        const f = el.files?.[0]
+        el.value = ''
+        if (f) void this.openBgFile(t, f)
+      } })
+    let state = ''
+    if (id) {
+      if (this.connected && this.imagesSupported && this.brainImages) state = this.onBrain(id) ? 'Brain にあります' : this.images.get(id) ? '保存すると Brain に送ります' : 'Brain にありません（背景なしで描かれます）'
+      const img = this.images.get(id)?.img
+      if (img && (img.w !== w || img.h !== hh)) state += `。大きさが違います（画像 ${img.w}×${img.h}、${what}の範囲 ${w}×${hh}）。中央に置き、はみ出す分は切れます`
+    }
+    return h('div', { class: ['bg-editor', `bg-${t.kind}`],
+      ondragover: (e: DragEvent) => e.preventDefault(),
+      ondrop: (e: DragEvent) => {
+        e.preventDefault()
+        const f = e.dataTransfer?.files?.[0]
+        if (f) void this.openBgFile(t, f)
+      } },
+      h('span', { class: 'bg-label' }, `${what} `),
+      id ? h('span', { class: 'bg-name', title: id }, this.imageName(id)) : h('span', { class: 'hint' }, 'なし'),
+      input,
+      h('button', { class: 'small', id: `bg-choose-${t.kind}`, onclick: () => input.click(),
+        title: 'PNG、JPEG、WebP。ファイルをこの欄にドロップしてもよい' }, '画像を選ぶ…'),
+      id && this.images.get(id)?.source ? h('button', { class: 'small', id: `bg-recrop-${t.kind}`, onclick: () => this.reEditBg(t) }, '切り抜きを直す') : null,
+      id ? h('button', { class: 'small danger', id: `bg-remove-${t.kind}`, onclick: () => { this.setBg(t, undefined); this.changed() } }, '外す') : null,
+      this.connected && !this.imagesSupported ? h('div', { class: 'warn' }, 'この Brain の lefthand は背景画像に対応していません。lefthand を新しくしてください') : null,
+      state ? h('div', { class: 'hint' }, state) : null,
+      h('div', { class: 'hint' }, t.kind === 'wallpaper'
+        ? `格子全体（${w}×${hh}）に敷きます。セルの背景画像があれば、そちらを上に描きます。`
+        : `セルの枠の内側（${w}×${hh}）に合わせて切り抜きます。`),
+    )
+  }
+
+  // viewImageEdit は、背景画像を切り抜く画面。元の画像をドラッグで動かし、ホイールか「拡大」で範囲を決める。
+  private viewImageEdit(): HTMLElement {
+    const e = this.imageEdit!
+    const p = e.params
+    const pct = Math.round(Math.abs(p.brightness) * 100)
+    const brightText = p.brightness < 0 ? `暗く ${pct}%` : p.brightness > 0 ? `明るく ${pct}%` : 'そのまま'
+    const size = e.result ? kb(e.result.file.length) : ''
+    return h('div', { class: 'modal-back' },
+      h('div', { class: 'modal image-edit', role: 'dialog', 'aria-label': '背景画像を切り抜く' },
+        h('h2', null, `${e.target.kind === 'wallpaper' ? '壁紙' : 'セルの背景画像'}を切り抜く（${e.name}）`),
+        h('div', { class: 'crop-row' },
+          h('div', { class: 'crop-box' },
+            h('canvas', { class: 'crop-src', width: 480, height: 320,
+              onpointerdown: (ev: PointerEvent) => this.cropPointer(ev, 'down'),
+              onpointermove: (ev: PointerEvent) => this.cropPointer(ev, 'move'),
+              onpointerup: (ev: PointerEvent) => this.cropPointer(ev, 'up'),
+              onpointercancel: (ev: PointerEvent) => this.cropPointer(ev, 'up'),
+              onwheel: (ev: WheelEvent) => {
+                ev.preventDefault()
+                this.updateImageEdit({ zoom: p.zoom * Math.exp(-ev.deltaY * 0.0015) })
+                this.syncEditControls()
+              } }),
+            h('p', { class: 'hint' }, `明るい枠の中が使われます。ドラッグで動かし、ホイールか「拡大」で大きさを変えます。縦横比は${e.target.kind === 'wallpaper' ? '画面' : 'セル'}（${e.tw}×${e.th}）に合わせます。`)),
+          h('div', { class: 'crop-controls' },
+            h('label', { class: 'row' }, '拡大 ', h('input', { type: 'range', id: 'img-zoom', min: 1, max: MAX_ZOOM, step: 0.01, value: p.zoom,
+              oninput: (ev: Event) => this.updateImageEdit({ zoom: Number((ev.target as HTMLInputElement).value) }) })),
+            h('label', { class: 'row', title: '文字が読みやすいよう、画像を暗く（明るく）します。画像そのものに焼き込みます' }, '明るさ ',
+              h('input', { type: 'range', id: 'img-bright', min: -100, max: 100, step: 5, value: Math.round(p.brightness * 100),
+                oninput: (ev: Event) => {
+                  this.updateImageEdit({ brightness: Number((ev.target as HTMLInputElement).value) / 100 })
+                  this.syncEditControls()
+                } }),
+              h('span', { class: 'bright-text' }, brightText)),
+            h('label', { class: 'row', title: 'Brain の画面は 65536 色（RGB565）。ディザリングで、グラデーションの段を目立たなくします' }, 'ディザリング ',
+              h('select', { id: 'img-dither', onchange: (ev: Event) => { this.updateImageEdit({ dither: (ev.target as HTMLSelectElement).value as Dither }); this.render() } },
+                (Object.keys(DITHER_LABELS) as Dither[]).map((d) => h('option', { value: d, selected: p.dither === d }, DITHER_LABELS[d])))),
+            e.target.kind === 'cell'
+              ? h('label', { class: 'row' }, h('input', { type: 'checkbox', id: 'img-pressed', checked: e.showPressed,
+                onchange: (ev: Event) => { e.showPressed = (ev.target as HTMLInputElement).checked; this.drawImageEdit() } }), ' 押したときの枠を重ねる')
+              : null,
+            h('p', { class: 'hint' }, `Brain に送る大きさ：${e.tw}×${e.th}、${size}`))),
+        h('canvas', { class: 'crop-preview', width: this.keymap.screen.w, height: this.keymap.screen.h }),
+        h('p', { class: 'hint' }, '下は Brain の画面のプレビュー（ラベル、文字の縁取り、押したときの枠も Brain と同じに描きます）。'),
+        h('div', { class: 'buttons' },
+          h('button', { id: 'img-cancel', onclick: () => this.cancelImageEdit() }, 'やめる'),
+          h('button', { class: 'primary', id: 'img-apply', disabled: !e.result, onclick: () => void this.applyImageEdit() }, 'この範囲にする'))))
+  }
+
+  // syncEditControls は、DOM を作り直さずに、切り抜きの画面の欄を今の値にする（ドラッグ中など）。
+  private syncEditControls(): void {
+    const e = this.imageEdit
+    if (!e) return
+    const z = this.root.querySelector<HTMLInputElement>('#img-zoom')
+    if (z) z.value = String(e.params.zoom)
+    const t = this.root.querySelector('.bright-text')
+    const pct = Math.round(Math.abs(e.params.brightness) * 100)
+    if (t) t.textContent = e.params.brightness < 0 ? `暗く ${pct}%` : e.params.brightness > 0 ? `明るく ${pct}%` : 'そのまま'
+  }
+
+  // cropPointer は、元の画像の上のドラッグで、切り抜く範囲を動かす。
+  private cropPointer(ev: PointerEvent, phase: 'down' | 'move' | 'up'): void {
+    const e = this.imageEdit
+    const c = ev.currentTarget as HTMLCanvasElement
+    if (!e) return
+    if (phase === 'down') {
+      const rect = c.getBoundingClientRect()
+      const fit = Math.min(c.width / e.src.w, c.height / e.src.h)
+      // 画面上の 1 ピクセルが、元の画像の何ピクセルか
+      const scale = (c.width / Math.max(rect.width, 1)) / fit
+      this.editDrag = { x: ev.clientX, y: ev.clientY, cx: e.params.cx, cy: e.params.cy, scale }
+      c.setPointerCapture?.(ev.pointerId)
+    } else if (phase === 'move' && this.editDrag) {
+      const d = this.editDrag
+      this.updateImageEdit({ cx: d.cx + (ev.clientX - d.x) * d.scale, cy: d.cy + (ev.clientY - d.y) * d.scale })
+    } else if (phase === 'up') this.editDrag = null
+  }
+
+  // drawImageEdit は、切り抜きの画面の 2 つの絵（元の画像と範囲、Brain の画面のプレビュー）を描く。
+  private drawImageEdit(): void {
+    const e = this.imageEdit
+    if (!e) return
+    cancelAnimationFrame?.(this.editFrame)
+    const draw = () => {
+      const src = this.root.querySelector<HTMLCanvasElement>('canvas.crop-src')
+      const ctx = src?.getContext('2d')
+      if (src && ctx) {
+        if (!this.editSrcCanvas) {
+          const c = document.createElement('canvas')
+          c.width = e.src.w
+          c.height = e.src.h
+          c.getContext('2d')?.putImageData(new ImageData(e.src.data as any, e.src.w, e.src.h), 0, 0)
+          this.editSrcCanvas = c
+        }
+        const fit = Math.min(src.width / e.src.w, src.height / e.src.h)
+        const dw = e.src.w * fit
+        const dh = e.src.h * fit
+        const ox = (src.width - dw) / 2
+        const oy = (src.height - dh) / 2
+        ctx.fillStyle = '#222'
+        ctx.fillRect(0, 0, src.width, src.height)
+        ctx.drawImage(this.editSrcCanvas, ox, oy, dw, dh)
+        const cr = e.result?.crop ?? fitCrop(e.src.w, e.src.h, e.tw, e.th, e.params.zoom, e.params.cx, e.params.cy)
+        const x = ox + cr.x * fit
+        const y = oy + cr.y * fit
+        const w = cr.w * fit
+        const hh = cr.h * fit
+        ctx.fillStyle = 'rgba(0,0,0,0.6)'
+        ctx.fillRect(ox, oy, dw, y - oy)
+        ctx.fillRect(ox, y + hh, dw, oy + dh - y - hh)
+        ctx.fillRect(ox, y, x - ox, hh)
+        ctx.fillRect(x + w, y, ox + dw - x - w, hh)
+        ctx.strokeStyle = '#ffd040'
+        ctx.lineWidth = 2
+        ctx.strokeRect(x, y, w, hh)
+      }
+      const pv = this.root.querySelector<HTMLCanvasElement>('canvas.crop-preview')
+      const pctx = pv?.getContext('2d')
+      if (pv && pctx && this.font && this.cfg && e.result) {
+        const cfg = structuredClone(this.cfg)
+        const t = e.target
+        const l = cfg.layers[t.layer]
+        if (t.kind === 'wallpaper') (l.touch ??= {}).background = '__edit__'
+        else if (l.touch?.cells?.[cellKey(t.col, t.row)]) l.touch.cells[cellKey(t.col, t.row)].background = '__edit__'
+        const img = e.result.img
+        const pressed = new Set(t.kind === 'cell' && e.showPressed ? [cellKey(t.col, t.row)] : [])
+        const { pixels } = renderPreview(this.font, { cfg, stack: editStack(t.layer), mode: this.previewMode(t.layer), pressed,
+          w: pv.width, h: pv.height, now: new Date(), texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar,
+          images: (id) => (id === '__edit__' ? img : this.images.get(id)?.img) })
+        pctx.putImageData(new ImageData(pixels as any, pv.width, pv.height), 0, 0)
+      }
+    }
+    if (typeof requestAnimationFrame === 'function') this.editFrame = requestAnimationFrame(draw)
+    else draw()
+  }
+
+  // viewImagesPanel は、Brain にある背景画像の一覧と、使っていない画像を消すボタン。
+  private viewImagesPanel(): HTMLElement | null {
+    if (!this.connected || !this.imagesSupported || !this.brainImages) return null
+    const l = this.brainImages
+    const editing = referencedImages(this.cfg)
+    return h('details', { class: 'images-panel' },
+      h('summary', null, `Brain の背景画像（${l.images.length} 枚、${kb(l.total_bytes)} / 上限 ${kb(l.limit_bytes)}）`),
+      l.images.length
+        ? h('table', { class: 'images' },
+          h('thead', null, h('tr', null, ['名前', '大きさ', '容量', '使っている場所', 'id'].map((x) => h('th', null, x)))),
+          h('tbody', null, l.images.map((im) => h('tr', { dataset: { image: im.id } },
+            h('td', null, im.name || '（名前なし）'),
+            h('td', null, `${im.w}×${im.h}`),
+            h('td', null, kb(im.bytes)),
+            h('td', null, im.refs.length ? `${im.refs.length} か所` : editing.has(im.id) ? '編集中の設定で使用' : '使っていない'),
+            h('td', { class: 'mono' }, im.id)))))
+        : h('p', { class: 'hint' }, 'まだありません。セルかレイヤーを選んで「画像を選ぶ…」から足します。'),
+      l.missing.length ? h('p', { class: 'warn' }, `Brain の設定で使っているのに、Brain にない画像：${l.missing.join(' ')}（背景なしで描いています）`) : null,
+      h('p', { class: 'hint' }, `1 枚は画面いっぱい（${l.max_side}×${Math.floor(l.max_pixels / l.max_side)}、${kb(l.max_image_bytes)}）まで。SD カードの空き ${kb(l.free_bytes)}（保存したあとも ${kb(l.reserve_bytes)} は残します）。`),
+      h('button', { class: 'small danger', id: 'prune-images', onclick: () => void this.pruneImages() }, '使っていない画像を Brain から消す'))
   }
 
   // ---------- キーボード ----------
@@ -1208,6 +1707,16 @@ export class App {
             this.sel = sel
             this.render()
           },
+          ondragover: (e: DragEvent) => e.preventDefault(),
+          ondrop: (e: DragEvent) => {
+            // 画像ファイルをセルにドロップすると、そのセルの背景画像にする
+            e.preventDefault()
+            const f = e.dataTransfer?.files?.[0]
+            this.sel = sel
+            if (f && this.ownAction(sel)) void this.openBgFile({ kind: 'cell', layer: this.layer, col: c, row: r }, f)
+            else if (f) this.say('このレイヤーに割り当てのあるセルにだけ、背景画像を置けます。先に割り当ててください', 'error')
+            this.render()
+          },
           onpointerdown: () => this.setPreviewPress(cellKey(c, r)),
           onpointerup: () => this.setPreviewPress(null),
           onpointerleave: () => this.setPreviewPress(null),
@@ -1224,6 +1733,7 @@ export class App {
         this.viewSoftStrip(),
       ),
       this.viewTouchSettings(),
+      this.viewImagesPanel(),
     )
   }
 
@@ -1397,15 +1907,19 @@ export class App {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     const li = this.layer
-    const refs = li === 0 ? [] : references(this.cfg, this.cfg.layers[li].name)
-    // 入り方で枠の色を変える（切り替えたままなら緑、一時的なら橙）
-    const mode: Mode = li === 0 ? 'base' : refs.some((r) => r.kind === 'layer_toggle' || r.kind === 'layer_to') || !refs.length ? 'latched' : 'temp'
+    const mode = this.previewMode(li)
     const pressed = new Set(this.previewPress ? [this.previewPress] : [])
     const now = new Date()
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
-      texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar })
+      texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
+  }
+
+  // previewMode は、レイヤーの入り方で枠の色を決める（切り替えたままなら緑、一時的なら橙）。
+  private previewMode(li: number): Mode {
+    const refs = li === 0 ? [] : references(this.cfg!, this.cfg!.layers[li].name)
+    return li === 0 ? 'base' : refs.some((r) => r.kind === 'layer_toggle' || r.kind === 'layer_to') || !refs.length ? 'latched' : 'temp'
   }
 
   // schedulePreviewTick は、時計が出ていれば、表示が変わる時刻（次の秒か分）にプレビューを描き直す。
@@ -1495,7 +2009,10 @@ export class App {
           value: own.label ?? '', oninput: (e: Event) => this.patchAction({ label: (e.target as HTMLTextAreaElement).value }) })))
       if (missing.length) body.push(h('div', { class: 'warn' }, `Brain のフォントにない文字があります（□ になります）：${missing.join(' ')}`))
     }
-    if (own && kind !== 'inherit' && kind !== 'none' && sel.kind === 'cell') body.push(this.viewSpanEditor(own))
+    if (own && kind !== 'inherit' && kind !== 'none' && sel.kind === 'cell') {
+      body.push(this.viewSpanEditor(own))
+      body.push(this.viewBgEditor({ kind: 'cell', layer: this.layer, col: sel.col, row: sel.row }))
+    }
     for (const n of notes) body.push(h('p', { class: 'hint' }, n!))
     for (const p of errs) body.push(h('div', { class: 'err' }, p.message))
 
