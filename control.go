@@ -415,7 +415,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(pwsh2Keymap())
 	case "get_status":
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
-			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info()})
+			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
+			"hid": map[string]bool{"mouse": c.engine.out.mouse.Available()}})
 	case "set_time":
 		if req.UnixMS == nil {
 			return errResp(id, errBadRequest, `"unix_ms" (milliseconds since 1970-01-01 UTC) is required`, nil)

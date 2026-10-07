@@ -106,6 +106,7 @@ func parseCombo(s string) (Combo, error) {
 // ブロッキングで開くと、PCがレポートを取りに来ない間（スリープ中など）
 // write が永久に待ち、終了時の空レポートも送れなくなる。
 type HIDWriter struct {
+	mu       sync.Mutex // キーボードとマウスが同じデバイスに書く
 	path     string
 	fd       int
 	lastOpen time.Time
@@ -135,6 +136,8 @@ func (w *HIDWriter) open() error {
 
 // Write は失敗してもエラーを返すだけで、呼び出し側を止めない。
 func (w *HIDWriter) Write(r []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	err := w.write(r)
 	if err != nil && !w.failing {
 		log.Printf("hid write failed (PC未接続/スリープ中?): %v", err)
@@ -180,9 +183,11 @@ func (w *HIDWriter) write(r []byte) error {
 
 type State struct {
 	mu     sync.Mutex
-	hid    *HIDWriter
+	hid    hidOut
 	active map[string]Combo // 入力元ID -> 出力
 	dirty  bool             // 最後の送信が失敗し、現在の状態がPCに届いていない
+	kbdID  byte             // キーボードのレポート ID。0 なら付けない（キーボードだけの形。hid.go）
+	mouse  *Mouse           // nil ならマウスはない
 }
 
 func (s *State) press(id string, c Combo) {
@@ -202,11 +207,13 @@ func (s *State) release(id string) {
 	s.send()
 }
 
+// releaseAll は、キーとマウスのボタンをすべて離す（終了、設定の再読み込み）。
 func (s *State) releaseAll() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.active = map[string]Combo{}
 	s.send()
+	s.mu.Unlock()
+	s.mouse.ReleaseAll()
 }
 
 // retryLoop は送信に失敗した状態を定期的に送り直す。
@@ -218,6 +225,7 @@ func (s *State) retryLoop() {
 			s.send()
 		}
 		s.mu.Unlock()
+		s.mouse.retry()
 	}
 }
 
@@ -245,6 +253,9 @@ func (s *State) send() {
 				n++
 			}
 		}
+	}
+	if s.kbdID != 0 {
+		r = append([]byte{s.kbdID}, r...)
 	}
 	err := s.hid.Write(r)
 	s.dirty = err != nil
@@ -870,7 +881,10 @@ func main() {
 		}
 	}
 
-	s := &State{hid: NewHIDWriter(cfg.HIDDevice), active: map[string]Combo{}}
+	hid := NewHIDWriter(cfg.HIDDevice)
+	hl := detectHID(cfg.HIDDevice)
+	log.Printf("hid: %s", hl.Source)
+	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID)}
 	e := NewEngine(km, s)
 	store := OpenStore(*dataDir)
 	clock := NewTimeService(store)
