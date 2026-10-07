@@ -1,0 +1,11 @@
+# ~/.config/systemd/user/brain-deck-calendar.service
+# brain-deck-calendar.timer から 15 分ごとに起動され、カレンダーの予定を Brain に送る（Brain の時刻も合わせる）。
+# brain-deck は ~/.local/bin に置き、calendars.yaml は ~/.config/brain-deck/ に置く（README の「カレンダー」）
+[Unit]
+Description=Brain にカレンダーの予定を送る
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/brain-deck -q calendar sync
+# 3（Brain がない）と 4（設定 GUI の接続中）は失敗にしない
+SuccessExitStatus=3 4

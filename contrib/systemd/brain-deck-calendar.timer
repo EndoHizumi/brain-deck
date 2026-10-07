@@ -1,0 +1,13 @@
+# ~/.config/systemd/user/brain-deck-calendar.timer
+# 有効にする：systemctl --user enable --now brain-deck-calendar.timer
+[Unit]
+Description=15 分ごとに Brain にカレンダーの予定を送る
+
+[Timer]
+# 毎時 0、15、30、45 分。Persistent は OnCalendar にだけ効き、PC の電源断やスリープで逃した回を、
+# 起動やスリープからの復帰のあとにすぐ実行する（OnUnitActiveSec ではスリープ中の時間を数えず、ずれる）
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

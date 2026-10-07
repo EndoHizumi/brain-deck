@@ -482,7 +482,7 @@ cron（`crontab -e`）：
 */15 * * * * $HOME/.local/bin/brain-deck -q calendar sync >> $HOME/.cache/brain-deck.log 2>&1
 ```
 
-systemd のユーザータイマー（Linux。スリープから戻ったあとも、逃した回をすぐ実行する）：
+systemd のユーザータイマー（Linux。スリープから戻ったあとも、逃した回をすぐ実行する）。同じものが [contrib/systemd/](contrib/systemd/) にあるので、`~/.config/systemd/user/` にコピーして使える：
 
 ```ini
 # ~/.config/systemd/user/brain-deck-calendar.service
@@ -502,8 +502,7 @@ SuccessExitStatus=3 4
 Description=15 分ごとに Brain にカレンダーの予定を送る
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=15min
+OnCalendar=*:0/15
 Persistent=true
 
 [Install]
@@ -511,6 +510,7 @@ WantedBy=timers.target
 ```
 
 ```sh
+cp contrib/systemd/brain-deck-calendar.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now brain-deck-calendar.timer
 journalctl --user -u brain-deck-calendar   # 結果を見る
@@ -794,6 +794,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config.yaml | 設定の例。実機と同じ値 |
 | config/current.yaml | Brain で動いている本番の設定の写し（2026-10-07 にダッシュボードのレイヤーを足して反映。メニューの「ダッシュボード」から入り、HOME で戻る） |
 | config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |
+| contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごとに実行する、ユーザー単位の systemd のタイマー |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
 | docs/kernel-build.md | HID と ACM を有効にしたカーネルのビルドと、SD カードへの差し替え |
