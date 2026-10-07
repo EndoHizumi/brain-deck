@@ -91,7 +91,7 @@ func (c *Client) Call(cmd string, params map[string]any, timeout time.Duration) 
 	}
 	deadline := time.Now().Add(timeout)
 	c.f.SetWriteDeadline(deadline)
-	c.logf("%s → %s", c.Port, b)
+	c.logf("%s → %.400s", c.Port, b) // 画像のデータは長いので、先頭だけ
 	if _, err := c.f.Write(append(b, '\n')); err != nil {
 		return nil, ioErr(err)
 	}

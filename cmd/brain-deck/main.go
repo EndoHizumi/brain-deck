@@ -78,6 +78,9 @@ const usage = `使い方：
   brain-deck calendar sync --dry-run  取ってきた予定を表示するだけで、Brain には送らない
   brain-deck calendar [list] [--json] Brain にある予定
   brain-deck calendar clear           Brain の予定を消す
+  brain-deck images [list] [--json]   Brain にある背景画像の一覧（使っている場所の数、名前）
+  brain-deck images put <ファイル.565>...  変換済みの画像を送る（PNG などは設定 GUI で変換する）
+  brain-deck images prune [--dry-run] 今の設定で使っていない背景画像を消す
   brain-deck time sync                PC の時刻を Brain に送る
   brain-deck status                   Brain の状態（版、時刻、レイヤー）
   brain-deck version
@@ -237,11 +240,11 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	hint := "（使い方は brain-deck --help）"
-	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && o.args[0] == "calendar") {
-		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo と calendar で使います"+hint)
+	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && (o.args[0] == "calendar" || o.args[0] == "images")) {
+		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo、calendar、images で使います"+hint)
 		return exitUsage
 	}
-	if o.args[0] != "calendar" && (len(o.ics) > 0 || o.days != 0 || o.config != "" || o.dryRun) {
+	if o.args[0] != "calendar" && (len(o.ics) > 0 || o.days != 0 || o.config != "" || (o.dryRun && o.args[0] != "images")) {
 		fmt.Fprintln(stderr, "brain-deck: --ics、--days、--config、--dry-run は calendar sync で使います"+hint)
 		return exitUsage
 	}
@@ -256,6 +259,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = todoCommand(o, stdin)
 	case "calendar":
 		return runCalendar(o, stdout, stderr)
+	case "images":
+		cmd, err = imagesCommand(o)
 	case "time":
 		if len(o.args) != 2 || o.args[1] != "sync" {
 			err = usageError("time のあとには sync を書きます（brain-deck time sync）")

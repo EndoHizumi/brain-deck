@@ -5,10 +5,15 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -84,7 +89,10 @@ type fakeBrain struct {
 	ignore  int // 最初のこの数の hello に答えない（デーモンの再起動直後を真似る）
 	todo    todoList
 	removed int
-	cals    any // set_calendar で受け取った calendars
+	cals    any               // set_calendar で受け取った calendars
+	images  map[string][]byte // image_end で受け取った画像（id → 中身）
+	upload  []byte            // 受け取っている途中の画像
+	upName  string
 }
 
 func newFakeBrain(t *testing.T) *fakeBrain {
@@ -155,6 +163,39 @@ func (f *fakeBrain) serve(commands []string) {
 			res = map[string]any{"rev": 1, "shown": true}
 		case "get_calendar":
 			res = map[string]any{"rev": 1, "shown": true, "calendars": f.cals}
+		case "image_begin":
+			id := req["sha256"].(string)[:16]
+			if _, ok := f.images[id]; ok {
+				res = map[string]any{"id": id, "exists": true}
+				break
+			}
+			f.upload, f.upName = nil, req["name"].(string)
+			res = map[string]any{"id": id, "upload": "u1", "chunk_bytes": 1000}
+		case "image_chunk":
+			b, _ := base64.StdEncoding.DecodeString(req["data"].(string))
+			f.upload = append(f.upload, b...)
+			res = map[string]any{"received": len(f.upload)}
+		case "image_end":
+			s := sha256.Sum256(f.upload)
+			id := hex.EncodeToString(s[:])[:16]
+			if f.images == nil {
+				f.images = map[string][]byte{}
+			}
+			f.images[id] = f.upload
+			res = map[string]any{"id": id}
+		case "list_images":
+			var l []any
+			for id, b := range f.images {
+				l = append(l, map[string]any{"id": id, "name": f.upName, "w": 20, "h": 10, "bytes": len(b), "refs": []string{}})
+			}
+			res = map[string]any{"images": l, "total_bytes": 408, "limit_bytes": 16 << 20, "free_bytes": 100 << 20, "reserve_bytes": 64 << 20,
+				"missing": []string{"0123456789abcdef"}}
+		case "prune_images":
+			var ids []string
+			for id := range f.images {
+				ids = append(ids, id)
+			}
+			res = map[string]any{"removed": ids, "freed_bytes": 408, "dry_run": req["dry_run"]}
 		default:
 			res = map[string]any{}
 		}
@@ -409,5 +450,56 @@ func TestTodoConflictMessage(t *testing.T) {
 	var b bytes.Buffer
 	if code := report(&b, &brainError{Code: "conflict", Message: "item t1 was changed"}); code != exitBrainError || !strings.Contains(b.String(), "todo list で確かめて") {
 		t.Errorf("conflict: %d %s", code, b.String())
+	}
+}
+
+func TestImagesAgainstFakeBrain(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := newFakeBrain(t)
+	go f.serve([]string{"hello", "list_images", "image_begin", "image_chunk", "image_end", "image_abort", "prune_images"})
+	dir := t.TempDir()
+	img := make([]byte, 8+20*10*2) // 3 回に分けて送る（chunk_bytes 1000）
+	copy(img, "LHI1")
+	binary.LittleEndian.PutUint16(img[4:], 20)
+	binary.LittleEndian.PutUint16(img[6:], 10)
+	for i := 8; i < len(img); i++ {
+		img[i] = byte(i)
+	}
+	s := sha256.Sum256(img)
+	id := hex.EncodeToString(s[:])[:16]
+	p := filepath.Join(dir, id+".565")
+	os.WriteFile(p, img, 0o644)
+	os.WriteFile(filepath.Join(dir, "index.json"), []byte(`{"images":{"`+id+`":{"name":"しま模様"}}}`), 0o644)
+
+	code, out, errs := runCLI(t, "--port", f.slave, "images", "put", p)
+	if code != exitOK || !strings.Contains(out, id+"  送りました（しま模様、20x10") {
+		t.Fatalf("put: exit %d: %s %s", code, out, errs)
+	}
+	if !bytes.Equal(f.images[id], img) {
+		t.Fatal("the fake Brain received different bytes")
+	}
+	if code, out, _ = runCLI(t, "--port", f.slave, "images", "put", p); code != exitOK || !strings.Contains(out, "もうあります") {
+		t.Fatalf("second put: %d %s", code, out)
+	}
+	if code, out, _ = runCLI(t, "--port", f.slave, "images"); code != exitOK || !strings.Contains(out, id) || !strings.Contains(out, "未使用") ||
+		!strings.Contains(out, "Brain にない画像：0123456789abcdef") {
+		t.Fatalf("list: %d %s", code, out)
+	}
+	if code, out, _ = runCLI(t, "--port", f.slave, "images", "prune", "--dry-run"); code != exitOK || !strings.Contains(out, "消す画像（1 枚") {
+		t.Fatalf("prune --dry-run: %d %s", code, out)
+	}
+	for len(f.got) > 0 {
+		if r := <-f.got; r["cmd"] == "prune_images" && r["dry_run"] != true {
+			t.Errorf("prune_images = %v", r)
+		}
+	}
+	// PNG などは送らない（GUI で変換する）
+	png := filepath.Join(dir, "a.png")
+	os.WriteFile(png, []byte("\x89PNG...."), 0o644)
+	if code, _, errs = runCLI(t, "--port", f.slave, "images", "put", png); code != exitUsage || !strings.Contains(errs, "設定 GUI で変換") {
+		t.Fatalf("put png: %d %s", code, errs)
+	}
+	if code, _, _ = runCLI(t, "images", "--dry-run", "list"); code != exitUsage {
+		t.Fatalf("--dry-run with list: %d", code)
 	}
 }
