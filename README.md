@@ -6,7 +6,7 @@ USB HID のキーボードとマウスとして PC に送る。タッチパネ�
 
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
-- **トラックパッド**：タッチパネルのセルを、マウスのトラックパッドにできる（`widget: trackpad`）。指でカーソルを動かし、タップでクリック、右端の帯でスクロール。キーやセルにマウスのボタンも割り当てられる（`mouse: left`）。Android のスマホでもそのまま使える。
+- **トラックパッド**：タッチパネルのセルを、マウスのトラックパッドにできる（`widget: trackpad`）。指でカーソルを動かし、タップでクリック、右端の帯でスクロール。キーやセルにマウスのボタンも割り当てられる（`mouse: left`）。Android のスマホでもそのまま使える。起動したときはブートキーボード（BIOS でも使える）で、マウスを使うときだけ USB の形を切り替える（`usb_mode`）。
 - **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定を表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
 - **背景画像**：セルごとの背景と、レイヤーごとの壁紙に、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
 - **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、Brain の時刻を合わせたりする。
@@ -122,12 +122,13 @@ USB でつなぐと、PC には次の 4 つが見える。
 | 機能 | インターフェイスの番号 | PC 側の見え方 | Brain 側 | 用途 |
 | --- | --- | --- | --- | --- |
 | NCM | 0、1 | ネットワークインターフェース（Linux では enx8a158b443a01） | usb0 | SSH |
-| HID | 2 | 「SHARP Brain Keyboard」と「SHARP Brain Mouse」（Linux の /dev/input/by-id/ では `…-if02-event-kbd` と `…-if02-event-mouse`） | /dev/hidg0 | 左手デバイスとしての入力 |
+| HID | 2 | 「SHARP Brain」のキーボード（ブートキーボード）。マウスをオンにすると「SHARP Brain Keyboard」と「SHARP Brain Mouse」（Linux の /dev/input/by-id/ では `…-if02-event-kbd` と `…-if02-event-mouse`） | /dev/hidg0 | 左手デバイスとしての入力 |
 | CDC-ACM（1 つ目） | 3、4 | シリアルポート（Linux では /dev/ttyACM0、by-id は `…-if03`） | /dev/ttyGS0 | シリアルコンソール（getty のログイン画面）。設定 GUI のコンソールのタブ |
 | CDC-ACM（2 つ目） | 5、6 | シリアルポート（Linux では /dev/ttyACM1、by-id は `…-if05`） | /dev/ttyGS1 | 設定 GUI、brain-deck |
 
-- **キーボードとマウスは 1 つの HID**：Brain の USB コントローラは、PC へ送るためのエンドポイント（IN）が 7 本しかなく、NCM（2 本）、HID（1 本）、ACM 2 つ（4 本）ですべて使っている。マウスを別の HID にすると足りなくなり、ガジェット全体がつながらなくなるので、1 つの HID の中に、レポート ID でキーボード（1）とマウス（2）を入れている。インターフェイスの番号は、マウスを足す前と同じ。
-- **BIOS では使えない**：そのため、キーボードはブートキーボードの形ではない。PC の BIOS や UEFI の設定画面では、Brain のキーボードは使えない。必要なら、`/etc/lefthand/gadget.env` に `HID_MOUSE=0` と書いて `sudo /usr/local/sbin/lefthand-gadget-setup` を実行すると、前の形（キーボードだけ、ブートキーボード）に戻る（[マウスとトラックパッド](#マウスとトラックパッド)）。
+- **HID は 2 つの形を切り替える**：Brain の USB コントローラは、PC へ送るためのエンドポイント（IN）が 7 本しかなく、NCM（2 本）、HID（1 本）、ACM 2 つ（4 本）ですべて使っている。マウスを別の HID にすると足りなくなり、ガジェット全体がつながらなくなる。そこで、1 つの HID を次の 2 つの形で切り替える（[USB の形の切り替え](#usb-の形の切り替えマウスのオンとオフ)）。インターフェイスの番号は、どちらの形でも同じ。
+  - **キーボードだけ（起動したときの形）**：ブートキーボード。PC の BIOS や UEFI の画面、起動前のパスワード入力でも使える。
+  - **キーボードとマウス**：レポート ID でキーボード（1）とマウス（2）を入れた形。ブートキーボードではないので、BIOS や UEFI の画面では使えない。
 
 キーボードとしては、つなぐだけで使える。SSH を使うには、PC 側のインターフェースに固定 IP を付ける。PC に DHCP サーバーは要らない。
 
@@ -407,19 +408,21 @@ PC の OS も、マウスの動きに加速をかける（Windows の「ポイ�
 - **iPhone、iPad**：キーボードはそのまま使える。マウスのカーソルを出すには、「設定」→「アクセシビリティ」→「タッチ」→「AssistiveTouch」をオンにする（iPad は、オンにしなくてもカーソルが出る）。ケーブルは、Lightning なら「Lightning - USB カメラアダプタ」、USB-C なら USB-C どうし。
 - **電源**：Brain は自分の電池で動くので、スマホから給電しなくてよい。スマホが USB 機器に電気を送れないと言うときは、電源付きのアダプタを使う。
 
-### 今の Brain にマウスを足す
+### USB の形の切り替え（マウスのオンとオフ）
 
-gadget-setup.sh は、HID がマウスのない形なら、マウスのある形に作り直す（HID と、そのあとの ACM 2 つのリンクを外して、属性を書き、同じ順でリンクし直す。インターフェイスの番号は変わらない）。
+Brain は起動したとき、USB の HID をキーボードだけ（ブートキーボード）にする。マウス（トラックパッド、`mouse:` の割り当て）を使うときは、キーボードとマウスの形に切り替える。
 
-```sh
-scp gadget-setup.sh lefthand brain:lefthand/
-ssh brain 'cd ~/lefthand && sudo install -m 0755 lefthand /usr/local/bin/lefthand && sudo install -m 0755 gadget-setup.sh /usr/local/sbin/lefthand-gadget-setup'
-ssh brain sudo systemd-run --collect /usr/local/sbin/lefthand-gadget-setup   # USB を付け直す。SSH が数秒止まる
-```
+| 切り替え方 | 書き方 |
+| --- | --- |
+| キーかセル | `{ usb_mode: toggle }`（押すたびにオンとオフ）、`{ usb_mode: mouse }`（オン）、`{ usb_mode: keyboard }`（オフ）。例では「マウス」レイヤーの「マウス切替」 |
+| 設定 GUI | トラックパッドやマウスの割り当てを選ぶと、「マウスをオンにする」のボタンが出る |
+| PC のコマンド | `brain-deck usb-mode mouse`、`brain-deck usb-mode keyboard`、`brain-deck usb-mode`（今の形を見る） |
 
-- **デーモンを先に新しくする**：デーモンは、起動したときに HID の形を読み取って、キーボードのレポートの書き方を決める（`journalctl -u lefthand` の `hid: ... keyboard + mouse`）。古いデーモンをマウスのある形で動かすと、キーが正しく届かない。
-- **元に戻す**：`/etc/lefthand/gadget.env` に `HID_MOUSE=0` と書き、もう一度 `lefthand-gadget-setup` を実行する。
-- **マウスがないとき**：設定に `mouse:` やトラックパッドがあると、ログに警告が出て、設定 GUI にも「Brain の USB にマウスがありません」と出る。
+- **切り替えると USB を付け直す**：2〜3 秒、PC へのキー入力、SSH（usb0）、シリアル（設定 GUI、コンソール）が切れる。設定 GUI は接続し直す。押していたキーとマウスのボタンは、切り替える前にすべて離す。切り替えのあいだに押したキーは、つながってから届く。
+- **画面**：マウスがオフのあいだ、トラックパッドのセルに「マウスはオフ」と橙色で出す。触っても何もしない。
+- **起動したときからマウスを使う**：`/etc/lefthand/gadget.env` に `HID_MOUSE=1` と書く。
+- **仕組み**：lefthand が /dev/hidg0 を閉じ、`HID_MOUSE=1`（か 0）と `LEFTHAND_SELF=1` を付けて `/usr/local/sbin/lefthand-gadget-setup` を実行し（lefthand.service は止めない）、付け直したあとに HID の形を読み直す（`journalctl -u lefthand` の `usb: ... keyboard + mouse`）。gadget-setup.sh は、HID と、そのあとの ACM 2 つのリンクを外し、HID の属性を書いて、同じ順でリンクし直す。インターフェイスの番号は変わらない。
+- **新しくするとき**：デーモンと gadget-setup.sh は組で入れる。古いデーモンは、キーボードとマウスの形を正しく扱えない。
 
 ### トラックパッドの調整（タッチの記録と再生）
 
@@ -994,7 +997,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | brain-deck が「Brain が見つかりません」で終わる | Linux は `ls /dev/serial/by-id/`、macOS は `ls /dev/cu.usbmodem*` に Brain があるか。`--port` で指定もできる |
 | テキストのタイルに「未設定」と出る | その id に一度も書いていない。`brain-deck text --list` で、Brain にある id を見る |
 | 背景画像が出ない | `brain-deck images` の「Brain にない画像」、ログの `images: background ... is not on this Brain`。GUI で画像を選び直して保存すると送る |
-| PC でカーソルが動かない | `journalctl -u lefthand` に `hid: ... keyboard + mouse` が出ているか（`keyboard only` なら [マウスを足す](#今の-brain-にマウスを足す)）。PC の `/proc/bus/input/devices` に「SHARP Brain Mouse」があるか。トラックパッドのセルの中で触っているか |
+| PC でカーソルが動かない | マウスがオンか（トラックパッドに「マウスはオフ」と出ていないか、`brain-deck usb-mode`）。オフなら「マウス切替」などで[オンにする](#usb-の形の切り替えマウスのオンとオフ)。PC の `/proc/bus/input/devices` に「SHARP Brain Mouse」があるか。トラックパッドのセルの中で触っているか |
 | タップしてもクリックにならない、勝手にクリックする | [トラックパッドの調整](#トラックパッドの調整タッチの記録と再生)で記録して、`tap_ms`、`tap_move` を見直す |
 | ガジェットを付け直したら `ssh brain` がつながらない | PC の `journalctl -k` に `cdc_ncm ... failed to get mac address` が出ていないか。Brain で別のガジェット（NCM を含むもの）を作って消すと、このカーネルでは NCM の MAC アドレスの文字列が壊れる。Brain を再起動すると直る |
 | 背景画像を保存できない（容量） | `brain-deck images` で合計と SD カードの空きを見る。`brain-deck images prune` で使っていない画像を消す |
@@ -1008,6 +1011,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | main.go | 入力の読み取り（touchProc）、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
 | hid.go | HID の形（キーボードだけか、キーボードとマウスか）。レポートディスクリプタと、configfs から形を読み取る処理 |
 | mouse.go | マウスのレポート（ボタン、移動、ホイール）、マウスの割り当て（mouse:） |
+| usbmode.go | USB の形の切り替え（キーボードだけ ⇔ キーボードとマウス。usb_mode、set_usb_mode） |
 | trackpad.go | トラックパッドの判定（タップ、ドラッグ、スクロール、ブレ対策）と描画 |
 | record.go | タッチの記録（-record-touch）と再生（-replay-touch） |
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
@@ -1137,6 +1141,7 @@ C=config/trackpad-example.yaml
 go run . -render-png gui/test/fixtures/trackpad.png -render-layer mouse $C
 go run . -render-png gui/test/fixtures/trackpad-pressed.png -render-layer mouse -render-pressed "0,0 3,1" $C
 go run . -render-png gui/test/fixtures/trackpad-pressed-fill.png -render-layer mouse -render-press-style fill -render-pressed "0,0 3,1" $C
+go run . -render-png gui/test/fixtures/trackpad-off.png -render-layer mouse -render-mouse-off $C
 ```
 
 `TestHWCalendar` は、6 秒後に始まって 9 秒後に終わる予定で、予定の始まりと終わりに自分で描き直すことと、▲▼、PC から送り直したときの描き直しの時間を測る。
@@ -1171,6 +1176,8 @@ lefthand -record-touch out.touch [config.yaml]  タッチの生のイベント�
          -record-note text                   見出しに書くメモ
          -record-layer name                  画面に出すレイヤー（省略するとトラックパッドのある最初のレイヤー）
          -record-for 60s                     記録する時間（最大 10m）
+         -gadget-setup path                  USB の形を切り替えるときに実行する gadget-setup.sh（既定 /usr/local/sbin/lefthand-gadget-setup）
+         -render-mouse-off                   -render-png で、マウスがオフのときのトラックパッドを描く
 lefthand -replay-touch file.touch ...        記録を再生し、トラックパッドの判定の結果を書いて終わる（実機不要）
          -replay-config config.yaml          トラックパッドの設定を読む設定ファイル（省略すると既定値）
          -replay-params '{"speed":1.5}'      上書きするトラックパッドの項目（JSON）

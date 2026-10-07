@@ -155,7 +155,20 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 
 `time` は Brain の時刻の状態（下の `set_time` の結果と同じ形）。
 
-`hid.mouse` は、Brain の USB ガジェットにマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。gadget-setup.sh が古い（キーボードだけの形）と false。この項目がなければ、lefthand がマウスに対応する前の版。
+`hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.switching` は、`set_usb_mode` で切り替えている途中か。この項目がなければ、lefthand がマウスに対応する前の版。
+
+### set_usb_mode
+
+USB の形を切り替える（キーボードだけ ⇔ キーボードとマウス）。`mode` は `keyboard`、`mouse`、`toggle`。
+
+```json
+→ {"id":7,"cmd":"set_usb_mode","mode":"mouse"}
+← {"id":7,"ok":true,"result":{"mouse":true,"switching":true}}
+```
+
+- **返事のあと**：`switching` が true なら、返事を送ってから 0.3 秒ほどあとに USB を付け直す。このシリアルも切れるので、GUI は接続し直す。2〜3 秒かかる。
+- **何もしないとき**：すでにその形なら `switching` は false。
+- **誤り**：切り替えの途中なら `conflict`、mode が違えば `bad_request`。
 
 `mode` は `base`（base だけ）、`latched`（layer_toggle か layer_to で切り替えたまま）、`temp`（layer_hold か layer_oneshot で一時的）。画面の右上の札の色と同じ。
 
