@@ -102,6 +102,20 @@ type ActionSpec struct {
 	Stale      string   `yaml:"stale,omitempty" json:"stale,omitempty"`             // calendar：最終更新がこれより古ければ、古いと分かるように出す
 	Calendars  []string `yaml:"calendars,omitempty" json:"calendars,omitempty"`     // calendar：出すカレンダーの名前。省略するとすべて
 
+	// trackpad：トラックパッド（trackpad.go）。省略すると既定値
+	Speed           *float64 `yaml:"speed,omitempty" json:"speed,omitempty"`                       // 感度（画面の 1 ドットを、PC のマウスの何カウントにするか）
+	Accel           *float64 `yaml:"accel,omitempty" json:"accel,omitempty"`                       // 加速（0 で加速しない）
+	ScrollWidth     *int     `yaml:"scroll_width,omitempty" json:"scroll_width,omitempty"`         // 右端のスクロールの帯の幅（ドット）。0 で帯なし
+	ScrollDirection string   `yaml:"scroll_direction,omitempty" json:"scroll_direction,omitempty"` // natural か traditional
+	ScrollStep      *float64 `yaml:"scroll_step,omitempty" json:"scroll_step,omitempty"`           // ホイール 1 段に当たる、指の動き（ドット）
+	SettleMS        *int     `yaml:"settle_ms,omitempty" json:"settle_ms,omitempty"`               // 触れた直後に捨てる時間
+	Smooth          *int     `yaml:"smooth,omitempty" json:"smooth,omitempty"`                     // 平均を取るサンプルの数
+	Deadzone        *float64 `yaml:"deadzone,omitempty" json:"deadzone,omitempty"`                 // これより小さな動きを無視する（ドット）
+	MinPressure     *int     `yaml:"min_pressure,omitempty" json:"min_pressure,omitempty"`         // 押す強さ（ABS_PRESSURE）がこれより弱いサンプルを捨てる
+	TapMS           *int     `yaml:"tap_ms,omitempty" json:"tap_ms,omitempty"`                     // これより短く触れて離せばタップ
+	TapMove         *float64 `yaml:"tap_move,omitempty" json:"tap_move,omitempty"`                 // タップとみなす動きの上限（ドット）
+	DragMS          *int     `yaml:"drag_ms,omitempty" json:"drag_ms,omitempty"`                   // タップのあと、これより早く触れればドラッグ
+	LongPress       string   `yaml:"long_press,omitempty" json:"long_press,omitempty"`             // none か right（長押しで右クリック）
 }
 
 // Span はセルの大きさ [列数, 行数]。書かなければ [1, 1]。
@@ -123,6 +137,8 @@ var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 	"page_reset": true, "stale": true, "calendars": true, "background": true, "mouse": true,
+	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
+	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
 }
 
 func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
@@ -136,7 +152,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, background)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -758,14 +774,21 @@ func (km *Keymap) unreachable() []string {
 // hasWidgetFields は、ウィジェットにだけ書ける項目があるか。
 func (a ActionSpec) hasWidgetFields() bool {
 	return a.Format != "" || a.DateFormat != "" || a.TZ != "" || a.ID != "" || a.Rows != 0 ||
-		a.PageReset != "" || a.Stale != "" || a.Calendars != nil
+		a.PageReset != "" || a.Stale != "" || a.Calendars != nil || a.hasPadFields()
 }
 
-// usesMouse は、設定のどこかでマウスを使うか（mouse:）。
+// hasPadFields は、トラックパッドにだけ書ける項目があるか。
+func (a ActionSpec) hasPadFields() bool {
+	return a.Speed != nil || a.Accel != nil || a.ScrollWidth != nil || a.ScrollDirection != "" || a.ScrollStep != nil ||
+		a.SettleMS != nil || a.Smooth != nil || a.Deadzone != nil || a.MinPressure != nil || a.TapMS != nil ||
+		a.TapMove != nil || a.DragMS != nil || a.LongPress != ""
+}
+
+// usesMouse は、設定のどこかでマウスを使うか（mouse: か widget: trackpad）。
 func (km *Keymap) usesMouse() bool {
 	for _, l := range km.Layers {
 		for _, a := range km.allActions(l) {
-			if a.Kind == actMouse {
+			if a.Kind == actMouse || (a.Widget != nil && a.Widget.Kind == widgetPad) {
 				return true
 			}
 		}

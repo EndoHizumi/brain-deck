@@ -241,6 +241,11 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 		cv.halo = &colHalo
 		defer func() { cv.halo = nil }()
 	}
+	if v.Widget != nil && v.Widget.Kind == widgetPad {
+		drawPad(cv, cell, box, inner, &v, subC)
+		cv.halo = nil
+		return cell.Union(redrawBadge(cv, l, cell))
+	}
 	if v.Widget != nil {
 		drawWidget(cv, inner, &v, l.Env, textC, subC)
 		cv.halo = nil

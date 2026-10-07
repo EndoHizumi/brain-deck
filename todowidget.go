@@ -143,7 +143,7 @@ type widgetTouch struct {
 
 // ownsTouch は、ウィジェットがタップを自分で処理し、押した位置で働くか（セル全体を光らせない）。
 func (w *WidgetDef) ownsTouch() bool {
-	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal)
+	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad)
 }
 
 // todoGeom は、Todo のセルの中の配置。
@@ -315,7 +315,7 @@ func widgetArea(cell image.Rectangle, caption string) image.Rectangle {
 // touchDown は、Todo かカレンダーのセルを押したとき。入力の goroutine から呼ばれるので、待たずに返る。
 // ▲▼ ならページを送り、Todo の項目なら長押しを始める。どこを押しても「触った」ことにし、PageReset のあいだページを保つ。
 func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
-	if !w.ownsTouch() || rt == nil {
+	if !w.ownsTouch() || rt == nil || w.pager == nil { // トラックパッドは Pad が処理する
 		return
 	}
 	env := rt.env()
@@ -382,7 +382,7 @@ func (s *pagerState) fire(rt *WidgetRT, tok uint64) {
 
 // touchUp は、離したとき（または設定の差し替えで押していたものを捨てたとき）。長押しを取り消す。
 func (w *WidgetDef) touchUp(rt *WidgetRT) {
-	if !w.ownsTouch() {
+	if !w.ownsTouch() || w.pager == nil {
 		return
 	}
 	s := w.pager

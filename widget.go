@@ -34,7 +34,7 @@ const (
 	unsyncedText = "時刻未設定"
 )
 
-var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal}
+var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad}
 
 // ページを送るウィジェット（Todo、カレンダー）が、触らなければ最初のページに戻るまでの時間
 const (
@@ -62,6 +62,7 @@ type WidgetDef struct {
 	Stale      time.Duration  // calendar：最終更新がこれより古ければ、古いと出す
 	Calendars  []string       // calendar：出すカレンダーの名前。空ならすべて
 	pager      *pagerState    // todo、calendar：ページと、押している行
+	Pad        *PadParams     // trackpad：判定の設定
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -75,6 +76,12 @@ type WidgetEnv struct {
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
 func compileWidget(s ActionSpec) (*WidgetDef, error) {
+	if s.Widget == widgetPad {
+		return compilePad(s)
+	}
+	if s.hasPadFields() {
+		return nil, fmt.Errorf("speed, accel, scroll_*, settle_ms, smooth, deadzone, min_pressure, tap_*, drag_ms and long_press are for widget: trackpad")
+	}
 	paged := s.Widget == widgetTodo || s.Widget == widgetCal
 	if s.Rows != 0 && !paged {
 		return nil, fmt.Errorf("rows is for widget: todo and calendar")
@@ -232,6 +239,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return todoKey(w, env)
 	case widgetCal:
 		return calKey(w, env)
+	case widgetPad:
+		return "trackpad" // 時間では変わらない
 	}
 	return ""
 }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	evdev "github.com/holoplot/go-evdev"
 )
@@ -175,7 +176,15 @@ type Engine struct {
 	onStatus func(EngineStatus)
 	widgets  *WidgetRT    // 押した位置で働くウィジェット（Todo）に渡す状態。nil なら 800x480 とみなす
 	touchAt  *widgetTouch // PressTouch から press に、押した位置を渡す
+	pad      *Pad         // トラックパッドの判定。nil ならトラックパッドは動かない
 	pressing string       // press の途中で、押している入力（レイヤーが変わっても、この入力のマウスのボタンは離さない）
+}
+
+// SetPad は、トラックパッドの判定を設定する。
+func (e *Engine) SetPad(p *Pad) {
+	e.mu.Lock()
+	e.pad = p
+	e.mu.Unlock()
 }
 
 // SetWidgets は、ウィジェットがタップを処理するのに使う状態を設定する。
@@ -225,10 +234,14 @@ type TouchHit struct {
 	Col, Row int
 	Mapped   bool
 	Own      bool // ウィジェットが押した位置で働き、自分で押したことを描く（セル全体を光らせない）
+	Pad      bool // トラックパッドのセル。離すまでのサンプルを Engine.pad に渡す
 }
 
 // PressTouch はタッチの生座標で押す。判定は今の重なりの格子で行う。
-func (e *Engine) PressTouch(x, y int32) TouchHit {
+func (e *Engine) PressTouch(x, y int32) TouchHit { return e.PressTouchAt(x, y, time.Now()) }
+
+// PressTouchAt は、時刻 t に触れたとして押す（トラックパッドの判定に時刻を渡す。記録の再生では記録した時刻）。
+func (e *Engine) PressTouchAt(x, y int32, t time.Time) TouchHit {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	v := e.view
@@ -248,7 +261,14 @@ func (e *Engine) PressTouch(x, y int32) TouchHit {
 			}
 			e.touchAt = &widgetTouch{cell: cellRect(h.Col, h.Row, a.SpanW, a.SpanH, v.Cols, v.Rows, W, H),
 				pt: touchPoint(e.km.Touch, x, y, W, H)}
+			if a.Widget.Kind == widgetPad && e.pad != nil {
+				h.Pad = true
+				e.pad.Down(a.Widget.Pad, e.touchAt.cell, e.km.Touch, W, H, t)
+			}
 		}
+	}
+	if !h.Pad {
+		e.pad.Interrupt() // トラックパッドのタップのあとの待ちを終える
 	}
 	h.Mapped = a.tappable()
 	e.press("t", a)
@@ -374,8 +394,10 @@ func (e *Engine) refresh() {
 	e.view = v
 	if e.gen > 1 {
 		vlogf("layer: %s", e.describe())
-		// レイヤーが変わったら、押しているマウスのボタンを離す（今押した入力のものは残す）
+		// レイヤーが変わったら、押しているマウスのボタンを離す（今押した入力のものは残す）。
+		// トラックパッドのドラッグやタップの待ちもやめる
 		e.out.mouse.ReleaseExcept(e.pressing)
+		e.pad.Cancel()
 	}
 	if e.onView != nil {
 		e.onView(v)
@@ -407,6 +429,7 @@ func (e *Engine) Reload(km *Keymap) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.out.releaseAll()
+	e.pad.Cancel()
 	for _, a := range e.down { // 長押しの途中なら取り消す
 		if a != nil && a.Kind == actWidget {
 			a.Widget.touchUp(e.widgets)

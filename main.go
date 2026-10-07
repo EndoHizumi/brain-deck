@@ -385,53 +385,84 @@ func evTime(ev *evdev.InputEvent) time.Time {
 }
 
 func runTouch(dev *evdev.InputDevice, e *Engine, disp *Display, mon *Monitor) {
-	var x, y int32
-	down, pressed := false, false
-	var lit *TouchHit // ハイライト中のセル
+	tp := &touchProc{e: e, disp: disp, mon: mon}
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
 			log.Printf("read touch: %v", err)
 			e.out.shutdown(1)
 		}
-		switch {
-		case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_X:
-			x = ev.Value
-		case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_Y:
-			y = ev.Value
-		case ev.Type == evdev.EV_KEY && ev.Code == evdev.BTN_TOUCH:
-			vlogf("touch: %s", evString(ev))
-			down = ev.Value == 1
-			if !down && pressed {
-				e.Release("t")
-				pressed = false
-				if lit != nil {
-					disp.SetPressed(lit.Gen, lit.Col, lit.Row, false)
-					lit = nil
-				}
+		tp.event(ev, time.Now())
+	}
+}
+
+// touchProc は、タッチのイベントを 1 つずつ処理する。実機（runTouch）と、記録したタッチの再生（replayTouch）で同じものを使う。
+// t はイベントを受け取った時刻（再生では記録した時刻）。トラックパッドの判定に使う。
+type touchProc struct {
+	e    *Engine
+	disp *Display
+	mon  *Monitor
+
+	x, y, p       int32
+	down, pressed bool
+	pad           bool      // トラックパッドのセルを押している
+	lit           *TouchHit // ハイライト中のセル
+}
+
+func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
+	e := tp.e
+	switch {
+	case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_X:
+		tp.x = ev.Value
+	case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_Y:
+		tp.y = ev.Value
+	case ev.Type == evdev.EV_ABS && ev.Code == evdev.ABS_PRESSURE:
+		tp.p = ev.Value
+	case ev.Type == evdev.EV_KEY && ev.Code == evdev.BTN_TOUCH:
+		vlogf("touch: %s", evString(ev))
+		tp.down = ev.Value == 1
+		if !tp.down && tp.pressed {
+			if tp.pad {
+				e.pad.Up(t)
+				tp.pad = false
 			}
-		case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
-			// 触れた瞬間のセルで確定（スライドしても変えない）
-			if down && !pressed {
-				if mon.TouchPressed(e, x, y) {
-					// 学習モード：設定 GUI に知らせるだけ。離したときもエンジンには何も残っていない
-					vlogf("touch: x=%d y=%d -> settings GUI only", x, y)
-					pressed = true
-					continue
-				}
-				h := e.PressTouch(x, y)                 // HID を先に送り、描画はそのあと
-				if h.Mapped && h.Soft == "" && !h.Own { // Todo は押した行を自分で描く
-					disp.SetPressed(h.Gen, h.Col, h.Row, true)
-					lit = &h
-				}
-				where := fmt.Sprintf("cell %d,%d", h.Col, h.Row)
-				if h.Soft != "" {
-					where = "soft key " + h.Soft
-				}
-				vlogf("touch: x=%d y=%d -> %s (mapped=%v) %v after event",
-					x, y, where, h.Mapped, time.Since(evTime(ev)).Round(100*time.Microsecond))
-				pressed = true
+			e.Release("t")
+			tp.pressed = false
+			if tp.lit != nil {
+				tp.disp.SetPressed(tp.lit.Gen, tp.lit.Col, tp.lit.Row, false)
+				tp.lit = nil
 			}
+		}
+	case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
+		if tp.down && tp.pressed && tp.pad {
+			e.pad.Sample(tp.x, tp.y, tp.p, t)
+			return
+		}
+		// 触れた瞬間のセルで確定（スライドしても変えない）
+		if tp.down && !tp.pressed {
+			x, y := tp.x, tp.y
+			if tp.mon.TouchPressed(e, x, y) {
+				// 学習モード：設定 GUI に知らせるだけ。離したときもエンジンには何も残っていない
+				vlogf("touch: x=%d y=%d -> settings GUI only", x, y)
+				tp.pressed = true
+				return
+			}
+			h := e.PressTouchAt(x, y, t)            // HID を先に送り、描画はそのあと
+			if h.Mapped && h.Soft == "" && !h.Own { // Todo とトラックパッドは押したことを自分で描く（描かない）
+				tp.disp.SetPressed(h.Gen, h.Col, h.Row, true)
+				tp.lit = &h
+			}
+			if h.Pad {
+				tp.pad = true
+				e.pad.Sample(x, y, tp.p, t)
+			}
+			where := fmt.Sprintf("cell %d,%d", h.Col, h.Row)
+			if h.Soft != "" {
+				where = "soft key " + h.Soft
+			}
+			vlogf("touch: x=%d y=%d -> %s (mapped=%v) %v after event",
+				x, y, where, h.Mapped, time.Since(evTime(ev)).Round(100*time.Microsecond))
+			tp.pressed = true
 		}
 	}
 }
@@ -726,6 +757,15 @@ func main() {
 	pngImages := flag.String("render-images", "", "-render-png と -check で、背景画像を探すディレクトリ（省略すると -data-dir の images）")
 	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータ、背景画像、時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
+	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
+	recGesture := flag.String("record-gesture", "", "-record-touch で、見出しに書く動きの名前（slow、tap など）")
+	recNote := flag.String("record-note", "", "-record-touch で、見出しに書くメモ")
+	recLayer := flag.String("record-layer", "", "-record-touch で、画面に出すレイヤー（省略するとトラックパッドのある最初のレイヤー）")
+	recFor := flag.Duration("record-for", time.Minute, "-record-touch で、記録する時間（最大 10m）")
+	replay := flag.Bool("replay-touch", false, "引数の記録（.touch）を再生し、トラックパッドの判定の結果を書いて終わる（実機不要）")
+	replayCfg := flag.String("replay-config", "", "-replay-touch で、トラックパッドの設定を読む設定ファイル（省略すると既定値）")
+	replayParams := flag.String("replay-params", "", `-replay-touch で、上書きするトラックパッドの項目（JSON。例: {"speed":1.5,"smooth":4}）`)
+	replayOps := flag.Bool("replay-ops", false, "-replay-touch で、送るマウスの操作を 1 つずつ書く")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [-check] [-dump-json] [-restore-console] [-render-png out.png] [config.yaml]\n", os.Args[0])
 		flag.PrintDefaults()
@@ -734,6 +774,12 @@ func main() {
 
 	if *restore {
 		restoreConsole()
+		return
+	}
+	if *replay {
+		if err := runReplay(flag.Args(), *replayCfg, *replayParams, *replayOps); err != nil {
+			log.Fatal(err)
+		}
 		return
 	}
 
@@ -776,6 +822,15 @@ func main() {
 		imagesDir = *pngImages
 	}
 	switch {
+	case *recOut != "":
+		if *recFor <= 0 || *recFor > 10*time.Minute {
+			log.Fatalf("-record-for must be 1s..10m")
+		}
+		err := runRecord(cfg, km, recordOptions{Out: *recOut, Gesture: *recGesture, Note: *recNote, Layer: *recLayer, For: *recFor})
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
 	case *check:
 		logLayers(km)
 		w, h := screenSize(cfg)
@@ -889,9 +944,10 @@ func main() {
 	log.Printf("hid: %s", hl.Source)
 	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID)}
 	if hl.MouseID == 0 && km.usesMouse() {
-		log.Printf("warning: the config uses the mouse (mouse:), but the USB gadget has no mouse; run gadget-setup.sh")
+		log.Printf("warning: the config uses the mouse (mouse: or widget: trackpad), but the USB gadget has no mouse; run gadget-setup.sh")
 	}
 	e := NewEngine(km, s)
+	e.SetPad(NewPad(s.mouse, true))
 	store := OpenStore(*dataDir)
 	clock := NewTimeService(store)
 	if !clock.Synced() {
@@ -992,6 +1048,35 @@ func main() {
 		go runTouch(touch, e, disp, mon)
 	}
 	runKeyboard(kbd, e, mon)
+}
+
+// runReplay は、記録を再生して結果を書く（-replay-touch）。
+func runReplay(files []string, cfgPath, params string, ops bool) error {
+	if len(files) == 0 {
+		return errors.New("-replay-touch: give one or more .touch files")
+	}
+	var km *Keymap
+	if cfgPath != "" {
+		cfg, err := loadConfig(cfgPath)
+		if err != nil {
+			return err
+		}
+		if km, _, err = compileKeymap(cfg); err != nil {
+			return err
+		}
+	}
+	for _, f := range files {
+		rec, err := LoadRecording(f)
+		if err != nil {
+			return err
+		}
+		p, err := padParamsFor(km, rec.Header.Layer, params)
+		if err != nil {
+			return err
+		}
+		printReplay(os.Stdout, f, rec, replayTouch(rec, p), ops)
+	}
+	return nil
 }
 
 // reloader は、保存した設定を動いているエンジンに反映する関数を返す。
