@@ -124,6 +124,17 @@ func NewHIDWriter(path string) *HIDWriter {
 	return w
 }
 
+// Close はデバイスを閉じる（USB を付け直す前）。次に書くときに開き直す。
+func (w *HIDWriter) Close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.fd >= 0 {
+		syscall.Close(w.fd)
+		w.fd = -1
+	}
+	w.lastOpen = time.Time{}
+}
+
 func (w *HIDWriter) open() error {
 	w.lastOpen = time.Now()
 	fd, err := syscall.Open(w.path, syscall.O_WRONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
@@ -653,6 +664,9 @@ func cellView(km *Keymap, a *Action) CellView {
 	if a.Kind == actMouse {
 		keys = a.Mouse.Pretty
 	}
+	if a.Kind == actUSB {
+		keys = usbLabels[a.Spec.UsbMode]
+	}
 	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background}
 	if v.Label == "" || v.Label == keys {
 		v.Label, v.Sub = keys, ""
@@ -757,6 +771,8 @@ func main() {
 	pngImages := flag.String("render-images", "", "-render-png と -check で、背景画像を探すディレクトリ（省略すると -data-dir の images）")
 	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータ、背景画像、時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
+	gadgetSetup := flag.String("gadget-setup", defaultGadgetSetup, "USB の形（キーボードだけ、キーボードとマウス）を切り替えるときに実行する gadget-setup.sh")
+	pngMouseOff := flag.Bool("render-mouse-off", false, "-render-png で、USB にマウスがないとき（キーボードだけの形）のトラックパッドを描く")
 	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
 	recGesture := flag.String("record-gesture", "", "-record-touch で、見出しに書く動きの名前（slow、tap など）")
 	recNote := flag.String("record-note", "", "-record-touch で、見出しに書くメモ")
@@ -852,7 +868,7 @@ func main() {
 		if _, err := fmt.Sscanf(*pngSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 			log.Fatalf("bad -render-size %q", *pngSize)
 		}
-		env := WidgetEnv{Now: time.Now(), TimeSynced: !*pngUnsynced}
+		env := WidgetEnv{Now: time.Now(), TimeSynced: !*pngUnsynced, MouseOff: *pngMouseOff}
 		if *pngTime != "" {
 			t, err := time.Parse(time.RFC3339, *pngTime)
 			if err != nil {
@@ -947,7 +963,11 @@ func main() {
 		log.Printf("warning: the config uses the mouse (mouse: or widget: trackpad), but the USB gadget has no mouse; run gadget-setup.sh")
 	}
 	e := NewEngine(km, s)
-	e.SetPad(NewPad(s.mouse, true))
+	pad := NewPad(s.mouse, true)
+	e.SetPad(pad)
+	usb := NewUSBMode(s, hid, cfg.HIDDevice, *gadgetSetup)
+	usb.OnChange(pad.Cancel)
+	e.SetUSB(usb)
 	store := OpenStore(*dataDir)
 	clock := NewTimeService(store)
 	if !clock.Synced() {
@@ -969,6 +989,7 @@ func main() {
 		env.Texts = texts.Snapshot()
 		env.Todo = todos.Snapshot()
 		env.Calendar = cals.Snapshot()
+		env.MouseOff = !s.mouse.Available()
 		return env
 	}
 	widgetRT.SetEnv(widgetEnv)
@@ -1011,6 +1032,7 @@ func main() {
 				todos.SetOnChange(d.Poke)
 				cals.SetOnChange(d.Poke)
 				images.SetOnChange(d.Invalidate)
+				usb.OnChange(d.Poke) // トラックパッドの「マウスはオフ」を描き直す
 				images.Preload(preloadOrder(cfg))
 				widgetRT.SetScreen(first.W, first.H, d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
@@ -1038,6 +1060,7 @@ func main() {
 			todos:   todos,
 			cals:    cals,
 			images:  images,
+			usb:     usb,
 			started: time.Now(),
 		}
 		todos.SetOnNotify(mon.TodoChanged)

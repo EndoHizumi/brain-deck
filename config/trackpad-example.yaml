@@ -2,6 +2,7 @@
 # トラックパッド（widget: trackpad）と、マウスのボタンのセルの使い方の例。
 # config/current.yaml に「マウス」のレイヤーを足し、メニューを 5 列にして「マウス」を置いたもの。
 # メニュー →「マウス」で入り、「基本」で戻る。本体のキーは base のまま（文字を打ちながら使える）。
+# 起動したとき、USB はブートキーボードの形（マウスなし）。「マウス オン/オフ」で、キーボードとマウスの形に切り替える。
 # 書き方は docs/config.md の「トラックパッド」と「マウスの操作」を参照。
 # トラックパッドの値（speed など）を書かなければ、既定値を使う。ここでは主な項目を既定値のまま書いてある
 hid_device: /dev/hidg0
@@ -272,14 +273,16 @@ layers:
     label: マウス
     touch:
       cols: 4
-      rows: 4
+      rows: 5
       cells:
         # 左の 3 列ぶんがトラックパッド。右端の 72 ドットがスクロールの帯
-        "0,0": {widget: trackpad, span: [3, 4], label: トラックパッド, speed: 1, accel: 1, scroll_width: 72, scroll_direction: natural}
+        "0,0": {widget: trackpad, span: [3, 5], label: トラックパッド, speed: 1, accel: 1, scroll_width: 72, scroll_direction: natural}
         "3,0": {mouse: left, label: 左}
         "3,1": {mouse: right, label: 右}
         "3,2": {mouse: middle, label: 中}
-        "3,3": {layer_to: base, label: 基本}
+        # USB をキーボードとマウスの形に切り替える（起動したときはブートキーボード）。USB を付け直すので 2〜3 秒切れる
+        "3,3": {usb_mode: toggle}
+        "3,4": {layer_to: base, label: 基本}
 display:
   enabled: true
   device: /dev/fb0

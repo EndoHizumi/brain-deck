@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -67,15 +68,18 @@ type Mouse struct {
 	sent    byte            // PC に届いたボタンの状態
 	dirty   bool            // ボタンの状態が PC に届いていない
 	repeats map[string]*time.Timer
+	on      atomic.Bool // id が 0 でない（ロックなしで読む。USB の形を切り替えているあいだも待たない）
 }
 
 // NewMouse は、レポート ID が id のマウスを作る。id が 0（ガジェットにマウスがない）なら何も送らない。
 func NewMouse(hid hidOut, id byte) *Mouse {
-	return &Mouse{hid: hid, id: id, held: map[string]byte{}, repeats: map[string]*time.Timer{}}
+	m := &Mouse{hid: hid, id: id, held: map[string]byte{}, repeats: map[string]*time.Timer{}}
+	m.on.Store(id != 0)
+	return m
 }
 
 // Available は、PC にマウスとして送れるか（ガジェットにマウスがあるか）。
-func (m *Mouse) Available() bool { return m != nil && m.id != 0 }
+func (m *Mouse) Available() bool { return m != nil && m.on.Load() }
 
 func (m *Mouse) buttons() byte {
 	var b byte

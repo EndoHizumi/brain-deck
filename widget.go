@@ -72,6 +72,7 @@ type WidgetEnv struct {
 	Texts      map[string]TextEntry // text：id ごとの中身（写し）
 	Todo       TodoList             // todo：一覧（写し）
 	Calendar   *CalendarData        // calendar：予定（写し。書き換えない）。nil なら一度も受け取っていない
+	MouseOff   bool                 // trackpad：USB にマウスがない（キーボードだけの形）
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
@@ -240,7 +241,7 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 	case widgetCal:
 		return calKey(w, env)
 	case widgetPad:
-		return "trackpad" // 時間では変わらない
+		return fmt.Sprintf("trackpad\x00%v", env.MouseOff) // マウスのオンとオフで描き直す
 	}
 	return ""
 }

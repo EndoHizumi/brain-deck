@@ -177,7 +177,15 @@ type Engine struct {
 	widgets  *WidgetRT    // 押した位置で働くウィジェット（Todo）に渡す状態。nil なら 800x480 とみなす
 	touchAt  *widgetTouch // PressTouch から press に、押した位置を渡す
 	pad      *Pad         // トラックパッドの判定。nil ならトラックパッドは動かない
+	usb      *USBMode     // USB の形の切り替え。nil なら usb_mode は何もしない
 	pressing string       // press の途中で、押している入力（レイヤーが変わっても、この入力のマウスのボタンは離さない）
+}
+
+// SetUSB は、USB の形の切り替えを設定する。
+func (e *Engine) SetUSB(u *USBMode) {
+	e.mu.Lock()
+	e.usb = u
+	e.mu.Unlock()
 }
 
 // SetPad は、トラックパッドの判定を設定する。
@@ -342,6 +350,12 @@ func (e *Engine) press(id string, a *Action) {
 				e.out.mouse.Press(id, a.Mouse.Button)
 			} else {
 				e.out.mouse.StartScroll(id, a.Mouse.V, a.Mouse.H)
+			}
+		case actUSB:
+			if mouse, changed, err := e.usb.Request(a.Spec.UsbMode); err != nil {
+				log.Printf("usb: %v", err)
+			} else if changed {
+				log.Printf("usb: switching to %s (the USB reconnects; keys pause for a few seconds)", map[bool]string{true: "keyboard + mouse", false: "keyboard only"}[mouse])
 			}
 		case actWidget:
 			// ウィジェットに任せる。待たずに返る

@@ -140,6 +140,7 @@ type request struct {
 	Bytes  int64    `json:"bytes,omitempty"`  // image_begin：ファイルの大きさ
 	W      int      `json:"w,omitempty"`      // image_begin：幅
 	H      int      `json:"h,omitempty"`      // image_begin：高さ
+	Mode   string   `json:"mode,omitempty"`   // set_usb_mode：keyboard、mouse、toggle
 	Upload string   `json:"upload,omitempty"` // image_chunk、image_end、image_abort：image_begin が返した名前
 	Offset *int64   `json:"offset,omitempty"` // image_chunk、get_image：ファイルの中の位置
 	Data   string   `json:"data,omitempty"`   // image_chunk：中身（base64）
@@ -341,6 +342,7 @@ type Controller struct {
 	todos   *TodoService
 	cals    *CalendarService
 	images  *ImageStore
+	usb     *USBMode
 	started time.Time
 }
 
@@ -370,7 +372,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
 				"set_calendar", "get_calendar",
-				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images"},
+				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode"},
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -416,7 +418,17 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 	case "get_status":
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
-			"hid": map[string]bool{"mouse": c.engine.out.mouse.Available()}})
+			"hid": map[string]bool{"mouse": c.engine.out.mouse.Available(), "switching": c.usb.Switching()}})
+	case "set_usb_mode":
+		mouse, changed, err := c.usb.Request(req.Mode)
+		switch {
+		case errors.Is(err, errUSBBusy):
+			return errResp(id, errConflict, err.Error(), nil)
+		case err != nil:
+			return errResp(id, errBadRequest, err.Error(), nil)
+		}
+		// changed なら、この返事のあとに USB を付け直す。シリアルも一度切れるので、つなぎ直すこと
+		return ok(map[string]any{"mouse": mouse, "switching": changed})
 	case "set_time":
 		if req.UnixMS == nil {
 			return errResp(id, errBadRequest, `"unix_ms" (milliseconds since 1970-01-01 UTC) is required`, nil)

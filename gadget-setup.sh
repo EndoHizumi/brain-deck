@@ -1,16 +1,17 @@
 #!/bin/bash
 # USB ガジェット eth を NCM + HID（キーボードとマウス）+ CDC-ACM 2 つの複合デバイスにして、
 # usb0 に固定 IP を付ける。
-#   hid.usb0 → /dev/hidg0：キーボード（レポート ID 1）とマウス（レポート ID 2）
+#   hid.usb0 → /dev/hidg0：キーボード（ブートキーボード）。HID_MOUSE=1 ならキーボード（レポート ID 1）とマウス（レポート ID 2）
 #   acm.usb0 → /dev/ttyGS0：シリアルコンソール（getty）用
 #   acm.usb1 → /dev/ttyGS1：設定 GUI（lefthand の -serial）用
 # インターフェイスの番号は NCM 0〜1、HID 2、ACM 3〜4（コンソール）、ACM 5〜6（設定用）。
 #
 # マウスを別の HID のファンクションにしないのは、USB コントローラ（ci_hdrc）の IN のエンドポイントが
 # 7 本しかなく、NCM 2 本、HID 1 本、ACM 4 本ですべて使っているため。足すとガジェット全体がつながらなくなる。
-# キーボードとマウスを 1 つの HID に入れるので、キーボードはブートキーボードの形ではなくなり、
-# BIOS や UEFI の画面では使えない。/etc/lefthand/gadget.env に HID_MOUSE=0 と書けば、
-# 前の形（キーボードだけ、ブートキーボード）に戻る（そのあと、このスクリプトをもう一度実行する）。
+# キーボードとマウスを 1 つの HID に入れると、キーボードはブートキーボードの形ではなくなり、
+# BIOS や UEFI の画面では使えない。そのため、既定（起動したとき）はキーボードだけ（ブートキーボード）にし、
+# マウスを使うときだけ lefthand が HID_MOUSE=1 でこのスクリプトを実行して切り替える（usb_mode、set_usb_mode）。
+# 起動したときからマウスを使うなら、/etc/lefthand/gadget.env に HID_MOUSE=1 と書く。
 #
 # ethernet_gadget.service の drop-in から、Brainux 標準の enable_ethernet_gadget の
 # 代わりに実行される（systemd/ethernet_gadget.service.d/lefthand.conf）。
@@ -30,13 +31,16 @@
 # 環境変数（動作確認用）:
 #   GADGET_NAME  ガジェット名（既定 eth）
 #   SKIP_BIND=1  UDC への接続と IP 設定をしない
-#   HID_MOUSE    1（既定）でキーボードとマウス、0 でキーボードだけ。/etc/lefthand/gadget.env にも書ける
+#   HID_MOUSE    0（既定）でキーボードだけ（ブートキーボード）、1 でキーボードとマウス。/etc/lefthand/gadget.env にも書ける
+#   LEFTHAND_SELF=1  lefthand から実行するとき。lefthand.service を止めない（lefthand が /dev/hidg0 を閉じてから呼ぶ）
 set -e
 
 GADGET_ENV=${GADGET_ENV:-/etc/lefthand/gadget.env}
 # shellcheck disable=SC1090
+# 環境変数で HID_MOUSE を渡したときは、そちらを使う（lefthand からの切り替え）
+want_mouse=${HID_MOUSE:-}
 [ -r "$GADGET_ENV" ] && . "$GADGET_ENV"
-HID_MOUSE=${HID_MOUSE:-1}
+HID_MOUSE=${want_mouse:-${HID_MOUSE:-0}}
 
 G=/sys/kernel/config/usb_gadget/${GADGET_NAME:-eth}
 UDC_NAME=ci_hdrc.0
@@ -71,7 +75,7 @@ RESTART_MARK=/run/lefthand-gadget-restart
 # そのため、先に lefthand.service を止めて hidg0 を閉じさせる
 unbind_udc() {
   [ -n "$(cat "$G/UDC")" ] || return 0
-  if systemctl is-active --quiet lefthand.service; then
+  if [ "${LEFTHAND_SELF:-0}" != 1 ] && systemctl is-active --quiet lefthand.service; then
     echo "lefthand.service を止めてから付け直します"
     systemctl stop lefthand.service
     touch "$RESTART_MARK"

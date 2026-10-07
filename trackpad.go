@@ -548,7 +548,7 @@ func padBand(p *PadParams, cell, box image.Rectangle) image.Rectangle {
 
 // drawPad は、トラックパッドのセルの中身（見出しとスクロールの帯）を描く。inner はラベルの範囲。
 // gui/src/preview.ts の drawPad と同じ。
-func drawPad(cv *Canvas, cell, box, inner image.Rectangle, v *CellView, subInk RGB) {
+func drawPad(cv *Canvas, cell, box, inner image.Rectangle, v *CellView, env WidgetEnv, subInk RGB) {
 	band := padBand(v.Widget.Pad, cell, box)
 	area := inner
 	if !band.Empty() {
@@ -567,8 +567,28 @@ func drawPad(cv *Canvas, cell, box, inner image.Rectangle, v *CellView, subInk R
 		drawCentered(cv, band, bottom, "▼", s, colSub)
 		cv.halo = halo
 	}
-	if v.Label != "" && area.Dx() > 0 {
-		caption, s, _ := widgetCaption(area, v.Label)
+	if area.Dx() <= 0 {
+		return
+	}
+	if v.Label != "" {
+		caption, s, rest := widgetCaption(area, v.Label)
 		drawCentered(cv, area, area.Min.Y, caption, s, subInk)
+		area = rest
+	}
+	if env.MouseOff {
+		// USB がキーボードだけの形（ブートキーボード）。usb_mode のキーかセルで切り替える
+		s1 := min(fitScaleMax([]string{padOffText}, area.Dx(), area.Dy()/2, 3), 3)
+		s2 := min(fitScaleMax([]string{padOffHint}, area.Dx(), area.Dy()/4, 2), 2)
+		h := fontH*s1 + widgetLineGap + fontH*s2
+		y := area.Min.Y + (area.Dy()-h)/2
+		drawCentered(cv, area, y, padOffText, s1, colPadOff)
+		drawCentered(cv, area, y+fontH*s1+widgetLineGap, padOffHint, s2, subInk)
 	}
 }
+
+const (
+	padOffText = "マウスはオフ"
+	padOffHint = "USB はキーボードだけの形です"
+)
+
+var colPadOff = RGB{0xff, 0x80, 0x20}
