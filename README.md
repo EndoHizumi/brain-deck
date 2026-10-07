@@ -509,7 +509,7 @@ calendars:
 ```sh
 brain-deck images                          # 一覧（id、大きさ、容量、使っている場所の数、名前）
 brain-deck images list --json              # JSON で
-brain-deck images put config/background-images/*.565   # 変換済みの画像（.565）を送る
+brain-deck images put config/background-images        # 変換済みの画像（.565）を送る。ファイルでもディレクトリでもよい
 brain-deck images prune --dry-run          # 今の設定で使っていない画像（消すもの）を表示する
 brain-deck images prune                    # 消す
 ```

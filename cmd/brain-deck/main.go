@@ -79,7 +79,7 @@ const usage = `使い方：
   brain-deck calendar [list] [--json] Brain にある予定
   brain-deck calendar clear           Brain の予定を消す
   brain-deck images [list] [--json]   Brain にある背景画像の一覧（使っている場所の数、名前）
-  brain-deck images put <ファイル.565>...  変換済みの画像を送る（PNG などは設定 GUI で変換する）
+  brain-deck images put <ファイル.565|ディレクトリ>...  変換済みの画像を送る（PNG などは設定 GUI で変換する）
   brain-deck images prune [--dry-run] 今の設定で使っていない背景画像を消す
   brain-deck time sync                PC の時刻を Brain に送る
   brain-deck status                   Brain の状態（版、時刻、レイヤー）

@@ -478,7 +478,7 @@ func TestImagesAgainstFakeBrain(t *testing.T) {
 	if !bytes.Equal(f.images[id], img) {
 		t.Fatal("the fake Brain received different bytes")
 	}
-	if code, out, _ = runCLI(t, "--port", f.slave, "images", "put", p); code != exitOK || !strings.Contains(out, "もうあります") {
+	if code, out, _ = runCLI(t, "--port", f.slave, "images", "put", dir); code != exitOK || !strings.Contains(out, "もうあります") {
 		t.Fatalf("second put: %d %s", code, out)
 	}
 	if code, out, _ = runCLI(t, "--port", f.slave, "images"); code != exitOK || !strings.Contains(out, id) || !strings.Contains(out, "未使用") ||
@@ -498,6 +498,9 @@ func TestImagesAgainstFakeBrain(t *testing.T) {
 	os.WriteFile(png, []byte("\x89PNG...."), 0o644)
 	if code, _, errs = runCLI(t, "--port", f.slave, "images", "put", png); code != exitUsage || !strings.Contains(errs, "設定 GUI で変換") {
 		t.Fatalf("put png: %d %s", code, errs)
+	}
+	if code, _, errs = runCLI(t, "--port", f.slave, "images", "put", t.TempDir()); code != exitUsage || !strings.Contains(errs, ".565 のファイルがありません") {
+		t.Fatalf("put empty dir: %d %s", code, errs)
 	}
 	if code, _, _ = runCLI(t, "images", "--dry-run", "list"); code != exitUsage {
 		t.Fatalf("--dry-run with list: %d", code)

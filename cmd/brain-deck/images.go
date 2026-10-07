@@ -63,15 +63,25 @@ func imagesCommand(o *options) (func(*Client) (string, error), error) {
 		return func(c *Client) (string, error) { return listImages(c, o.json) }, nil
 	case "put":
 		if len(a) == 0 {
-			return nil, usageError("images put のあとに、送るファイル（.565。設定 GUI か tools/mkbg が作ったもの）を書きます")
+			return nil, usageError("images put のあとに、送るファイル（.565。設定 GUI か tools/mkbg が作ったもの）か、それを入れたディレクトリを書きます")
 		}
 		files := make([]imageFile, 0, len(a))
 		for _, p := range a {
-			f, err := readImageFile(p)
-			if err != nil {
-				return nil, usageError(err.Error())
+			paths := []string{p}
+			if st, err := os.Stat(p); err == nil && st.IsDir() {
+				// ディレクトリなら、中の .565 をすべて送る（config/background-images など）
+				paths, _ = filepath.Glob(filepath.Join(p, "*.565"))
+				if len(paths) == 0 {
+					return nil, usageError(p + " に .565 のファイルがありません")
+				}
 			}
-			files = append(files, f)
+			for _, q := range paths {
+				f, err := readImageFile(q)
+				if err != nil {
+					return nil, usageError(err.Error())
+				}
+				files = append(files, f)
+			}
 		}
 		if o.timeout == defaultTimeout {
 			o.timeout = imagePutTimeout
