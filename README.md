@@ -7,6 +7,7 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
 - **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定を表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **背景画像**：セルごとの背景と、レイヤーごとの壁紙に、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
 - **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、Brain の時刻を合わせたりする。
 - **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI が接続したときに PC の時刻に合わせる。
 - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
@@ -256,6 +257,32 @@ cells:
 - **カレンダー**：予定は Brain のデータ（`/var/lib/lefthand/calendar.json`）で、PC の [brain-deck calendar sync](#カレンダー) が ICS の URL から取ってきて送る。今日の予定（終日、時刻の順）と、今日より先の次の予定を 1 つ出す。**今の予定は行を青く塗り**、終わった予定は薄く出す。左の色の帯はカレンダーの色。いちばん下に**最終更新の時刻**を小さく出し、3 時間より古い（`stale: 3h` で変えられる）、取得に失敗した、Brain の時刻を合わせていない、のどれかなら橙色にする。入りきらないときは Todo と同じく下の ▲▼ でページを送り、触っていないときは「今かこれからの予定」があるページを出す。`calendars: [仕事]` で出すカレンダーを選べる。
 - **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」と「Todo」のレイヤーを足したもの。
 
+### 背景画像
+
+セルの背景（`background`）と、レイヤーの壁紙（`touch.background`）に画像を置ける。キーのセル、ウィジェットのセル、span のセルのどれでもよい。
+
+```yaml
+layers:
+  - name: base
+    touch:
+      cols: 4
+      rows: 3
+      background: 7f8f231d4a49bfee                                  # 壁紙（格子全体、800×480）
+      cells:
+        "0,0": {key: LGUI+S, label: 保存, background: b18c7e1fecc29a03} # セルの背景（セルの枠の内側、192×152）
+```
+
+- **ふだんの使い方**：設定 GUI でセルかレイヤーを選び、「画像を選ぶ…」で PNG、JPEG、WebP を選ぶ（欄やプレビューのセルにドロップしてもよい）。切り抜く範囲をドラッグとホイールで決め、明るさとディザリングを選ぶ。「Brain に保存」で、まだ Brain にない画像だけを送ってから設定を保存する。設定には画像の id（ハッシュ）が書かれる。
+- **変換は PC で**：読み込み、切り抜き、縮小、明るさ、RGB565（Brain の画面の色数）への変換、ディザリング（既定は Floyd–Steinberg、「なし」も選べる）は、ブラウザで行う。Brain は受け取ったファイルを、描くときに画面へ写すだけ。
+- **重ね方**：下から、壁紙（なければ黒）、セルの背景画像（なければ壁紙、壁紙もなければ今までのセルの色）。壁紙は、セルと同じく、格子の大きさが同じあいだ下のレイヤーのものが透過する。
+- **文字の読みやすさ**：背景画像のあるセルでは、ラベルとウィジェットの文字に 1 ドットの黒い縁取りを付ける。画像を暗く（明るく）する強さは、GUI で変換するときに画像に焼き込む（既定は 35% 暗く）。
+- **押したとき**：今までどおり枠を光らせる（`press_style: border`）。外側の黒い線があるので、明るい画像の上でも見える。離すと、枠の帯だけを画像で描き直す。`fill` では今までどおり黄色で塗りつぶす。
+- **ない画像**：設定にある id の画像が Brain にないときは、背景なしで描く。起動時と `lefthand -check` の警告、ログ（`images: background ... is not on this Brain`）、GUI の「Brain の背景画像」で分かる。大きさがセルと違う画像は、中央に置き、はみ出す分は切る（警告も出す）。
+- **上限**：1 枚は画面いっぱい（800×480、768,008 バイト）まで。合計 16 MiB まで。保存したあとも SD カードに 64 MiB（ファイルシステムが小さければ、その 10%）の空きを残せないときは、保存を断って理由を返す。
+- **消すとき**：GUI の「Brain の背景画像」の「使っていない画像を Brain から消す」か、`brain-deck images prune`。今の設定（GUI では編集中の設定も）で使っていない画像を消す。`config.yaml.prev` に戻す予定があるなら、先に消さないこと（その設定の画像も消える）。
+- **画面の回転**：`display.rotate` が 90 か 270 のときも描けるが、GUI は 800×480 の向きで切り抜く（大きさが合わず、中央に置いて切る）。
+- **例**：[config/background-example.yaml](config/background-example.yaml) と、式で描いた画像 [config/background-images/](config/background-images/)（`go run ./tools/mkbg config/background-images` で作り直せる）。Brain に送るには `brain-deck images put config/background-images/*.565`。
+
 ### データの置き場所（/var/lib/lefthand）
 
 ウィジェットのデータは、設定ファイルとは別に `/var/lib/lefthand/` に置く（デーモンが作る。`-data-dir` で変えられる）。設定 GUI で設定を保存しても消えない。
@@ -266,6 +293,8 @@ cells:
 | text.json | テキストのタイルの中身（id ごとに、テキスト、色、書いた時刻、有効期限、送った側）。64 個まで覚え、超えたら古いものから捨てる |
 | todo.json | Todo の項目（ID、文、完了、更新番号、時刻、変えた側）。数の上限はない |
 | calendar.json | カレンダーの予定（カレンダーごとに、名前、色、取ってきた時刻、取得の失敗、予定）。展開したあとの予定で、1000 件まで |
+| images/&lt;id&gt;.565 | 背景画像。8 バイトのヘッダ（`LHI1`、幅、高さ）と RGB565 の画素。id はファイルの SHA-256 の先頭 16 文字 |
+| images/index.json | 背景画像の名前（元のファイル名など）、大きさ、SHA-256、足した時刻、送った側 |
 
 - **書き込み**：一時ファイルに書いて rename する。SD カードへの書き込みは数秒かかることがあるので、通信の返事は書き込みを待たずに返す。続けて書き換えたときは、まとめて 1 回書く。
 - **消すとき**：`brain-deck text <id> --clear`。全部消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/text.json`。
@@ -273,6 +302,8 @@ cells:
 - **Todo を全部消すとき**：GUI の「Todo」タブか `brain-deck todo rm`。ファイルごと消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/todo.json`。
 
 - **予定を消すとき**：`brain-deck calendar clear`。
+
+- **背景画像を消すとき**：`brain-deck images prune`（使っていない画像だけ）。受け取りの途中で切れた一時ファイル（`images/.upload-*.part`）は、60 秒たつか、デーモンを再起動すると消える。
 
 ### 今のレイヤーの表示
 
@@ -353,6 +384,7 @@ ModemManager が動いている PC では、つないだ直後の数秒、ModemM
 10. **ファイル**：「YAML で書き出す」「JSON で書き出す」で、編集中の設定を PC に保存する。「ファイルを開く」で読み込む。読み込んだだけでは Brain は変わらない。Brain につないでいなくても、ファイルの編集はできる（検証は Brain につないだときに行う）。
 
 - **Todo**：上の「Todo」タブで、項目を足す（Enter。Shift+Enter か「先頭に追加」で先頭に）、チェックで完了を切り替える、文を書き換える（Enter か欄を離れたとき）、↑↓ で並べ替える（未完了と完了の境はまたがない）、削除、完了した項目をまとめて消す。変更はすぐ Brain に書く（「Brain に保存」は要らない）。Brain で長押しして切り替えると、通知ですぐ反映する。Brain で変わったあとの古い一覧のまま書き換えようとすると、書き換えずに読み直す。
+- **背景画像**：セルを選ぶと割り当ての欄に「背景画像」、レイヤーの欄に「壁紙」がある。「画像を選ぶ…」（またはドロップ）で切り抜きの画面が開き、元の画像の上で範囲をドラッグで動かし、ホイールか「拡大」で大きさを変える（縦横比はセルの枠の内側か画面に合わせる）。「明るさ」と「ディザリング」を選び、下の Brain の画面のプレビュー（ラベル、縁取り、「押したときの枠を重ねる」）で確かめて「この範囲にする」。このタブで選んだ画像は「切り抜きを直す」でやり直せる。保存すると、まだ Brain にない画像を送ってから設定を保存する（画面いっぱいの画像は 1 枚 2 秒ほど）。接続したときに、設定で使っている Brain の画像を読んでプレビューに使う。タッチの欄の下の「Brain の背景画像」に、名前、大きさ、使っている場所の一覧と、使っていない画像を消すボタンがある。
 - **ウィジェット**：セルを選び、種類を「ウィジェット（時計、テキスト、Todo）」にすると、時計の書式とタイムゾーン、テキストの id、見出し、タップしたときの動きを選べる。テキストは、接続したときに Brain から読んだ中身でプレビューに出る（GUI の接続中は brain-deck が書けないので、中身は変わらない）。プレビューは PC の今の時刻で描き、時刻が変わるたびに描き直す（Brain のタイムゾーンが PC と違うと、`tz` を書いていない時計の表示は Brain と違う）。
 - **セルの大きさ**：セルを選び、「大きさ」の列と行を変える。広げた範囲に、このレイヤーのセルがあれば、消してよいか聞く。
 - **時刻**：接続するたびに、PC の時刻を Brain に送って合わせる。ずれていたときと、Brain のタイムゾーンが PC と違うときは、そのことを出す。
@@ -372,6 +404,7 @@ brain-deck todo add "牛乳を買う"                           # Todo を足す
 brain-deck todo                                            # Todo の一覧（番号は Brain の画面と同じ順）
 brain-deck todo done 2                                     # 2 番を完了にする
 brain-deck calendar sync                                   # カレンダー（ICS）の予定を取ってきて送る
+brain-deck images                                          # Brain にある背景画像の一覧
 brain-deck time sync                                       # PC の時刻を Brain に送る
 brain-deck status                                          # 版、レイヤー、Brain の時刻
 ```
@@ -470,6 +503,20 @@ calendars:
 - **送るもの**：予定の名前、場所、始まりと終わりだけ。説明、参加者、通知は送らない。予定は合わせて 1000 件まで（超えたら先の予定を送らず、注意を出す）。
 - **取得に失敗したとき**：ほかのカレンダーは送り、失敗したカレンダーは Brain に前の予定を残す。Brain の画面では、最終更新の行が橙色になり「失敗 1」と出る。終了コードは 7。
 - **時間**：予定の取得は、ポートを開く前に行う（取得に時間がかかっても、そのあいだ設定 GUI を締め出さない）。Brain とのやりとりは 0.1 秒ほど（実機）。
+
+### 背景画像
+
+```sh
+brain-deck images                          # 一覧（id、大きさ、容量、使っている場所の数、名前）
+brain-deck images list --json              # JSON で
+brain-deck images put config/background-images/*.565   # 変換済みの画像（.565）を送る
+brain-deck images prune --dry-run          # 今の設定で使っていない画像（消すもの）を表示する
+brain-deck images prune                    # 消す
+```
+
+- **変換はしない**：PNG などを Brain の画像にするのは設定 GUI の役目（切り抜く範囲を目で決めるため）。`put` が送れるのは、GUI や `tools/mkbg` が作った `.565` だけ。名前は、同じディレクトリの `index.json` にあればそれを、なければファイル名を使う。
+- **時間**：`put` は、`--timeout` を書かなければ 2 分まで待つ。実機で、画面いっぱいの画像（751 KB）は 1.8〜2.0 秒、セルの画像（58 KB）は 0.1 秒。
+- **断られたとき**：合計の上限（`quota_exceeded`）や SD カードの空き（`no_space`）で断られたら、終了コード 5 で理由を出す。
 
 ### 定期的に予定を送る（cron、systemd、launchd）
 
@@ -739,6 +786,18 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 - **ほかのプロセスが VT を切り替えたとき**：描画を止めて切り替えを許可し、2 秒後に専用 VT を取り戻す。デーモンの動作中はキーボードを専有していて、コンソールが見えても操作できないため。
 - **描画の負荷**：起動時とレイヤーを切り替えたときに画面全体を描き、そのあとは変わったセルだけを描き直す。`press_style: border` では、セルのうち枠の帯だけを描き直して転送する。描画は優先度を下げた別のスレッドで行い、キー入力の処理を待たせない。
 
+- **背景画像の負荷**：画像は描くときに SD カードから読み、4 MiB までメモリに置く（使ってから長いものから捨てる）。起動したときと設定を保存したときに、設定で使う画像を優先度を下げて先に読んでおく。実機で比べた時間（`TestHWBackground`、6 回の中央値）：
+
+  | 描き直し | 背景なし | 背景画像あり |
+  | --- | --- | --- |
+  | レイヤーの切り替え（メニュー、壁紙あり） | 39 ms | 52 ms |
+  | レイヤーの切り替え（ダッシュボード、壁紙とセルの画像） | 37 ms | 53 ms |
+  | レイヤーの切り替え（基本、セルの画像 2 つ） | 39 ms | 34 ms |
+  | 押したとき・離したとき（セル 1 つ） | 1.8〜2.0 ms | 1.6〜2.5 ms |
+  | 初めて切り替えたとき（画像を SD カードから読む） | — | 150〜170 ms（ダッシュボード、メニュー） |
+
+  画面いっぱいの画像 1 枚の読み込みは 80〜150 ms。SD カードへの書き込みが続いているあいだは、1〜3 秒かかったことがある。入力の処理は、どの場合も描画を待たない。
+
 | 画面の仕様 | 値 |
 | --- | --- |
 | デバイス | /dev/fb0（braindrmfb） |
@@ -763,6 +822,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | brain-deck が「Brain から返事がありません」で終わる | `ssh brain systemctl status lefthand`。`brain-deck -v status` で、どのポートに送ったかを見る |
 | brain-deck が「Brain が見つかりません」で終わる | Linux は `ls /dev/serial/by-id/`、macOS は `ls /dev/cu.usbmodem*` に Brain があるか。`--port` で指定もできる |
 | テキストのタイルに「未設定」と出る | その id に一度も書いていない。`brain-deck text --list` で、Brain にある id を見る |
+| 背景画像が出ない | `brain-deck images` の「Brain にない画像」、ログの `images: background ... is not on this Brain`。GUI で画像を選び直して保存すると送る |
+| 背景画像を保存できない（容量） | `brain-deck images` で合計と SD カードの空きを見る。`brain-deck images prune` で使っていない画像を消す |
 
 ## 開発
 
@@ -774,6 +835,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
 | control.go | 設定 GUI とのシリアル通信（/dev/ttyGS1） |
 | widget.go | ウィジェット（時計、テキスト）の書式、折り返し、描き直しの間隔、描画 |
+| image.go | 背景画像の置き場所、受け取り（分割、SHA-256 の確認、一時ファイル）、一覧、削除、読み込みとキャッシュ、先読み |
 | todo.go | Todo の項目（get_todo、todo_* のコマンドの中身）と、その保存、変わったことの通知 |
 | todowidget.go | Todo のセルの配置、描画、ページ送り、長押しでの切り替え |
 | text.go | テキストのタイルの中身（set_text、get_text）と、その保存 |
@@ -794,6 +856,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config.yaml | 設定の例。実機と同じ値 |
 | config/current.yaml | Brain で動いている本番の設定の写し（2026-10-07 にダッシュボードのレイヤーを足して反映。メニューの「ダッシュボード」から入り、HOME で戻る） |
 | config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |
+| config/background-example.yaml、config/background-images/ | 背景画像の例（current.yaml に背景を足したもの）と、式で描いた例の画像 |
+| tools/mkbg/ | 例の画像（グラデーションと模様）を作るツール |
 | contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごとに実行する、ユーザー単位の systemd のタイマー |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
@@ -842,7 +906,15 @@ TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar.png -render-layer 
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-page2.png -render-layer calendar -render-calendar-page 2 -render-time $T -render-calendar $K $C
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-stale.png -render-layer calendar -render-time $T -render-calendar gui/test/fixtures/calendar-stale.json $C
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-none.png -render-layer calendar -render-time $T -render-unsynced $C
+# 背景画像。画像は config/background-images（-render-images）
+B=config/background-example.yaml; I=config/background-images
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-base-pressed.png -render-pressed "0,0 3,2" -render-images $I $B
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-base-pressed-fill.png -render-press-style fill -render-pressed "0,0 1,1" -render-images $I $B
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-menu.png -render-layer menu -render-pressed "1,1" -render-images $I $B
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-dashboard.png -render-layer dashboard -render-time $T -render-texts $X -render-todo $D -render-calendar $K -render-images $I $B
 ```
+
+背景画像の変換（`gui/src/image.ts`）のファイルの形と id は、`config/background-images/` のファイル（`tools/mkbg` が Go で書いたもの）と同じになることをテストで確かめる。
 
 時計の書式は、GUI（`gui/src/clock.ts`）でも Go と同じ結果になるよう作り直している。Go の結果の表（`gui/test/fixtures/goformat.json`）と比べるので、書式の処理を変えたら `LEFTHAND_UPDATE_GOFORMAT=1 go test -run GoFormatTable` で書き直す。
 テキストの折り返し（`gui/src/textwidget.ts`）も同じく、Go の結果の表（`gui/test/fixtures/textlayout.json`）と比べる。折り返し方を変えたら `LEFTHAND_UPDATE_TEXTLAYOUT=1 go test -run TextLayoutTable` で書き直す。
@@ -871,6 +943,8 @@ ssh brain 'sudo systemctl stop lefthand.service; cd ~/lefthand && sudo LEFTHAND_
 ```
 
 `TestHWTodo` は、Todo のセルの行と ▼ を（エンジンを通して）押し、長押しの黄色、完了の切り替え、ページ送りの描き直しの時間をログに出し、フレームバッファが全体を描き直したものと同じことを確かめる。
+`TestHWBackground` は、背景画像の例（`background-example.yaml` と `bgimages/` に画像を置く）で、レイヤーの切り替えと押下・解除の時間を、背景画像を除いた同じ設定と比べ、画面が全体を描き直したものと同じことを確かめる。
+
 `TestHWCalendar` は、6 秒後に始まって 9 秒後に終わる予定で、予定の始まりと終わりに自分で描き直すことと、▲▼、PC から送り直したときの描き直しの時間を測る。
 
 ### コマンドラインのオプション
@@ -897,6 +971,7 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-todo-page 2                 Todo のセルに出すページ（1 から）
          -render-calendar calendar.json      カレンダーのセルの予定（calendar.json と同じ形）
          -render-calendar-page 2             カレンダーのセルに出すページ（1 から。省略すると触っていないときのページ）
+         -render-images dir                  背景画像を探すディレクトリ（-check でも使う。省略すると -data-dir の images）
 ```
 
 ## フォントとライセンス

@@ -56,7 +56,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 
 - `protocol` はこの文書の版。互換性のない変更をしたら上げる。GUI は違えば使わない。
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
-- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
+- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱う。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
 
 ### get_config
@@ -356,6 +356,51 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 - **いつ届くか**：一覧が変わるたび（どこから変えても。自分のリクエストで変えたときも届く）。続けて変わったときは、最後の一覧だけが届くことがある。返事の前後どちらにも届きうるので、受け取る側は `rev` が今持っているものより小さければ捨てる。
 - **終わり**：`enable: false`、またはポートの開き直し。`subscribe_input` とは別で、学習モードを終えても購読は続く。
 
+### 背景画像（list_images、image_begin、image_chunk、image_end、image_abort、get_image、prune_images）
+
+背景画像（設定の `background`。[config.md](config.md) の「背景画像」）のファイルを、Brain の `/var/lib/lefthand/images/` に置く、読む、消す。
+画像の変換（切り抜き、縮小、RGB565、ディザリング）は送る側（設定 GUI）で行い、デーモンは中身を確かめて保存するだけ。
+
+**送る**：1 行の上限（256 KiB）を変えずに済むよう、ファイルを 96 KiB ずつ base64 にして送る（1 行 128 KiB ほど）。
+
+```json
+→ {"id":40,"cmd":"image_begin","sha256":"7f8f231d4a49bfee…（64 文字）","bytes":768008,"w":800,"h":480,"name":"夕焼け.jpg","source":"gui"}
+← {"id":40,"ok":true,"result":{"id":"7f8f231d4a49bfee","exists":false,"upload":"2fd28426216d","chunk_bytes":98304}}
+→ {"id":41,"cmd":"image_chunk","upload":"2fd28426216d","offset":0,"data":"TEhJMSADwAH…"}
+← {"id":41,"ok":true,"result":{"received":98304}}
+   …（offset を増やして続ける）
+→ {"id":49,"cmd":"image_end","upload":"2fd28426216d"}
+← {"id":49,"ok":true,"result":{"id":"7f8f231d4a49bfee"}}
+```
+
+| コマンド | 引数 | 内容 |
+| --- | --- | --- |
+| `image_begin` | `sha256`（ファイル全体の SHA-256）、`bytes`、`w`、`h`（必須）、`name`（表示用の名前。100 文字まで）、`source` | 受け取りを始める。同じ中身がもうあれば `exists: true` で、送らなくてよい。`id` は `sha256` の先頭 16 文字 |
+| `image_chunk` | `upload`、`offset`、`data`（base64。1〜`chunk_bytes` バイト） | 書く。`offset` は、それまでに受け取った大きさと同じでなければ `bad_request`（受け取りは続く）。結果の `received` はそこまでの大きさ |
+| `image_end` | `upload` | 大きさ、SHA-256、ヘッダ（`LHI1` と幅、高さ）を確かめ、fsync してから `<id>.565` に rename する。合わなければ一時ファイルを消して `hash_mismatch` か `bad_request` |
+| `image_abort` | `upload`（省略するとどれでも） | やめて、一時ファイルを消す。結果の `aborted` は、やめるものがあったか |
+
+- **途中で切れたとき**：受け取っている途中のファイルは `images/.upload-<upload>.part`。`image_end` で確かめるまで、`<id>.565` はできない。`image_abort`、別の `image_begin`、ポートの開き直し（接続の終わり）、60 秒 `image_chunk` が来ない、デーモンの再起動、のどれでも一時ファイルを消す。受け取りは同時に 1 つだけ。
+- **上限**：1 枚 800×480（768,008 バイト）まで（各辺 800 まで、384,000 画素まで）。`bytes` は `8 + w*h*2` でなければ `bad_request`。置いてある画像との合計が 16 MiB を超えるなら `quota_exceeded`。保存したあとに SD カードの空きが 64 MiB（ファイルシステムの 10% のほうが小さければ、そちら）を下回るなら `no_space`。どちらも `image_begin` で断り、何も書かない。message に今の量と理由を書く。
+- **時間**：実機で、画面いっぱいの画像は 1.8〜2.0 秒（375 KB/秒ほど）。`image_end` は fsync を待つ。GUI は `image_chunk` を 15 秒、`image_end` を 30 秒まで待つ。
+- **保存したあと**：画面を描き直す（その画像を使っていれば、すぐに出る）。名前などは `images/index.json` に残す。
+
+**一覧**：
+
+```json
+→ {"id":50,"cmd":"list_images"}
+← {"id":50,"ok":true,"result":{"images":[{"id":"7f8f231d4a49bfee","name":"夕焼け.jpg","w":800,"h":480,"bytes":768008,
+   "sha256":"7f8f…","added":"2026-10-07T07:25:35Z","source":"gui","refs":["/layers/8/touch/background"]}],
+   "total_bytes":768008,"limit_bytes":16777216,"max_image_bytes":768008,"max_side":800,"max_pixels":384000,
+   "free_bytes":134869401,"reserve_bytes":67108864,"chunk_bytes":98304,"missing":[]}}
+```
+
+`refs` は今の設定でその画像を使っている場所（JSON Pointer）、`missing` は今の設定で使っているのに Brain にない id。
+
+**読む**（GUI のプレビュー用）：`{"cmd":"get_image","image":"<id>","offset":0,"length":98304}` → `{"image","offset","bytes"（ファイル全体の大きさ）,"sha256","data"（base64）}`。`length` は省略すると 96 KiB。ない id は `not_found`。
+
+**消す**：`{"cmd":"prune_images","keep":["<id>",...],"dry_run":false}` → `{"removed":[id...],"freed_bytes":n,"dry_run":false}`。今の設定と `keep` のどちらでも使っていない画像を消す。GUI は、編集中の設定で使っている id を `keep` に入れる。`dry_run` なら消さずに、消すものを返す。
+
 ## エラーの種類
 
 | code | 意味 |
@@ -368,8 +413,11 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 | `invalid_config` | 設定の誤り。`problems` に場所付きで入る。何も変えていない |
 | `apply_failed` | 保存したが反映に失敗し、ファイルも動作も前の設定に戻した |
 | `internal_error` | そのほか（ファイルを書けないなど）。何も変えていないか、前の設定に戻せなかったことを message に書く |
-| `not_found` | Todo：その ID の項目がない |
+| `not_found` | Todo：その ID の項目がない。get_image：その id の画像がない |
 | `conflict` | Todo：項目が、送った `rev` のあとに変わった。何も変えていない |
+| `quota_exceeded` | 画像：置いてある画像との合計が上限（16 MiB）を超える。何も書いていない |
+| `no_space` | 画像：保存すると SD カードの空きが足りなくなる。何も書いていない |
+| `hash_mismatch` | 画像：受け取った中身の SHA-256 が `image_begin` と違う。一時ファイルを消した |
 
 brain-deck は、エラーの種類によって終了コードを変える（README の「終了コード」）。
 
