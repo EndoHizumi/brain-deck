@@ -3,7 +3,7 @@
 import { FONT_H, type BitmapFont } from './font'
 import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
-import { LAYER_VERB, MOUSE_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
+import { LAYER_VERB, MOUSE_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
@@ -104,7 +104,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
     return v
   }
-  if (k !== 'key' && k !== 'none' && k !== 'mouse') {
+  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'usb_mode') {
     const t = actionTarget(a)
     const dest = cfg.layers.find((l) => l.name === t)
     const destTitle = dest ? layerTitle(dest) : (t ?? '')
@@ -113,7 +113,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     else sub += ':' + destTitle
     return { mapped: true, layer: true, label, sub }
   }
-  const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : prettyCombo(a.key ?? '')
+  const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '') : prettyCombo(a.key ?? '')
   if (label === '' || label === keys) return { mapped: true, layer: false, label: keys, sub: '' }
   return { mapped: true, layer: false, label, sub: keys }
 }
@@ -246,6 +246,7 @@ export interface PreviewParams {
   calendar?: CalendarData | null // カレンダーの予定（Brain の get_calendar）
   calendarPage?: number // カレンダーのセルに出すページ（0 から）。省略すると、触っていないときのページ
   images?: (id: string) => Image565 | undefined // 背景画像。ない id は背景なしで描く（Brain と同じ）
+  mouseOff?: boolean // USB にマウスがない（キーボードだけの形）。トラックパッドに「マウスはオフ」と出す
 }
 
 export interface WidgetEnv {
@@ -256,6 +257,7 @@ export interface WidgetEnv {
   todoPage: number
   calendar: CalendarData | null
   calendarPage?: number
+  mouseOff: boolean
 }
 
 export interface PreviewLayout {
@@ -277,7 +279,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   const fill = (p.pressStyle ?? p.cfg.display?.press_style) === 'fill'
   const px = new Pixels(W, H)
   const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {}, todo: p.todo?.items ?? [],
-    todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage }
+    todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage, mouseOff: p.mouseOff ?? false }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -338,7 +340,7 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
   const inner = inset(box, textMargin)
   px.halo = hasImg
   try {
-    if (v.widget === 'trackpad') drawPad(font, px, cell, box, inner, v, subC)
+    if (v.widget === 'trackpad') drawPad(font, px, cell, box, inner, v, env, subC)
     else drawCellContent(font, px, inner, v, env, textC, subC)
   } finally {
     px.halo = false
@@ -346,7 +348,7 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
 }
 
 // drawPad は trackpad.go の drawPad と同じ。見出しと、右端のスクロールの帯（タッチの判定と同じく、セルの右端から scroll_width ドット）。
-function drawPad(font: BitmapFont, px: Pixels, cell: Rect, box: Rect, inner: Rect, v: CellView, subInk: RGB): void {
+function drawPad(font: BitmapFont, px: Pixels, cell: Rect, box: Rect, inner: Rect, v: CellView, env: WidgetEnv, subInk: RGB): void {
   const sw = v.padScroll ?? 0
   const area = { ...inner }
   if (sw > 0) {
@@ -372,12 +374,27 @@ function drawPad(font: BitmapFont, px: Pixels, cell: Rect, box: Rect, inner: Rec
     }
   }
   const aw = area.x1 - area.x0
-  if (v.label && aw > 0) {
+  if (aw <= 0) return
+  if (v.label) {
     const cap = v.label.replace(/\n/g, ' ')
     const s = Math.min(fitScale(font, [cap], aw, FONT_H * captionScale), captionScale)
     drawCentered(font, px, area, area.y0, cap, s, subInk)
+    area.y0 += FONT_H * s + widgetLineGap
+  }
+  if (env.mouseOff) {
+    const ah = area.y1 - area.y0
+    const s1 = Math.min(fitScale(font, [PAD_OFF_TEXT], aw, Math.trunc(ah / 2), 3), 3)
+    const s2 = Math.min(fitScale(font, [PAD_OFF_HINT], aw, Math.trunc(ah / 4), 2), 2)
+    const hh = FONT_H * s1 + widgetLineGap + FONT_H * s2
+    const y = area.y0 + Math.trunc((ah - hh) / 2)
+    drawCentered(font, px, area, y, PAD_OFF_TEXT, s1, colPadOff)
+    drawCentered(font, px, area, y + FONT_H * s1 + widgetLineGap, PAD_OFF_HINT, s2, subInk)
   }
 }
+
+const PAD_OFF_TEXT = 'マウスはオフ'
+const PAD_OFF_HINT = 'USB はキーボードだけの形です'
+const colPadOff: RGB = [0xff, 0x80, 0x20]
 
 function drawCellContent(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env: WidgetEnv, textC: RGB, subC: RGB): void {
   if (v.widget) {

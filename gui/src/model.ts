@@ -1,8 +1,8 @@
 // 設定の操作。透過の解決は layer.go の view / lookupKey と同じ規則にする。
 
-import type { ActionSpec, Config, GridConfig, LayerConfig, MouseAction, TouchConfig, WidgetKind } from './types'
+import type { ActionSpec, Config, GridConfig, LayerConfig, MouseAction, TouchConfig, UsbMode, WidgetKind } from './types'
 
-export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'widget'
+export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'usb_mode' | 'widget'
 export const LAYER_KINDS = ['layer_hold', 'layer_toggle', 'layer_oneshot', 'layer_to'] as const
 export type LayerKind = (typeof LAYER_KINDS)[number]
 
@@ -14,6 +14,7 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   layer_oneshot: '次の 1 キーだけ（layer_oneshot）',
   layer_to: 'そのレイヤーへ移る（layer_to）',
   mouse: 'マウス（ボタン、スクロール）',
+  usb_mode: 'USB の形の切り替え（マウスのオンとオフ）',
   widget: 'ウィジェット（時計、テキスト、Todo、カレンダー、トラックパッド）',
 }
 
@@ -27,6 +28,9 @@ export const MOUSE_LABELS: Record<MouseAction, string> = {
   scroll_left: 'スクロール←',
   scroll_right: 'スクロール→',
 }
+
+// USB の形の切り替えと、画面に出す名前（usbmode.go の usbLabels）
+export const USB_LABELS: Record<UsbMode, string> = { keyboard: 'マウスオフ', mouse: 'マウスオン', toggle: 'マウス切替' }
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
 export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド' }
@@ -76,13 +80,14 @@ export function actionKind(a: ActionSpec): ActionKind {
   if (a.key !== undefined) return a.key.toLowerCase() === 'none' ? 'none' : 'key'
   for (const k of LAYER_KINDS) if (a[k] !== undefined) return k
   if (a.mouse !== undefined) return 'mouse'
+  if (a.usb_mode !== undefined) return 'usb_mode'
   if (a.widget !== undefined) return 'widget'
   return 'none'
 }
 
 // isIncomplete は、送るキーや行き先をまだ選んでいない割り当てかどうか。
 export function isIncomplete(a: ActionSpec): boolean {
-  const fields = (['key', ...LAYER_KINDS, 'mouse'] as const).filter((k) => a[k] !== undefined)
+  const fields = (['key', ...LAYER_KINDS, 'mouse', 'usb_mode'] as const).filter((k) => a[k] !== undefined)
   if (a.widget !== undefined) return !a.widget || (a.widget === 'text' && !a.id) || fields.some((k) => a[k] === '')
   return fields.length === 0 || fields.some((k) => a[k] === '')
 }
@@ -111,6 +116,7 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   else if (k === 'none') s = 'none'
   else if (k === 'widget') s = ''
   else if (k === 'mouse') s = `mouse: ${a.mouse}`
+  else if (k === 'usb_mode') s = `usb_mode: ${a.usb_mode}`
   else s = `${k}: ${actionTarget(a)}`
   if (a.widget !== undefined) {
     const opts = (['format', 'date_format', 'tz', 'id', 'rows'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)

@@ -17,6 +17,7 @@ export class FakeDaemon {
   path = '/etc/lefthand/config.yaml'
   stack: { layer: string; kind: string }[] = []
   subscribed = false
+  mouse = true // USB にマウスがあるか（set_usb_mode で切り替える）
   suppress = false
   received: any[] = [] // 受け取ったリクエスト（テスト用）
   failApply = false // true なら set_config の反映に失敗したことにする（テスト用）
@@ -64,13 +65,20 @@ export class FakeDaemon {
         return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
           commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
-            'set_calendar', 'get_calendar', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images'] })
+            'set_calendar', 'get_calendar', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
         return ok(keymap)
       case 'get_status':
-        return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress, time: this.timeInfo(), hid: { mouse: true } })
+        return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress, time: this.timeInfo(), hid: { mouse: this.mouse, switching: false } })
+      case 'set_usb_mode': {
+        const want = req.mode === 'toggle' ? !this.mouse : req.mode === 'mouse' ? true : req.mode === 'keyboard' ? false : null
+        if (want === null) return err('bad_request', 'mode must be keyboard, mouse or toggle')
+        const switching = want !== this.mouse
+        this.mouse = want
+        return ok({ mouse: want, switching })
+      }
       case 'set_time': {
         if (typeof req.unix_ms !== 'number') return err('bad_request', '"unix_ms" is required')
         const offset = req.unix_ms - (Date.now() - this.clockOffsetMs)
@@ -321,9 +329,11 @@ export function validate(cfg: Config): Problem[] {
     names.add(l.name)
   })
   const action = (path: string, where: string, a: ActionSpec, cell = false) => {
-    const n = (['key', ...LAYER_KINDS, 'mouse'] as const).filter((k) => a[k]).length
+    const n = (['key', ...LAYER_KINDS, 'mouse', 'usb_mode'] as const).filter((k) => a[k]).length
     if (n > 1 || (n === 0 && !a.widget))
-      return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse (a widget cell may omit them)` })
+      return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, usb_mode (a widget cell may omit them)` })
+    if (a.usb_mode !== undefined && !['keyboard', 'mouse', 'toggle'].includes(a.usb_mode))
+      out.push({ path, message: `${where}: usb_mode must be keyboard, mouse or toggle` })
     if (a.mouse !== undefined && !Object.hasOwn(MOUSE_LABELS, a.mouse))
       out.push({ path, message: `${where}: unknown mouse action "${a.mouse}" (${Object.keys(MOUSE_LABELS).join(', ')})` })
     if (a.widget === 'trackpad' && n > 0)
@@ -358,7 +368,7 @@ export function validate(cfg: Config): Problem[] {
         if (!ALL_KEYS.has(u) && !(MODIFIERS as readonly string[]).includes(u))
           out.push({ path, message: `${where}: unknown key "${u}" in "${a.key}"` })
       }
-    } else if (k !== 'none' && k !== 'widget' && k !== 'mouse') {
+    } else if (k !== 'none' && k !== 'widget' && k !== 'mouse' && k !== 'usb_mode') {
       const t = actionTarget(a)!
       if (!names.has(t)) out.push({ path, message: `${where}: ${k} refers to unknown layer "${t}"` })
       else if (k === 'layer_toggle' && t === cfg.layers[0].name)

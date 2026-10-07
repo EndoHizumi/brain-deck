@@ -9,7 +9,7 @@ import {
 import defaultKeymap from './keymap-pwsh2.json'
 import {
   CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
-  PAD_NUM_FIELDS, WIDGET_FIELDS, WIDGET_LABELS, ownsTouch,
+  PAD_NUM_FIELDS, USB_LABELS, WIDGET_FIELDS, WIDGET_LABELS, ownsTouch,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
   isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
   resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
@@ -30,7 +30,7 @@ import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './por
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, BrainImage, Config, EngineStatus, GetTextResult, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MouseAction,
+  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MouseAction, UsbMode,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -944,6 +944,9 @@ export class App {
       case 'mouse':
         a = { mouse: cur?.mouse ?? 'left' }
         break
+      case 'usb_mode':
+        a = { usb_mode: cur?.usb_mode ?? 'toggle' }
+        break
       case 'key':
         a = { key: cur && actionKind(cur) === 'key' ? cur.key : '' }
         break
@@ -967,6 +970,7 @@ export class App {
     for (const f of [...WIDGET_FIELDS, 'label', 'span', 'background'] as const) if (cur[f] !== undefined) (a as any)[f] = cur[f]
     if (kind === 'key') a.key = cur.key && cur.key.toLowerCase() !== 'none' ? cur.key : ''
     else if (kind === 'mouse') a.mouse = cur.mouse ?? 'left'
+    else if (kind === 'usb_mode') a.usb_mode = cur.usb_mode ?? 'toggle'
     else if (LAYER_KINDS.includes(kind as LayerKind)) {
       const others = this.cfg!.layers.filter((_, i) => i !== this.layer && !(kind === 'layer_toggle' && i === 0))
       a[kind as LayerKind] = actionTarget(cur) || others[0]?.name || ''
@@ -1034,7 +1038,7 @@ export class App {
     if (w !== 'trackpad') for (const f of PAD_FIELDS) delete a[f]
     // Todo、カレンダー、トラックパッドは押した位置で働く（長押しで完了、▲▼ でページ送り、タップでクリック）ので、
     // タップしたときのキーやレイヤーは書けない
-    if (ownsTouch(w)) for (const k of ['key', ...LAYER_KINDS, 'mouse'] as const) delete a[k]
+    if (ownsTouch(w)) for (const k of ['key', ...LAYER_KINDS, 'mouse', 'usb_mode'] as const) delete a[k]
     this.setAction(a)
   }
 
@@ -2032,7 +2036,8 @@ export class App {
     const pressed = new Set(this.previewPress ? [this.previewPress] : [])
     const now = new Date()
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
-      texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img })
+      texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img,
+      mouseOff: this.brainMouse === false })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
   }
@@ -2109,11 +2114,12 @@ export class App {
       body.push(h('label', { class: 'row' }, 'タップしたとき ', h('select', { 'data-focus': 'tap', id: 'tap',
         onchange: (e: Event) => this.setTap((e.target as HTMLSelectElement).value as ActionKind) },
         h('option', { value: 'widget', selected: tap === 'widget' }, '何もしない'),
-        (['key', ...LAYER_KINDS, 'mouse'] as ActionKind[]).map((k) => h('option', { value: k, selected: tap === k }, KIND_LABELS[k])))))
+        (['key', ...LAYER_KINDS, 'mouse', 'usb_mode'] as ActionKind[]).map((k) => h('option', { value: k, selected: tap === k }, KIND_LABELS[k])))))
     }
     const act = tap ?? kind
     if (own && act === 'key') body.push(this.viewComboEditor(own))
     if (own && act === 'mouse') body.push(...this.viewMouseEditor(own))
+    if (own && act === 'usb_mode') body.push(...this.viewUsbModeEditor(own))
     if (own && LAYER_KINDS.includes(act as LayerKind)) {
       const lk = act as LayerKind
       body.push(h('label', { class: 'row' }, '行き先 ', h('select', { 'data-focus': 'target', id: 'target',
@@ -2262,10 +2268,38 @@ export class App {
     ]
   }
 
-  // mouseWarning は、Brain の USB にマウスがないときの注意（古い gadget-setup.sh）。
+  // mouseWarning は、Brain の USB にマウスがないとき（ブートキーボードの形）の注意と、切り替えるボタン。
   private mouseWarning(): HTMLElement | null {
     if (!this.connected || this.brainMouse !== false) return null
-    return h('div', { class: 'warn' }, 'Brain の USB にマウスがありません。Brain で sudo /usr/local/sbin/lefthand-gadget-setup を実行してください（README の「マウスとトラックパッド」）')
+    const can = !!this.hello?.commands?.includes('set_usb_mode')
+    return h('div', { class: 'warn' },
+      'Brain の USB は今、キーボードだけ（ブートキーボード）の形で、マウスは PC に届きません。',
+      can ? h('button', { class: 'small', id: 'usb-mouse-on', onclick: () => void this.setUsbMode('mouse') }, 'マウスをオンにする') : null,
+      can ? ' USB を付け直すので、2〜3 秒、キー入力と SSH が切れ、この GUI の接続も切れます（つなぎ直してください）。'
+        : ' Brain の lefthand を新しくしてください（README の「マウスとトラックパッド」）。')
+  }
+
+  // setUsbMode は、Brain の USB の形を切り替える。返事のあとに USB が付け直され、シリアルも切れる。
+  async setUsbMode(mode: UsbMode): Promise<void> {
+    if (!this.client) return
+    try {
+      const r = await this.client.request<{ mouse: boolean; switching: boolean }>('set_usb_mode', { mode })
+      this.say(r.switching ? `Brain の USB を${r.mouse ? 'キーボードとマウス' : 'キーボードだけ'}の形に切り替えます。数秒後に接続し直してください` : 'すでにその形です')
+    } catch (e: any) {
+      this.say(`切り替えられません：${e?.message ?? e}`, 'error')
+    }
+  }
+
+  // viewUsbModeEditor は、USB の形の切り替えの欄。
+  private viewUsbModeEditor(own: ActionSpec): HTMLElement[] {
+    return [
+      h('label', { class: 'row' }, '切り替え ', h('select', { 'data-focus': 'usb_mode', id: 'usb_mode',
+        onchange: (e: Event) => this.patchAction({ usb_mode: (e.target as HTMLSelectElement).value as UsbMode }) },
+        ([['toggle', '押すたびにオンとオフ（toggle）'], ['mouse', 'マウスをオン（mouse）'], ['keyboard', 'マウスをオフ（keyboard）']] as const)
+          .map(([v, t]) => h('option', { value: v, selected: own.usb_mode === v }, t)))),
+      h('p', { class: 'hint' }, 'Brain は起動したとき、USB をキーボードだけ（ブートキーボード。BIOS でも使える形）にします。マウス（トラックパッド、マウスの割り当て）を使うときに、' +
+        'キーボードとマウスの形に切り替えます。USB を付け直すので、2〜3 秒、キー入力、SSH、設定 GUI の接続が切れます。'),
+    ]
   }
 
   // viewMouseEditor は、マウスの操作の欄。
@@ -2437,6 +2471,7 @@ export function shortAction(cfg: Config, a: ActionSpec | null): string {
   if (k === 'none') return '✕'
   if (k === 'key') return a.label ? a.label.replace(/\n/g, ' ') : prettyCombo(a.key ?? '')
   if (k === 'mouse') return a.label ? a.label.replace(/\n/g, ' ') : (MOUSE_LABELS[a.mouse!] ?? a.mouse ?? '')
+  if (k === 'usb_mode') return a.label ? a.label.replace(/\n/g, ' ') : (USB_LABELS[a.usb_mode!] ?? a.usb_mode ?? '')
   const t = actionTarget(a)
   const dest = cfg.layers.find((l) => l.name === t)
   return `${LAYER_VERB[k as LayerKind]}→${dest ? layerTitle(dest) : (t ?? '?')}`

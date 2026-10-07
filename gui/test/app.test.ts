@@ -689,14 +689,20 @@ describe('マウスとトラックパッド', () => {
     expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
   })
 
-  it('Brain の USB にマウスがなければ伝える', async () => {
+  it('Brain の USB がキーボードだけの形なら伝え、マウスをオンにできる。usb_mode を割り当てられる', async () => {
     const daemon = new FakeDaemon(sampleConfig())
-    const orig = daemon.handle.bind(daemon)
-    daemon.handle = (line: string) =>
-      orig(line).replace('"hid":{"mouse":true}', '"hid":{"mouse":false}')
+    daemon.mouse = false
     const t = await connected(setup({ daemon }))
     t.click('[data-cell="1,0"]')
     t.change('#kind', 'mouse')
-    expect(t.$('.inspector').textContent).toContain('Brain の USB にマウスがありません')
+    expect(t.$('.inspector').textContent).toContain('キーボードだけ（ブートキーボード）の形')
+    t.click('#usb-mouse-on')
+    await vi.waitFor(() => expect(daemon.mouse).toBe(true))
+    expect(t.cmds()).toContain('set_usb_mode')
+    t.change('#kind', 'usb_mode')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ usb_mode: 'toggle', label: '消しゴム' })
+    t.change('#usb_mode', 'mouse')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0'].usb_mode).toBe('mouse')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
   })
 })

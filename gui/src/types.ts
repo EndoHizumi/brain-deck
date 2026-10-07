@@ -8,6 +8,7 @@ export interface ActionSpec {
   layer_oneshot?: string
   layer_to?: string
   mouse?: MouseAction // マウスの操作。押しているあいだボタンを押す
+  usb_mode?: UsbMode // USB の形の切り替え（USB を付け直すので 2〜3 秒切れる）
   label?: string
   span?: [number, number] // セルの大きさ [列数, 行数]。タッチのセルだけ
   background?: string // セルの背景画像の id（Brain の /var/lib/lefthand/images/<id>.565）。タッチのセルだけ
@@ -38,6 +39,8 @@ export interface ActionSpec {
 }
 
 export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad'
+
+export type UsbMode = 'keyboard' | 'mouse' | 'toggle'
 
 export type MouseAction = 'left' | 'right' | 'middle' | 'scroll_up' | 'scroll_down' | 'scroll_left' | 'scroll_right'
 

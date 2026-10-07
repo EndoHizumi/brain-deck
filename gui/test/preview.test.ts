@@ -168,15 +168,16 @@ describe('Brain の画面のプレビュー', () => {
   // go run . -render-png gui/test/fixtures/trackpad.png -render-layer mouse config/trackpad-example.yaml
   const pcfg = parseConfigText(repoFile('config/trackpad-example.yaml').toString('utf8'))
   const mouseLayer = pcfg.layers.findIndex((l) => l.name === 'mouse')
-  const pcases: { file: string; pressed?: string[]; pressStyle?: PressStyle }[] = [
+  const pcases: { file: string; pressed?: string[]; pressStyle?: PressStyle; mouseOff?: boolean }[] = [
     { file: 'trackpad.png' },
+    { file: 'trackpad-off.png', mouseOff: true }, // -render-mouse-off
     { file: 'trackpad-pressed.png', pressed: ['0,0', '3,1'] },
     { file: 'trackpad-pressed-fill.png', pressed: ['0,0', '3,1'], pressStyle: 'fill' },
   ]
   for (const c of pcases) {
     it(`トラックパッドも lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
       const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
-      const { pixels } = renderPreview(font, { cfg: pcfg, stack: [0, mouseLayer], mode: 'latched', pressed: new Set(c.pressed), pressStyle: c.pressStyle })
+      const { pixels } = renderPreview(font, { cfg: pcfg, stack: [0, mouseLayer], mode: 'latched', pressed: new Set(c.pressed), pressStyle: c.pressStyle, mouseOff: c.mouseOff })
       const got = to565(pixels)
       let diff = 0
       for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
@@ -214,6 +215,7 @@ describe('Brain の画面のプレビュー', () => {
     expect(cellView(cfg, { layer_hold: 'edit', label: 'E' })).toMatchObject({ label: 'E', sub: '押す間:編集' })
     expect(cellView(cfg, { mouse: 'left' })).toMatchObject({ label: '左クリック', sub: '' })
     expect(cellView(cfg, { mouse: 'scroll_down', label: '下' })).toMatchObject({ label: '下', sub: 'スクロール↓' })
+    expect(cellView(cfg, { usb_mode: 'toggle' })).toMatchObject({ layer: false, label: 'マウス切替', sub: '' })
   })
 
   it('フォントにない文字が分かる', () => {
