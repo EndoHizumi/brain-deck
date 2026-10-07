@@ -455,6 +455,15 @@ go run . -replay-touch -replay-params '{"smooth":4,"deadzone":2}' testdata/touch
 | hold | 指を 3 秒止めて離す、を 4 回 | クリックしない。揺れでカーソルがほぼ動かない（1 回あたり 4 カウント以下） |
 | light | ごく軽く触れてなぞる・タップする | ダブルクリックやドラッグにならない。離した直後の弱い接触を使わない |
 
+本番の設定（/etc/lefthand/config.yaml）を変えずに、例の設定のトラックパッドを実機で試すときは、本番のサービスを止め、例の設定のデーモンを時間を区切って動かす。
+マウスをオンにすると USB を付け直して SSH が切れるので、`systemd-run` で動かす（SSH が切れても止まらない）。時間が来ると止まり、本番のサービスが起動し直す。
+
+```sh
+scp lefthand brain:lefthand/ && scp config/trackpad-example.yaml brain:lefthand/config/
+ssh brain 'sudo systemctl stop lefthand.service && sudo systemd-run --collect --unit=lefthand-try -p RuntimeMaxSec=600 -p "ExecStopPost=/bin/systemctl start lefthand.service" $HOME/lefthand/lefthand $HOME/lefthand/config/trackpad-example.yaml'
+ssh brain sudo systemctl stop lefthand-try    # 早く終えるとき（本番のサービスが起動し直す）
+```
+
 `-replay-touch` は、タッチごとに長さ、サンプル数、最初と最後の位置、押す強さの範囲、最初の 1 歩の距離（触れた瞬間の跳ね）、いちばん大きな 1 歩を出し、最後に判定の結果（タップ、クリック、ドラッグ、動いた量、ホイール）をまとめる。
 記録のファイルの形は record.go の先頭に書いてある。
 

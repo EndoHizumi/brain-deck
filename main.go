@@ -960,7 +960,7 @@ func main() {
 	log.Printf("hid: %s", hl.Source)
 	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID)}
 	if hl.MouseID == 0 && km.usesMouse() {
-		log.Printf("warning: the config uses the mouse (mouse: or widget: trackpad), but the USB gadget has no mouse; run gadget-setup.sh")
+		log.Printf("mouse: the config uses the mouse (mouse: or widget: trackpad), but it is off (boot keyboard); turn it on with usb_mode, brain-deck usb-mode mouse, or HID_MOUSE=1 in /etc/lefthand/gadget.env")
 	}
 	e := NewEngine(km, s)
 	pad := NewPad(s.mouse, true)
