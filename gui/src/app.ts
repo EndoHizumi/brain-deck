@@ -18,11 +18,12 @@ import { hasSeconds } from './clock'
 import { cellSpan, renderPreview, type Mode } from './preview'
 import { TEXT_ID_PATTERN, TEXT_STYLES, textExpired } from './textwidget'
 import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
+import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import type {
   ActionSpec, Config, EngineStatus, GetTextResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, TextEntry, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind,
+  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -96,6 +97,8 @@ export class App {
   section: 'config' | 'todo' = 'config'
   // Todo の一覧（Brain のデータが正。接続したときに読み、Brain で変わると通知が届く）
   todo: TodoList | null = null
+  // カレンダーの予定（Brain のデータ。接続したときに読む。brain-deck calendar sync が送る）
+  calendar: CalendarData | null = null
   todoBusy = false
   todoNew = '' // 追加の欄に書きかけの文
   private todoDrafts: Record<string, string> = {} // 書き換えている途中の項目の文（通知で描き直しても消えない）
@@ -247,6 +250,7 @@ export class App {
       this.stopLearning(false)
       this.brainStatus = null
       this.todo = null
+      this.calendar = null
       if (reason !== 'closed by user') this.say(`Brain との接続が切れました（${reason}）。編集中の内容は残っています`, 'error')
       this.validation = 'offline'
       this.render()
@@ -280,6 +284,7 @@ export class App {
     this.hello = null
     this.brainStatus = null
     this.todo = null
+    this.calendar = null
     await c?.close()
     this.validation = 'offline'
     this.render()
@@ -303,6 +308,7 @@ export class App {
     this.brainStatus = (await c.request<{ status: EngineStatus }>('get_status')).status
     if (this.hello?.commands?.includes('get_text')) this.texts = (await c.request<GetTextResult>('get_text')).texts ?? {}
     await this.loadTodo()
+    this.calendar = this.hello?.commands?.includes('get_calendar') ? await c.request<CalendarData>('get_calendar') : null
     this.render()
     this.scheduleValidate(0)
   }
@@ -635,8 +641,9 @@ export class App {
     if (!cur) return
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
-    for (const f of ['format', 'date_format', 'tz', 'id'] as const) if (a[f] === '') delete a[f]
+    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale'] as const) if (a[f] === '') delete a[f]
     if (!(Number.isInteger(a.rows) && a.rows! > 0)) delete a.rows
+    if (a.calendars && !a.calendars.length) delete a.calendars
     this.setAction(a)
   }
 
@@ -648,9 +655,17 @@ export class App {
     for (const f of CLOCK_FIELDS) if (w !== 'clock') delete a[f]
     if (w !== 'text') delete a.id
     else a.id = cur.id || this.suggestTextId()
-    if (w !== 'todo') delete a.rows
-    // Todo は押した位置で働く（長押しで完了、▲▼ でページ送り）ので、タップしたときのキーやレイヤーは書けない
-    else for (const k of ['key', ...LAYER_KINDS] as const) delete a[k]
+    const paged = w === 'todo' || w === 'calendar'
+    if (!paged) {
+      delete a.rows
+      delete a.page_reset
+    }
+    if (w !== 'calendar') {
+      delete a.stale
+      delete a.calendars
+    }
+    // Todo とカレンダーは押した位置で働く（長押しで完了、▲▼ でページ送り）ので、タップしたときのキーやレイヤーは書けない
+    if (paged) for (const k of ['key', ...LAYER_KINDS] as const) delete a[k]
     this.setAction(a)
   }
 
@@ -1388,7 +1403,7 @@ export class App {
     const pressed = new Set(this.previewPress ? [this.previewPress] : [])
     const now = new Date()
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
-      texts: this.texts, todo: this.todo ?? undefined })
+      texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
   }
@@ -1405,6 +1420,8 @@ export class App {
       const unit = sec ? 1000 : 60000
       wait = unit - (now.getTime() % unit) + 5
     }
+    // カレンダーは、予定の始まりと終わりで描き直す（1 分ごとに見直せば十分）
+    if (g.cells.some((c) => c?.action.widget === 'calendar')) wait = Math.min(wait, 60000 - (now.getTime() % 60000) + 5)
     // テキストの有効期限が切れたら、薄く描き直す
     for (const c of g.cells) {
       const e = c?.action.widget === 'text' && c.action.id ? this.texts[c.action.id] : undefined
@@ -1439,7 +1456,7 @@ export class App {
     const errs = this.problemsAt((loc) => this.selMatches(loc, sel, this.layer))
     const kind: ActionKind | 'inherit' = own ? (own.widget !== undefined ? 'widget' : actionKind(own)) : 'inherit'
     // ウィジェットのセルで、タップしたときに働くもの
-    const tap: ActionKind | null = own?.widget !== undefined && own.widget !== 'todo' ? actionKind(own) : null
+    const tap: ActionKind | null = own?.widget !== undefined && own.widget !== 'todo' && own.widget !== 'calendar' ? actionKind(own) : null
     const inheritLabel = this.layer === 0 ? '割り当てなし' : '透過（下のレイヤーのものを使う）'
     const notes = sel.kind === 'key' ? this.keymap.keys.filter((k) => k.code === sel.code || k.symbol === sel.code).map((k) => k.note).filter(Boolean) : []
 
@@ -1498,7 +1515,8 @@ export class App {
       h('label', { class: 'row' }, 'ウィジェット ', h('select', { 'data-focus': 'widget', id: 'widget',
         onchange: (e: Event) => this.setWidgetKind((e.target as HTMLSelectElement).value as WidgetKind) },
         (Object.keys(WIDGET_LABELS) as WidgetKind[]).map((w) => h('option', { value: w, selected: own.widget === w }, WIDGET_LABELS[w])))),
-      own.widget === 'text' ? this.viewTextEditor(own) : own.widget === 'todo' ? this.viewTodoEditor(own) : this.viewClockEditor(text, missing),
+      own.widget === 'text' ? this.viewTextEditor(own) : own.widget === 'todo' ? this.viewTodoEditor(own)
+        : own.widget === 'calendar' ? this.viewCalendarEditor(own) : this.viewClockEditor(text, missing),
     )
   }
 
@@ -1531,17 +1549,67 @@ export class App {
   private viewTodoEditor(own: ActionSpec): HTMLElement[] {
     const n = this.todo ? `今は ${this.todo.items.filter((i) => !i.done).length} 件が未完了です。` : ''
     return [
-      h('label', { class: 'row', title: '1 ページに並べる項目の数。空なら、セルの高さに入るだけ並べます（1 行 52 ドット）' }, '1 ページの行数 ',
-        h('input', { type: 'number', min: 1, max: TODO_MAX_ROWS, value: own.rows ?? '', placeholder: '自動', 'data-focus': 'rows', id: 'todo-rows', class: 'num',
+      ...this.viewPagerFields(own, '項目', 'todo'),
+      h('p', { class: 'hint' },
+        `項目は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。上の「Todo」タブか、PC で「brain-deck todo add "牛乳を買う"」のように書き換えます。${n}` +
+        'Brain では、項目を 0.5 秒押し続けると完了を切り替えます。入りきらないときは、セルの下の ▲ ▼ でページを送ります。見出しには残りの件数を出します。'),
+      h('button', { class: 'small', onclick: () => this.showSection('todo') }, 'Todo タブを開く'),
+    ]
+  }
+
+  // viewPagerFields は、ページを送るウィジェット（Todo、カレンダー）の、1 ページの行数と、最初のページに戻るまでの時間の欄。
+  private viewPagerFields(own: ActionSpec, what: string, idp: string): HTMLElement[] {
+    const pr = own.page_reset ?? ''
+    const prBad = pr !== '' && pr !== 'off' && !(parseDuration(pr) !== null && parseDuration(pr)! >= 5000 && parseDuration(pr)! <= 86400_000)
+    return [
+      h('label', { class: 'row', title: `1 ページに並べる${what}の数。空なら、セルの高さに入るだけ並べます（1 行 52 ドット）` }, '1 ページの行数 ',
+        h('input', { type: 'number', min: 1, max: TODO_MAX_ROWS, value: own.rows ?? '', placeholder: '自動', 'data-focus': 'rows', id: `${idp}-rows`, class: 'num',
           onchange: (e: Event) => {
             const v = (e.target as HTMLInputElement).value
             this.patchAction({ rows: v === '' ? undefined : Math.min(Math.max(Math.trunc(Number(v)) || 1, 1), TODO_MAX_ROWS) })
           } })),
-      h('p', { class: 'hint' },
-        `項目は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。上の「Todo」タブか、PC で「brain-deck todo add "牛乳を買う"」のように書き換えます。${n}` +
-        'Brain では、項目を 0.5 秒押し続けると完了を切り替えます。入りきらないときは、セルの下の ▲ ▼ でページを送ります。'),
-      h('button', { class: 'small', onclick: () => this.showSection('todo') }, 'Todo タブを開く'),
+      h('label', { class: 'row', title: 'ページを送ってから、この時間だれも触らなければ最初のページに戻ります（30s、2m など。5 秒〜24 時間）。off で戻りません' },
+        '最初のページに戻るまで ',
+        h('input', { value: pr, placeholder: DEFAULT_PAGE_RESET, 'data-focus': 'page_reset', id: `${idp}-page-reset`, class: 'num',
+          onchange: (e: Event) => this.patchAction({ page_reset: (e.target as HTMLInputElement).value.trim() }) })),
+      ...(prBad ? [h('div', { class: 'err' }, '「最初のページに戻るまで」は、30s、2m のような 5 秒から 24 時間の時間か、off です')] : []),
     ]
+  }
+
+  // viewCalendarEditor は、カレンダーのセルの欄。予定は設定ではなく Brain のデータで、PC の brain-deck calendar sync が送る。
+  private viewCalendarEditor(own: ActionSpec): HTMLElement[] {
+    const names = this.calendar?.calendars.map((c) => c.name) ?? []
+    const stale = own.stale ?? ''
+    const staleBad = stale !== '' && !(parseDuration(stale) !== null && parseDuration(stale)! >= 60_000 && parseDuration(stale)! <= 720 * 3600_000)
+    const out: HTMLElement[] = [
+      ...this.viewPagerFields(own, '予定', 'cal'),
+      h('label', { class: 'row', title: '最終更新がこれより古いと、セルの下の「更新」を橙色にして「古い」と出します（1m〜720h。既定 3h）' }, '古いとみなすまで ',
+        h('input', { value: stale, placeholder: '3h', 'data-focus': 'stale', id: 'cal-stale', class: 'num',
+          onchange: (e: Event) => this.patchAction({ stale: (e.target as HTMLInputElement).value.trim() }) })),
+      h('label', { class: 'row', title: '出すカレンダーの名前（brain-deck の calendars.yaml の name）。読点かカンマで区切ります。空ならすべて' }, '出すカレンダー ',
+        h('input', { value: (own.calendars ?? []).join('、'), placeholder: names.length ? `すべて（${names.join('、')}）` : 'すべて', 'data-focus': 'calendars', id: 'cal-names',
+          onchange: (e: Event) => this.patchAction({ calendars: (e.target as HTMLInputElement).value.split(/[,、]/).map((x) => x.trim()).filter(Boolean) }) })),
+    ]
+    if (staleBad) out.push(h('div', { class: 'err' }, '「古いとみなすまで」は、3h、90m のような 1 分から 720 時間の時間です'))
+    const unknown = (own.calendars ?? []).filter((n) => this.calendar && !names.includes(n))
+    if (unknown.length) out.push(h('div', { class: 'warn' }, `Brain にないカレンダーです：${unknown.join('、')}（brain-deck の calendars.yaml の name と合わせてください）`))
+    if (this.connected && this.hello?.commands?.includes('get_calendar')) {
+      const shown = calShown(calWidgetOf(own), this.calendar)
+      const total = shown.reduce((n, c) => n + (c.events?.length ?? 0), 0)
+      const at = shown.map((c) => c.fetched_at).filter(Boolean).sort()[0]
+      const failed = shown.filter((c) => c.error).map((c) => `${c.name}（${c.error}）`)
+      out.push(h('p', { class: 'hint cal-now' }, shown.length
+        ? `今の予定：${shown.map((c) => c.name).join('、')} の ${total} 件。最終更新 ${at ? new Date(at).toLocaleString() : 'なし'}` +
+            (failed.length ? `。取得に失敗：${failed.join('、')}` : '')
+        : '今の予定：まだありません（Brain では「予定を受け取っていません」と出ます）'))
+    } else if (this.connected) {
+      out.push(h('div', { class: 'warn' }, 'Brain の lefthand がカレンダーに対応していません。lefthand を新しくしてください'))
+    }
+    out.push(h('p', { class: 'hint' },
+      '予定は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。PC で「brain-deck calendar sync」を実行すると、' +
+        '~/.config/brain-deck/calendars.yaml に書いたカレンダー（ICS の URL）から予定を取ってきて送ります。今日の予定と次の予定を出し、' +
+        '今の予定は行を塗って目立たせます。入りきらないときは、セルの下の ▲ ▼ でページを送ります。設定 GUI が接続しているあいだは、brain-deck から送れません。'))
+    return out
   }
 
   private viewClockEditor(text: (f: 'format' | 'date_format' | 'tz', label: string, placeholder: string, title: string) => HTMLElement, missing: string[]): (HTMLElement | null)[] {

@@ -5,8 +5,9 @@ import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
 import { LAYER_VERB, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
-import { TODO_EMPTY, TODO_PAD, todoEllipsis, todoGeometry, todoOrder } from './todowidget'
-import type { ActionSpec, Config, PressStyle, TextEntry, TodoItem, TodoList } from './types'
+import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
+import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
+import type { ActionSpec, CalendarData, Config, PressStyle, TextEntry, TodoItem, TodoList } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
 type RGB = [number, number, number]
@@ -28,6 +29,9 @@ const colUnsynced: RGB = [0xff, 0x80, 0x20] // 時刻を合わせていない時
 const colTodoDone: RGB = [0x6a, 0x74, 0x80] // 完了した項目
 const colTodoRule: RGB = [0x30, 0x3c, 0x4c] // 行の区切り
 const colTodoOff: RGB = [0x40, 0x48, 0x54] // これ以上送れないときの ▲ ▼
+// calwidget.go
+const colCalNow: RGB = [0x1e, 0x4a, 0x7c] // 今の予定の行
+const colCalWarn: RGB = colUnsynced // 最終更新が古い、取得に失敗した、時刻を合わせていない
 const modeBorder: Record<Mode, RGB> = { base: colBorder, latched: [0x40, 0xc0, 0x70], temp: [0xff, 0x80, 0x20] }
 const modeBadge: Record<Mode, RGB> = { base: [0x3a, 0x48, 0x5c], latched: [0x2e, 0x9e, 0x5b], temp: [0xff, 0x80, 0x20] }
 const modeBadgeText: Record<Mode, RGB> = { base: colText, latched: colText, temp: [0, 0, 0] }
@@ -57,6 +61,7 @@ export interface CellView {
   clock?: ClockDef // 時計のウィジェット
   textId?: string // テキストのウィジェットの id
   todoRows?: number // Todo のウィジェット（0 なら高さで決める）
+  cal?: CalWidget // カレンダーのウィジェット
 }
 
 interface Rect {
@@ -81,6 +86,7 @@ export function cellView(cfg: Config, a: ActionSpec | null): CellView {
     if (a.widget === 'clock') v.clock = clockDef(a)
     if (a.widget === 'text') v.textId = a.id ?? ''
     if (a.widget === 'todo') v.todoRows = typeof a.rows === 'number' ? a.rows : 0
+    if (a.widget === 'calendar') v.cal = calWidgetOf(a)
     return v
   }
   if (k !== 'key' && k !== 'none') {
@@ -173,6 +179,8 @@ export interface PreviewParams {
   texts?: Record<string, TextEntry> // テキストのタイルの中身（Brain の get_text）
   todo?: TodoList // Todo の一覧（Brain の get_todo）
   todoPage?: number // Todo のセルに出すページ（0 から）
+  calendar?: CalendarData | null // カレンダーの予定（Brain の get_calendar）
+  calendarPage?: number // カレンダーのセルに出すページ（0 から）。省略すると、触っていないときのページ
 }
 
 export interface WidgetEnv {
@@ -181,6 +189,8 @@ export interface WidgetEnv {
   texts: Record<string, TextEntry>
   todo: TodoItem[]
   todoPage: number
+  calendar: CalendarData | null
+  calendarPage?: number
 }
 
 export interface PreviewLayout {
@@ -202,7 +212,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   const fill = (p.pressStyle ?? p.cfg.display?.press_style) === 'fill'
   const px = new Pixels(W, H)
   const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {}, todo: p.todo?.items ?? [],
-    todoPage: p.todoPage ?? 0 }
+    todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -278,14 +288,19 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
 function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env: WidgetEnv, ink: RGB, subInk: RGB): void {
   const area = { ...inner }
   const aw = area.x1 - area.x0
-  if (v.label) {
-    const cap = v.label.replace(/\n/g, ' ')
+  const label = v.todoRows !== undefined ? todoCaption(v.label, env.todo) : v.label
+  if (label) {
+    const cap = label.replace(/\n/g, ' ')
     const s = Math.min(fitScale(font, [cap], aw, FONT_H * captionScale), captionScale)
     drawCentered(font, px, area, area.y0, cap, s, subInk)
     area.y0 += FONT_H * s + widgetLineGap
   }
   if (v.todoRows !== undefined) {
     drawTodo(font, px, area, v.todoRows, env, subInk)
+    return
+  }
+  if (v.cal) {
+    drawCalendar(font, px, area, v.cal, env, subInk)
     return
   }
   if (v.textId !== undefined) {
@@ -346,8 +361,12 @@ function drawTodo(font: BitmapFont, px: Pixels, area: Rect, rows: number, env: W
     if (i > 0) px.fill({ ...r, y1: r.y0 + 1 }, colTodoRule)
     drawTodoRow(font, px, r, items[k], g.scale)
   })
-  if (!g.nav) return
-  px.fill({ ...g.nav, y1: g.nav.y0 + 1 }, colTodoRule)
+  if (g.nav) drawPageNav(font, px, g, page)
+}
+
+// drawPageNav は、ページ送りの帯（▲、ページ番号、▼）を描く（todowidget.go の drawPageNav）。
+function drawPageNav(font: BitmapFont, px: Pixels, g: TodoGeom, page: number): void {
+  px.fill({ ...g.nav!, y1: g.nav!.y0 + 1 }, colTodoRule)
   const arrow = (zone: Rect, s: string, ok: boolean) => {
     const sc = Math.min(fitScale(font, [s], zone.x1 - zone.x0, zone.y1 - zone.y0 - 4), 3)
     drawCentered(font, px, zone, zone.y0 + Math.trunc((zone.y1 - zone.y0 - FONT_H * sc) / 2), s, sc, ok ? colText : colTodoOff)
@@ -358,6 +377,63 @@ function drawTodo(font: BitmapFont, px: Pixels, area: Rect, rows: number, env: W
   const mid = g.mid!
   const s = Math.min(fitScale(font, [p], mid.x1 - mid.x0, FONT_H * 2), 2)
   drawCentered(font, px, mid, mid.y0 + Math.trunc((mid.y1 - mid.y0 - FONT_H * s) / 2), p, s, colSub)
+}
+
+// drawCalendar は calwidget.go の drawCalendar と同じ。area は見出しの下の範囲。
+function drawCalendar(font: BitmapFont, px: Pixels, area: Rect, w: CalWidget, env: WidgetEnv, subInk: RGB): void {
+  const l = calLayout(area, w, env.calendar, env.now.getTime(), env.synced)
+  const aw = area.x1 - area.x0
+  const ah = area.y1 - area.y0
+  if (l.message) {
+    const s = Math.min(fitScale(font, [l.message], aw, ah), 2)
+    drawCentered(font, px, area, area.y0 + Math.trunc((ah - FONT_H * s) / 2), l.message, s, subInk)
+    return
+  }
+  const g = l.geom
+  const rows = l.rows ?? []
+  const page = Math.max(Math.min(env.calendarPage ?? l.auto_page, g.pages - 1), 0)
+  g.rows.forEach((r, i) => {
+    const k = page * g.per + i
+    if (k >= rows.length) return
+    if (i > 0) px.fill({ ...r, y1: r.y0 + 1 }, colTodoRule)
+    drawCalRow(font, px, r, rows[k], l.scale)
+  })
+  if (g.nav) drawPageNav(font, px, g, page)
+  const f = todoEllipsis(font, l.footer, Math.trunc(aw / l.footer_scale))
+  px.text(font, area.x0, l.footerY, f, l.footer_scale, l.footer_warn ? colCalWarn : colSub, area)
+}
+
+function hexColor(s: string): RGB {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(s)
+  if (!m) return colSub
+  const v = parseInt(m[1], 16)
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255]
+}
+
+// drawCalRow は 1 行を描く。左にカレンダーの色の帯、時刻、予定の名前（calwidget.go の drawCalRow）。
+function drawCalRow(font: BitmapFont, px: Pixels, r: Rect, row: CalRow, s: number): void {
+  let labelC = colSub
+  let titleC = colText
+  if (row.state === CAL_NOW) {
+    px.fill(inset(r, 1), colCalNow)
+    labelC = colText
+  } else if (row.state === CAL_PAST) [labelC, titleC] = [colTodoDone, colTodoDone]
+  else if (row.state === CAL_INFO) titleC = colSub
+  let x = r.x0 + TODO_PAD
+  if (row.color) {
+    const c = row.state === CAL_PAST ? colTodoDone : hexColor(row.color)
+    const bh = FONT_H * s
+    const y = r.y0 + Math.trunc((r.y1 - r.y0 - bh) / 2)
+    px.fill({ x0: x, y0: y, x1: x + CAL_BAR_W * s, y1: y + bh }, c)
+    x += CAL_BAR_W * s + TODO_PAD
+  }
+  const ty = r.y0 + Math.trunc((r.y1 - r.y0 - FONT_H * s) / 2)
+  if (row.label) {
+    px.text(font, x, ty, row.label, s, labelC, r)
+    x += Math.max(font.textWidth(row.label), font.textWidth(CAL_TIME_COL)) * s + 4 * s
+  }
+  const w = Math.trunc((r.x1 - TODO_PAD - x) / s)
+  if (w > 0) px.text(font, x, ty, todoEllipsis(font, row.title, w), s, titleC, r)
 }
 
 // drawTodoRow は 1 行を描く。左にチェックの箱、右に項目の文（完了なら薄く、取り消し線）。

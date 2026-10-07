@@ -12,6 +12,8 @@ if (new URLSearchParams(location.search).has('demo')) {
     daemon.texts = { build: { text: 'ビルド成功', style: 'ok', set_at: new Date().toISOString() } }
     // Todo を試すための項目（brain-deck todo add と同じ）。lefthandDemo.toggleTodo('t1') で、Brain で長押ししたことにできる
     for (const text of ['牛乳を買う', 'PR #42 のレビュー', '歯医者の予約']) daemon.todoCmd({ cmd: 'todo_add', text, source: 'brain-deck' })
+    // カレンダーを試すための予定（brain-deck calendar sync で送るものと同じ形）
+    daemon.calendar = demo.demoCalendar()
     const { serial } = demo.fakeSerial()
     const app = new App(root, { serial, openTransport: async () => new demo.FakeTransport(daemon) })
     document.title = 'lefthand 設定（デモ）'

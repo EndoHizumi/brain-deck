@@ -13,16 +13,16 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   layer_toggle: '押すたびに出し入れ（layer_toggle）',
   layer_oneshot: '次の 1 キーだけ（layer_oneshot）',
   layer_to: 'そのレイヤーへ移る（layer_to）',
-  widget: 'ウィジェット（時計、テキスト、Todo）',
+  widget: 'ウィジェット（時計、テキスト、Todo、カレンダー）',
 }
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
-export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo' }
+export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー' }
 // widget.go の既定の書式
 export const DEFAULT_CLOCK_FORMAT = '15:04'
 export const DEFAULT_DATE_FORMAT = '1月2日({wday})'
 // ウィジェットにだけ書ける項目
-export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows'] as const
+export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars'] as const
 // ウィジェットの種類ごとの項目
 export const CLOCK_FIELDS = ['format', 'date_format', 'tz'] as const
 

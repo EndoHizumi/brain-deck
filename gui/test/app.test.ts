@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app'
-import { FakeDaemon, FakeTransport, fakeSerial } from '../src/demo'
+import { FakeDaemon, FakeTransport, demoCalendar, fakeSerial } from '../src/demo'
 import type { Transport } from '../src/protocol'
 import { toYAML } from '../src/yamlio'
 import { sampleConfig, testFont } from './helpers'
@@ -452,5 +452,40 @@ describe('Todo', () => {
     expect(toYAML(t.app.cfg!)).toContain('rows: 2')
     t.click('#section-todo')
     expect(t.root.textContent).not.toContain('Todo のセルがない')
+  })
+
+  it('セルをカレンダーにすると、行数、戻るまでの時間、古いとみなすまで、出すカレンダーを決められる。Brain の予定を出す', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.calendar = demoCalendar(new Date('2026-10-06T09:41:27+09:00'))
+    const t = await connected(setup({ daemon }))
+    expect(t.cmds()).toContain('get_calendar')
+    expect(t.app.calendar?.calendars.map((c) => c.name)).toEqual(['仕事', '家'])
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    t.change('#tap', 'key')
+    t.change('#combo-text', 'F5')
+    t.change('#widget', 'calendar')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'calendar', label: '消しゴム' })
+    expect(t.root.querySelector('#tap')).toBeNull()
+    expect(t.$('.inspector').textContent).toContain('仕事、家 の 6 件')
+    t.change('#cal-rows', '3')
+    t.change('#cal-page-reset', '30s')
+    t.change('#cal-stale', '2h')
+    t.change('#cal-names', '家、 仕事')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'calendar', label: '消しゴム', rows: 3, page_reset: '30s', stale: '2h',
+      calendars: ['家', '仕事'] })
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.change('#cal-names', '学校')
+    expect(t.$('.inspector').textContent).toContain('Brain にないカレンダーです：学校')
+    t.change('#cal-stale', 'soon')
+    expect(t.$('.inspector').textContent).toContain('1 分から 720 時間')
+    t.change('#cal-names', '')
+    t.change('#cal-stale', '')
+    t.change('#cal-page-reset', '')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'calendar', label: '消しゴム', rows: 3 })
+    // 時計にすると、カレンダーの項目は消える
+    t.change('#cal-page-reset', 'off')
+    t.change('#widget', 'clock')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
   })
 })

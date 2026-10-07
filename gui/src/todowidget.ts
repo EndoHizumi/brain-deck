@@ -75,3 +75,11 @@ export function todoEllipsis(font: BitmapFont, s: string, w: number): string {
   while (r.length > 0 && font.textWidth(r.join('') + ELLIPSIS) > w) r = r.slice(0, -1)
   return r.join('') + ELLIPSIS
 }
+
+// todoCaption は、Todo のセルの見出し。label のあとに、残り（未完了）の件数を足す。項目がなければ label だけ。
+export function todoCaption(label: string, items: TodoItem[]): string {
+  if (!items.length) return label
+  const n = items.filter((i) => !i.done).length
+  const c = n === 0 ? 'すべて完了' : `残り ${n}`
+  return label === '' ? c : `${label} ${c}`
+}

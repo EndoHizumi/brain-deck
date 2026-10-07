@@ -92,6 +92,28 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // カレンダーのウィジェット。config/widgets-example.yaml の「予定」レイヤー、予定は fixtures/calendar.json（-render-calendar）
+  // TZ=Asia/Tokyo go run . -render-png ... -render-layer calendar -render-calendar gui/test/fixtures/calendar.json ...
+  const calLayer = wcfg.layers.findIndex((l) => l.name === 'calendar')
+  const calJSON = (f: string) => JSON.parse(repoFile(`gui/test/fixtures/${f}`).toString('utf8'))
+  const ccases: { file: string; data: string | null; page?: number; synced?: boolean }[] = [
+    { file: 'calendar.png', data: 'calendar.json' },
+    { file: 'calendar-page2.png', data: 'calendar.json', page: 1 },
+    { file: 'calendar-stale.png', data: 'calendar-stale.json' },
+    { file: 'calendar-none.png', data: null, synced: false },
+  ]
+  for (const c of ccases) {
+    it(`カレンダーも lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: wcfg, stack: [0, calLayer], mode: 'latched', now, synced: c.synced,
+        calendar: c.data ? calJSON(c.data) : null, calendarPage: c.page })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   it('press_style を省略すると枠を光らせ、設定の press_style に従う', () => {
     const at = (pixels: Uint8ClampedArray, x: number, y: number) => Array.from(pixels.slice((y * 800 + x) * 4, (y * 800 + x) * 4 + 3))
     const pressed = new Set(['1,1'])

@@ -7,7 +7,7 @@ import keymapJSON from './keymap-pwsh2.json'
 import { LAYER_KINDS, actionKind, actionTarget, parseCellKey, spanOf } from './model'
 import type { Transport } from './protocol'
 import { TEXT_ID_PATTERN } from './textwidget'
-import type { ActionSpec, Config, KeymapInfo, Problem, TextEntry, TodoItem, TodoList } from './types'
+import type { ActionSpec, CalendarData, Config, KeymapInfo, Problem, TextEntry, TodoItem, TodoList } from './types'
 
 const keymap = keymapJSON as KeymapInfo
 const SOURCE_KEYS = new Set(keymap.keys.flatMap((k) => [k.code, k.symbol]).filter(Boolean) as string[])
@@ -24,6 +24,7 @@ export class FakeDaemon {
   timeSynced = false
   texts: Record<string, TextEntry> = {} // テキストのタイルの中身
   todo: TodoList = { rev: 0, items: [] } // Todo の一覧
+  calendar: CalendarData = { rev: 0, calendars: [] } // カレンダーの予定（brain-deck calendar sync が送るもの）
   private nextTodo = 1
   dataSubscribed = false
   // 通知を送る先（FakeTransport が設定する）
@@ -58,7 +59,8 @@ export class FakeDaemon {
       case 'hello':
         return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
           commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
-            'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data'] })
+            'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
+            'set_calendar', 'get_calendar'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
@@ -92,6 +94,12 @@ export class FakeDaemon {
         if (typeof r === 'string') return err(r, r)
         return ok({ ...r, rev: this.todo.rev, items: this.todo.items })
       }
+      case 'get_calendar':
+        return ok({ ...this.calendar, shown: this.config.layers.some((l) => Object.values(l.touch?.cells ?? {}).some((a) => a.widget === 'calendar')) })
+      case 'set_calendar':
+        if (!Array.isArray(req.calendars)) return err('bad_request', '"calendars" (an array) is required')
+        this.calendar = { rev: this.calendar.rev + 1, received_at: new Date().toISOString(), from: req.from, days: req.days, calendars: req.calendars }
+        return ok({ rev: this.calendar.rev, calendars: req.calendars.map((c: any) => ({ name: c.name, events: c.events?.length ?? 0 })) })
       case 'subscribe_data':
         this.dataSubscribed = req.enable !== false
         return ok({ subscribed: this.dataSubscribed, events: ['todo'] })
@@ -226,9 +234,13 @@ export function validate(cfg: Config): Problem[] {
     if (n > 1 || (n === 0 && !a.widget))
       return out.push({ path, message: `${where}: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to (a widget cell may omit them)` })
     if (!cell && (a.widget || a.span)) return out.push({ path, message: `${where}: widget and span can be used only in touch cells` })
-    if (a.widget && a.widget !== 'clock' && a.widget !== 'text' && a.widget !== 'todo') out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo)` })
+    if (a.widget && !['clock', 'text', 'todo', 'calendar'].includes(a.widget)) out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar)` })
     if (a.widget === 'todo' && n > 0) out.push({ path, message: `${where}: widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*` })
-    if (a.rows !== undefined && a.widget !== 'todo') out.push({ path, message: `${where}: rows is for widget: todo` })
+    if (a.widget === 'calendar' && n > 0) out.push({ path, message: `${where}: widget: calendar handles taps itself (▲▼ to turn pages); remove key and layer_*` })
+    const paged = a.widget === 'todo' || a.widget === 'calendar'
+    if (a.rows !== undefined && !paged) out.push({ path, message: `${where}: rows is for widget: todo and calendar` })
+    if (a.page_reset !== undefined && !paged) out.push({ path, message: `${where}: page_reset is for widget: todo and calendar` })
+    if ((a.stale !== undefined || a.calendars !== undefined) && a.widget !== 'calendar') out.push({ path, message: `${where}: stale and calendars are for widget: calendar` })
     if (a.rows !== undefined && !(Number.isInteger(a.rows) && a.rows >= 1 && a.rows <= 20)) out.push({ path, message: `${where}: rows must be 1..20 (omit it to fit the cell height)` })
     if (a.widget === 'text' && !TEXT_ID_PATTERN.test(a.id ?? '')) out.push({ path, message: `${where}: widget: text needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
     if (a.widget !== 'text' && a.id) out.push({ path, message: `${where}: id is for widget: text` })
@@ -352,4 +364,22 @@ export function fakeSerial(): { serial: Serial; port: SerialPort } {
     removeEventListener: () => {},
   } as unknown as Serial
   return { serial, port }
+}
+
+// demoCalendar は、デモで見せる予定（今日の今の前後と、明日）。brain-deck calendar sync が送るものと同じ形。
+export function demoCalendar(now = new Date()): CalendarData {
+  const at = (dayOff: number, h: number, m = 0) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOff, h, m).toISOString()
+  const ev = (title: string, d: number, h0: number, m0: number, h1: number, m1: number) => ({ title, start: at(d, h0, m0), end: at(d, h1, m1) })
+  const hr = now.getHours()
+  const day = (off: number) => {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + off)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  return { rev: 1, received_at: now.toISOString(), from: day(0), days: 7, source: 'brain-deck', calendars: [
+    { name: '仕事', color: '#4f9dff', fetched_at: new Date(now.getTime() - 5 * 60000).toISOString(), events: [
+      ev('朝会', 0, Math.max(hr - 2, 0), 0, Math.max(hr - 2, 0), 30), ev('設計レビュー', 0, hr, 0, Math.min(hr + 1, 23), 0),
+      ev('1on1', 0, Math.min(hr + 2, 23), 0, Math.min(hr + 2, 23), 30), ev('定例', 1, 10, 0, 11, 0)] },
+    { name: '家', color: '#50d880', fetched_at: new Date(now.getTime() - 5 * 60000).toISOString(), events: [
+      { title: '燃えないごみ', day: day(1) }, ev('ジム', 0, Math.min(hr + 4, 23), 0, Math.min(hr + 5, 23), 30)] },
+  ] }
 }

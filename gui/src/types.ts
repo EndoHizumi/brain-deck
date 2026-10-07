@@ -15,10 +15,13 @@ export interface ActionSpec {
   date_format?: string // clock：日付の行。none で出さない
   tz?: string // clock：タイムゾーン（IANA の名前）
   id?: string // text：中身の名前（set_text の name）
-  rows?: number // todo：1 ページの行数。省略すると高さで決める
+  rows?: number // todo、calendar：1 ページの行数。省略すると高さで決める
+  page_reset?: string // todo、calendar：触らなければ最初のページに戻るまでの時間（30s、2m など）。off で戻らない
+  stale?: string // calendar：最終更新がこれより古ければ、古いと出す（3h など）
+  calendars?: string[] // calendar：出すカレンダーの名前。省略するとすべて
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar'
 
 export interface SoftArea {
   x: [number, number]
@@ -172,6 +175,34 @@ export interface TodoResult extends TodoList {
   item?: TodoItem
   shown?: boolean // 設定に Todo のセルがあるか（get_todo、todo_add）
   removed?: number // todo_clear_done
+}
+
+// カレンダーの予定（get_calendar。calendar.go の CalendarData）
+export interface CalEvent {
+  title: string
+  start?: string // 時刻の決まった予定（RFC 3339）
+  end?: string
+  day?: string // 終日の予定（YYYY-MM-DD）
+  end_day?: string // この日は含まない。省略すると day の次の日
+  location?: string
+}
+
+export interface Calendar {
+  name: string
+  color: string // #rrggbb
+  fetched_at?: string // 予定を取ってきた時刻（PC の時刻）
+  error?: string // 最後の取得の失敗（前の予定を残している）
+  events: CalEvent[]
+}
+
+export interface CalendarData {
+  rev: number
+  received_at?: string
+  from?: string
+  days?: number
+  source?: string
+  calendars: Calendar[]
+  shown?: boolean // 設定にカレンダーのセルがあるか（get_calendar）
 }
 
 export interface ValidateResult {

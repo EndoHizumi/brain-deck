@@ -118,6 +118,7 @@ layers:
       rows: 3
       cells:
         "0,2": {layer_to: todo, label: Todo}
+        "1,2": {layer_to: calendar, label: 予定}
         "0,0": {layer_to: code, label: コード}
         "0,1": {layer_to: symbol, label: 記号}
         "1,0": {layer_to: browser, label: ブラウザ}
@@ -287,6 +288,21 @@ layers:
         "2,0": {widget: clock, span: [2, 1]}
         "2,1": {widget: text, id: build, label: ビルド}
         "3,1": {widget: text, id: deploy, label: デプロイ}
+        "2,2": {layer_to: menu, label: メニュー}
+        "3,2": {layer_to: base, label: 基本}
+  - name: calendar
+    label: 予定
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 今日の予定と次の予定（2 列 × 3 行ぶん）。今の予定は行を塗り、終わった予定は薄く出す。
+        # 入りきらないときは、下の ▲ ▼ でページを送る（1 分触らなければ、今の予定のページに戻る）。
+        # 予定は PC で `brain-deck calendar sync` を実行して送る（README の「カレンダー」）
+        "0,0": {widget: calendar, span: [2, 3], label: 予定}
+        "2,0": {widget: clock, span: [2, 1]}
+        # calendars で、出すカレンダーを選べる（brain-deck の calendars.yaml の name）
+        "2,1": {widget: calendar, span: [2, 1], calendars: [家], label: 家}
         "2,2": {layer_to: menu, label: メニュー}
         "3,2": {layer_to: base, label: 基本}
 display:
