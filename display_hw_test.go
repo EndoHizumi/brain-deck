@@ -5,6 +5,8 @@ import (
 	"image"
 	"os"
 	"runtime"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -401,4 +403,181 @@ func TestHWTodo(t *testing.T) {
 	ts.Add("PC から足した項目", 0, time.Now(), "test")
 	t.Logf("added from the PC: redrawn in %v", waitKey("added", t0))
 	same("added")
+}
+
+// TestHWBackground は、背景画像のある設定を実機の画面に出し、レイヤーの切り替えと、押したとき・離したときの
+// 描き直しの時間を、同じ設定から背景画像を除いたものと比べる。画面が全体を描いたものと同じになることも確かめる。
+// 設定と画像は LEFTHAND_HW_BG_CONFIG（既定 background-example.yaml）と LEFTHAND_HW_BG_IMAGES（既定 bgimages）。
+//
+//	sudo LEFTHAND_HW_TEST=1 timeout 120 ./lefthand.test -test.run HWBackground -test.v
+func TestHWBackground(t *testing.T) {
+	if os.Getenv("LEFTHAND_HW_TEST") == "" {
+		t.Skip("set LEFTHAND_HW_TEST=1 on the device")
+	}
+	hwProcs(t)
+	cfgPath, imgDir := os.Getenv("LEFTHAND_HW_BG_CONFIG"), os.Getenv("LEFTHAND_HW_BG_IMAGES")
+	if cfgPath == "" {
+		cfgPath = "background-example.yaml"
+	}
+	if imgDir == "" {
+		imgDir = "bgimages"
+	}
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	km, _, err := compileKeymap(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 同じ設定から背景画像を除いたもの
+	y, _ := marshalConfig(cfg)
+	plainCfg, _ := parseConfig(y)
+	for i := range plainCfg.Layers {
+		if g := plainCfg.Layers[i].Touch; g != nil {
+			g.Background = ""
+			for k, a := range g.Cells {
+				a.Background = ""
+				g.Cells[k] = a
+			}
+		}
+	}
+	plainKm, _, err := compileKeymap(plainCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := NewImageStore(imgDir)
+	env := func() WidgetEnv { return WidgetEnv{Now: time.Now(), TimeSynced: true} }
+	idx := func(name string) int {
+		for i, l := range km.Layers {
+			if l.Name == name {
+				return i
+			}
+		}
+		t.Fatalf("no layer %q", name)
+		return 0
+	}
+	layers := []int{idx("menu"), idx("dashboard"), 0}
+	stack := func(li int) []int {
+		if li == 0 {
+			return []int{0}
+		}
+		return []int{0, li}
+	}
+	var gen uint64 = 1000
+	layout := func(k *Keymap, li int) *Layout {
+		v := k.view(stack(li))
+		gen++
+		v.Gen = gen
+		return buildLayout(k, v)
+	}
+	first := layout(km, 0)
+	d, err := StartDisplay(cfg.Display, first, env, images)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	switchTo := func(l *Layout) time.Duration {
+		t0 := time.Now()
+		d.SetLayout(l)
+		for time.Since(t0) < 5*time.Second {
+			d.drawMu.Lock()
+			done := d.layout == l
+			d.drawMu.Unlock()
+			if done {
+				return time.Since(t0)
+			}
+			time.Sleep(500 * time.Microsecond)
+		}
+		t.Fatal("layer not redrawn")
+		return 0
+	}
+	waitDrawn := func(i int, on bool) time.Duration {
+		t0 := time.Now()
+		for time.Since(t0) < 2*time.Second {
+			d.drawMu.Lock()
+			ok := d.drawn[i] == on
+			d.drawMu.Unlock()
+			if ok {
+				return time.Since(t0)
+			}
+			time.Sleep(200 * time.Microsecond)
+		}
+		t.Fatalf("cell %d not redrawn", i)
+		return 0
+	}
+	stats := func(ds []time.Duration) string {
+		s := append([]time.Duration(nil), ds...)
+		sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+		return fmt.Sprintf("min %v / median %v / max %v (n=%d)", s[0].Round(100*time.Microsecond), s[len(s)/2].Round(100*time.Microsecond),
+			s[len(s)-1].Round(100*time.Microsecond), len(s))
+	}
+
+	// 1 回目（画像をまだ読み込んでいない）のレイヤーの切り替え
+	images.mu.Lock()
+	images.cache, images.cached = map[string]*cachedImage{}, 0
+	images.mu.Unlock()
+	verbose = true // 読み込みと描き直しの内訳をログに出す
+	for _, li := range layers {
+		t.Logf("background: first switch to %q (loads images from the SD card): %v", km.Layers[li].Name, switchTo(layout(km, li)))
+	}
+	verbose = false
+	for _, c := range []struct {
+		name string
+		k    *Keymap
+	}{{"plain", plainKm}, {"background", km}} {
+		per := map[int][]time.Duration{}
+		for round := 0; round < 6; round++ {
+			for _, li := range layers {
+				per[li] = append(per[li], switchTo(layout(c.k, li)))
+			}
+		}
+		for _, li := range layers {
+			t.Logf("%s: switch to %q: %s", c.name, km.Layers[li].Name, stats(per[li]))
+		}
+		// base で、背景画像のあるセル（0,0）とないセル（1,1）を押して離す
+		l := layout(c.k, 0)
+		switchTo(l)
+		for _, cell := range []struct{ col, row int }{{0, 0}, {1, 1}, {3, 2}} {
+			i := cell.row*l.Cols + cell.col
+			var press, release []time.Duration
+			for n := 0; n < 10; n++ {
+				t0 := time.Now()
+				d.SetPressed(l.Gen, cell.col, cell.row, true)
+				if el := time.Since(t0); el > hwInputLimit {
+					t.Errorf("SetPressed blocked for %v", el)
+				}
+				press = append(press, waitDrawn(i, true))
+				d.SetPressed(l.Gen, cell.col, cell.row, false)
+				release = append(release, waitDrawn(i, false))
+			}
+			bg := l.Cells[i].Background != ""
+			t.Logf("%s: cell %d,%d (own image %v) press %s, release %s", c.name, cell.col, cell.row, bg, stats(press), stats(release))
+		}
+	}
+
+	// 背景画像のある画面が、全体を描いたものと同じであること（押したときも）
+	for _, li := range layers {
+		l := layout(km, li)
+		switchTo(l)
+		hwSameAsFull(t, d, env, "bg-"+km.Layers[li].Name)
+	}
+	l := layout(km, 0)
+	switchTo(l)
+	d.SetPressed(l.Gen, 0, 0, true)
+	waitDrawn(0, true)
+	hwSameAsFull(t, d, env, "bg-base-pressed")
+	d.SetPressed(l.Gen, 0, 0, false)
+	waitDrawn(0, false)
+
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	status, _ := os.ReadFile("/proc/self/status")
+	rss := ""
+	for _, ln := range strings.Split(string(status), "\n") {
+		if strings.HasPrefix(ln, "VmRSS") {
+			rss = strings.TrimSpace(strings.TrimPrefix(ln, "VmRSS:"))
+		}
+	}
+	t.Logf("memory: image cache %d KiB (limit %d KiB), Go heap in use %d KiB, RSS %s", images.CacheBytes()>>10, imageCacheBytes>>10, ms.HeapInuse>>10, rss)
 }
