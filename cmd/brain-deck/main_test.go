@@ -83,6 +83,7 @@ func TestReportExitCodes(t *testing.T) {
 
 // fakeBrain は PTY のマスター側で、lefthand の代わりに返事をする。
 type fakeBrain struct {
+	mouse   bool // USB にマウスがあるか（set_usb_mode）
 	master  *os.File
 	slave   string
 	got     chan map[string]any
@@ -140,7 +141,12 @@ func (f *fakeBrain) serve(commands []string) {
 			}
 			res = map[string]any{"protocol": 1, "daemon": "lefthand", "version": "test", "commands": commands}
 		case "get_status":
-			res = map[string]any{"time": map[string]any{"now": time.Now().Format(time.RFC3339Nano), "synced": true}}
+			res = map[string]any{"time": map[string]any{"now": time.Now().Format(time.RFC3339Nano), "synced": true},
+				"hid": map[string]any{"mouse": f.mouse, "switching": false}}
+		case "set_usb_mode":
+			want := map[string]bool{"mouse": true, "keyboard": false, "toggle": !f.mouse}[req["mode"].(string)]
+			res = map[string]any{"mouse": want, "switching": want != f.mouse}
+			f.mouse = want
 		case "set_text":
 			if req["style"] == "pink" {
 				b, _ := json.Marshal(map[string]any{"id": req["id"], "ok": false, "error": map[string]any{"code": "bad_request", "message": "unknown style"}})
@@ -241,6 +247,27 @@ func TestTextAgainstFakeBrain(t *testing.T) {
 	}
 	if code, _, errs := runCLI(t, "--port", f.slave, "text", "build", "x", "--style", "pink"); code != exitBrainError || !strings.Contains(errs, "unknown style") {
 		t.Errorf("brain error: exit %d %s", code, errs)
+	}
+}
+
+func TestUSBMode(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := newFakeBrain(t)
+	go f.serve([]string{"hello", "get_status", "set_usb_mode"})
+	if code, out, errs := runCLI(t, "--port", f.slave, "usb-mode"); code != exitOK || !strings.Contains(out, "キーボードだけ") {
+		t.Fatalf("show: %d %s %s", code, out, errs)
+	}
+	if code, out, errs := runCLI(t, "--port", f.slave, "usb-mode", "mouse"); code != exitOK || !strings.Contains(out, "キーボードとマウス の形に切り替えます") {
+		t.Fatalf("mouse: %d %s %s", code, out, errs)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "usb-mode", "mouse"); code != exitOK || !strings.Contains(out, "すでに") {
+		t.Fatalf("again: %d %s", code, out)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "status"); code != exitOK || !strings.Contains(out, "USB\tキーボードとマウス") {
+		t.Fatalf("status: %d %s", code, out)
+	}
+	if code, _, _ := runCLI(t, "--port", f.slave, "usb-mode", "on"); code != exitUsage {
+		t.Fatalf("bad mode: %d", code)
 	}
 }
 

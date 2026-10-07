@@ -82,7 +82,9 @@ const usage = `使い方：
   brain-deck images put <ファイル.565|ディレクトリ>...  変換済みの画像を送る（PNG などは設定 GUI で変換する）
   brain-deck images prune [--dry-run] 今の設定で使っていない背景画像を消す
   brain-deck time sync                PC の時刻を Brain に送る
-  brain-deck status                   Brain の状態（版、時刻、レイヤー）
+  brain-deck status                   Brain の状態（版、時刻、レイヤー、USB の形）
+  brain-deck usb-mode [keyboard|mouse|toggle]  USB の形を見る・切り替える。keyboard はキーボードだけ（ブートキーボード。
+                                      起動したときの形）、mouse はキーボードとマウス。USB を付け直すので、2〜3 秒切れる
   brain-deck version
 
 共通のオプション：
@@ -271,6 +273,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			err = usageError("status は引数を取りません")
 		}
 		cmd = status
+	case "usb-mode":
+		cmd, err = usbModeCommand(o)
 	default:
 		err = usageError("知らないコマンド " + strconv.Quote(o.args[0]))
 	}
@@ -556,6 +560,7 @@ func status(c *Client) (string, error) {
 		} `json:"status"`
 		Uptime int      `json:"uptime_sec"`
 		Time   timeInfo `json:"time"`
+		HID    *usbHID  `json:"hid"`
 	}
 	json.Unmarshal(raw, &st)
 	sync := "合わせてある"
@@ -563,7 +568,76 @@ func status(c *Client) (string, error) {
 		sync = "未設定（brain-deck time sync で合わせる）"
 	}
 	off := time.Until(st.Time.Now).Round(time.Second)
-	return fmt.Sprintf("ポート\t%s\nlefthand\t%s（起動から %v）\nレイヤー\t%s\nBrain の時刻\t%s（%s、PC との差 %v）",
+	out := fmt.Sprintf("ポート\t%s\nlefthand\t%s（起動から %v）\nレイヤー\t%s\nBrain の時刻\t%s（%s、PC との差 %v）",
 		c.Port, c.Hello.Version, time.Duration(st.Uptime)*time.Second, st.Status.Label,
-		st.Time.Now.Format("2006-01-02 15:04:05 MST"), sync, off), nil
+		st.Time.Now.Format("2006-01-02 15:04:05 MST"), sync, off)
+	if st.HID != nil {
+		out += "\nUSB\t" + st.HID.describe()
+	}
+	return out, nil
+}
+
+// usbHID は get_status の hid。
+type usbHID struct {
+	Mouse     bool `json:"mouse"`
+	Switching bool `json:"switching"`
+}
+
+func (h usbHID) describe() string {
+	s := "キーボードだけ（ブートキーボード）"
+	if h.Mouse {
+		s = "キーボードとマウス"
+	}
+	if h.Switching {
+		s += "（切り替え中）"
+	}
+	return s
+}
+
+// usbModeCommand は usb-mode。引数がなければ今の形を出し、あれば切り替える。
+func usbModeCommand(o *options) (func(*Client) (string, error), error) {
+	if len(o.args) > 2 {
+		return nil, usageError("usb-mode の引数は keyboard、mouse、toggle のどれか 1 つです")
+	}
+	if len(o.args) == 1 {
+		return func(c *Client) (string, error) {
+			raw, err := c.Call("get_status", nil, callTimeout())
+			if err != nil {
+				return "", err
+			}
+			var st struct {
+				HID *usbHID `json:"hid"`
+			}
+			json.Unmarshal(raw, &st)
+			if st.HID == nil {
+				return "", errors.New("Brain の lefthand が古く、USB の形を切り替えられません")
+			}
+			return "USB は " + st.HID.describe(), nil
+		}, nil
+	}
+	mode := o.args[1]
+	switch mode {
+	case "keyboard", "mouse", "toggle":
+	default:
+		return nil, usageError("usb-mode の引数は keyboard、mouse、toggle のどれかです（" + strconv.Quote(mode) + "）")
+	}
+	return func(c *Client) (string, error) {
+		if !c.Hello.has("set_usb_mode") {
+			return "", errors.New("Brain の lefthand が古く、USB の形を切り替えられません")
+		}
+		raw, err := c.Call("set_usb_mode", map[string]any{"mode": mode}, callTimeout())
+		if err != nil {
+			return "", err
+		}
+		var r struct {
+			Mouse     bool `json:"mouse"`
+			Switching bool `json:"switching"`
+		}
+		json.Unmarshal(raw, &r)
+		h := usbHID{Mouse: r.Mouse}
+		if !r.Switching {
+			return "USB はすでに " + h.describe() + " の形です", nil
+		}
+		return "USB を " + h.describe() + " の形に切り替えます。2〜3 秒、キー入力、SSH、シリアルが切れます", nil
+	}, nil
 }
