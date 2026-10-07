@@ -6,6 +6,110 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：カレンダー（2026-10-07、フェーズ 4）
+
+カレンダーのセル（`widget: calendar`）と、PC で ICS の予定を取ってきて送る `brain-deck calendar sync` を作った。
+フェーズ 3 のあとで決めた Todo の 2 つ（見出しに残りの件数、しばらく触らなければ 1 ページ目に戻る）も入れた。
+デーモンは実機のサービスに反映済み（8c01c74）。本番の設定（`/etc/lefthand/config.yaml`）は変えていないので、今の画面にカレンダーは出ていない。本番のデータ（`/var/lib/lefthand/`）にも予定を送っていない。
+
+### 作ったもの
+
+| 項目 | 内容 |
+| --- | --- |
+| カレンダーのセル | `{ widget: calendar, span: [2, 3], label: 予定 }`。`rows`、`page_reset`（既定 1m）、`stale`（既定 3h）、`calendars: [家]` |
+| 表示 | 今日の予定（終日、時刻の順）と、今日より先の次の予定を 1 つ。左にカレンダーの色の帯、時刻の欄、名前（入りきらなければ「…」）。今日の予定がなければ「今日の予定はありません」 |
+| 今の予定 | 行を青（#1e4a7c）で塗り、時刻の欄を終わりの時刻（`〜10:30`）にする。終わった予定は薄く、次の予定は `明日 10:00` / `10/9(金) 10:00` |
+| 最終更新 | いちばん下に「更新 10:35」（今日でなければ日付も）。古い（stale）、取得に失敗した、Brain の時刻を合わせていないときは橙色で「古い」「失敗 1」「時刻未設定」 |
+| ページ送り | Todo と同じ ▲▼。触っていないときは、今かこれからの予定があるページ（朝の予定が多くても、今の予定が見える） |
+| 描き直し | 予定の始まりと終わり、日付の変わり目、古くなる時刻、受け取ったとき、ページを送ったときだけ |
+| データ | `/var/lib/lefthand/calendar.json`。取得に失敗したカレンダーは、前の予定と最終更新を残す。送られなかったカレンダーは消す。1000 件まで |
+| プロトコル | `set_calendar`（まとめて差し替え）、`get_calendar` |
+| brain-deck | `calendar sync [--ics URL]... [--days N] [--dry-run] [--config パス] [--fetch-timeout 30s]`、`calendar [list] [--json]`、`calendar clear`。終了コード 7（取得に失敗。取れたものは送る） |
+| ICS の解釈 | RRULE（展開は rrule-go）、EXDATE、RDATE、RECURRENCE-ID、STATUS:CANCELLED、終日と何日も続く予定、DURATION、IANA・Windows の名前・VTIMEZONE・floating（X-WR-TIMEZONE）のタイムゾーン、折り返し、BOM |
+| 秘密の URL | `~/.config/brain-deck/calendars.yaml`（リポジトリに入れない。README は伏せた例だけ）。ほかの人が読めると注意。エラー、`-v` のログ、Brain に送るデータには URL を出さない（ホスト名だけ） |
+| Todo | 見出しに「Todo 残り 3」（すべて完了なら「すべて完了」）。ページを送って 1 分触らなければ 1 ページ目に戻る（`page_reset`） |
+| 設定 GUI | ウィジェットに「カレンダー」。行数、戻るまで、古いとみなすまで、出すカレンダーを編集。Brain の予定（get_calendar）でプレビュー。Todo にも「戻るまで」 |
+| 設定の例 | `config/widgets-example.yaml` に「予定」レイヤー（メニューの「予定」から入る） |
+
+### 確認
+
+- **ホスト側のテスト**：Go（デーモンと brain-deck。race 検出つきも）と設定 GUI（88 件）がすべて通った。brain-deck は macOS（arm64、amd64）向けにもビルドできた。
+- **プレビュー**：カレンダーの PNG 4 枚（今の予定があるページ、2 ページ目、古くて取得に失敗、受け取っていない）と、作り直した Todo の PNG 2 枚が `-render-png` と画素単位で一致した。行、ページ、最終更新の決め方は、Go が書いた 360 通りの表と一致した。
+- **ICS の展開（テスト）**：Google の形（毎週の予定の EXDATE、1 回だけ午後に移した回、中止した回、何日も続く終日、毎年の終日、UTC の UNTIL、COUNT と DURATION、日付をまたぐ予定、floating）、夏時間をまたぐ毎週の予定（America/New_York で 10:00 のまま）、Outlook の形（Windows の名前、IANA にない名前の VTIMEZONE、古い Mozilla の名前、知らない名前）、1 秒ごとの繰り返しでも止まらないこと。
+- **本物の ICS**：Google の公開カレンダー（日本の祝日、108 KB）を `--dry-run` で取ってきて、31 日分の 2 件（スポーツの日、文化の日）が出た（0.3 秒）。
+- **brain-deck calendar sync（テスト）**：ローカルの HTTP サーバーと PTY の Brain で、設定ファイルがないときの案内、404、HTML が返ったとき、`--dry-run`、時刻を合わせてから送る順番、URL が出力にも Brain にも漏れないこと、`--ics`、使い方の誤りを確かめた。
+- **実機の描画テスト（`TestHWCalendar`、3 回）**：
+
+  | 測ったもの | 時間 |
+  | --- | --- |
+  | 予定の始まりの時刻から、描き終わるまで | 29〜34 ms |
+  | 予定の終わりの時刻から、描き終わるまで | 28〜32 ms |
+  | ▲▼ を押してから描き終わるまで | 19〜35 ms |
+  | PC から送り直して（取得の失敗つき）から描き終わるまで | 33〜43 ms |
+
+  どの状態でも、フレームバッファは同じ状態で全体を描いたものと 1 バイトも違わなかった。
+- **実機（手動起動、60 秒、データは /tmp）**：「予定」を base にした設定で起動し、PC から `brain-deck calendar sync`（ICS のファイル 2 つ、毎週の繰り返しと終日を含む）を実行した。コマンドは 0.13 秒で終わり、Brain の時刻（0.7 秒遅れ）も合わせた。フレームバッファは、Brain に保存された calendar.json で描いた `-render-png` と画素単位で一致した（0 画素の違い）。受け取った直後の 1 回目の描き直しだけ 174 ms かかった（時刻を動かした直後で、SD への保存と重なった。入力の処理は待たない）。
+- **反映**：`/usr/local/bin/lefthand` を 8c01c74 の版にし、サービスを再起動した。前の版は `/usr/local/bin/lefthand.prev`（4925b28、フェーズ 3）。`config.yaml` のハッシュは前後で同じ。反映後、`brain-deck status`、`brain-deck calendar`、`brain-deck todo`（どれも読むだけ）が通った。
+
+### 同時に開けるか
+
+- **Linux**：今回も確かめた。ヘッドレスの Chromium の WebSerial で Brain の 2 つのポートを開いたまま `brain-deck calendar sync` を実行すると、終了コード 4（「設定 GUI が接続中です（chromium (pid …) が …-if05 を開いています）」）で 17 ms で終わった。`--port /dev/ttyACM1` でも同じ。Brain には何も送っていない。閉じたあとは通った。
+- **macOS**：今回も Mac がないので試していない（フェーズ 2 から変わらず。Chromium のソースでは同じく TIOCEXCL にする）。
+- `calendar sync` は、予定を取ってくる（時間がかかる）のをポートを開く前に行うので、取得のあいだ設定 GUI を締め出さない。ポートを開いてからは、ほかのコマンドと同じ排他（TIOCEXCL、`/proc`、flock）を通る。
+
+### 直したこと、気づいたこと
+
+- **Outlook の VTIMEZONE**：Outlook は切り替わりの規則の DTSTART を 1601 年にする。rrule-go は 1601 年の「11 月の第 1 日曜」から数えると 1893 年で止まり、切り替わりが 1 つも作れなかった（テストで見つけた）。1970 年に寄せてから数えるようにした（切り替わりの日は BYMONTH と BYDAY で決まるので変わらない）。
+- **実機テストの入力の時間**：`TestHWTodo` で、PressTouch が 5 ms を少し超えることがあった（5.2 ms）。フェーズ 3 の版（HEAD）で同じテストを動かしても 8.0 ms があったので、今回の変更のせいではない。テストは GOMAXPROCS が 1 のまま動いていた（デーモンは 2 にしている）ので、デーモンと同じにし、上限を 10 ms にした（描き直しは 20〜40 ms かかるので、10 ms 以内なら描画を待っていない）。デーモンは変えていない。
+- **既知の問題（再起動直後の最初の接続）**：今回は調べ直していない。フェーズ 2 の対策（brain-deck は一度だけ開き直す）は `calendar` にも効く。
+
+### ほかの取得方法との比較（提案。実装はしていない）
+
+| 方法 | 良いところ | 困るところ |
+| --- | --- | --- |
+| **今の方法**：PC の brain-deck が取ってきて、シリアルで送る（cron、systemd のタイマー） | Brain はインターネットに出ない。秘密の URL は PC にだけある。重い解釈（数 MB の ICS、繰り返しの展開）は速い PC で行う。ポートを増やさない | PC が起きていて、Brain がつながっているときだけ更新される。設定 GUI の接続中は送れない（次の回に送る）。定期実行の設定がいる |
+| Brain が PC のインターネット共有（usb0 の NAT）で直接取りに行く | PC 側に brain-deck の定期実行がいらない | PC 側で IP 転送と NAT、DNS の設定がいる（どのみち PC は起きている必要がある）。Brain には RTC がないので、時刻を合わせる前は HTTPS の証明書の確認に失敗する（NTP も PC 経由で別に用意する）。秘密の URL を Brain の SD カード（暗号化なし）に置く。ARM926（454 MHz、64 MB）で大きな ICS と繰り返しを解くのは遅く、メモリも心配。Brain がインターネットから見える経路ができる |
+| PC で Google Calendar API / CalDAV を使う | 辞退した予定や「空き時間」の区別、変わった分だけの取得ができる | OAuth の設定とトークンの管理がいる。Google、iCloud、Outlook ごとに作り分ける。ICS の URL なら 3 つとも同じ方法で済む |
+| 設定 GUI（ブラウザ）が取ってくる | 追加のプログラムがいらない | ICS の提供元はたいてい CORS を許さないので、ブラウザから読めない。GUI を開いているあいだしか更新されない |
+
+**提案**：今の方法のままがよい。PC がなくても更新したいという要望が出たときだけ、2 つ目（Brain が直接取る）を、NTP と NAT の設定を含めて検討する。
+
+### 変更したファイル
+
+| ファイル | 内容 |
+| --- | --- |
+| calendar.go、calwidget.go、calendar_test.go（新規） | 予定のデータ、保存、検証。行の作り方、最終更新、配置、描画、描き直しの時刻。テストと、GUI と共有する表 |
+| widget.go、config.go | `widget: calendar`、`page_reset`、`stale`、`calendars`、Todo の見出しの件数 |
+| todowidget.go | Todo とカレンダーで共通のページの状態（触った時刻、戻る時刻）、ページ送りの帯 |
+| control.go、main.go | `set_calendar`、`get_calendar`。`-render-calendar`、`-render-calendar-page` |
+| display_hw_test.go | `TestHWCalendar`。GOMAXPROCS と入力の時間の上限 |
+| todo_test.go、control_test.go、display_test.go | ページの状態の変更に合わせた |
+| cmd/brain-deck/calendar.go、ics.go（新規）、main.go | `brain-deck calendar`、ICS の解釈と展開、終了コード 7 |
+| cmd/brain-deck/calendar_test.go、ics_test.go（新規）、main_test.go | テスト |
+| go.mod、go.sum | github.com/teambition/rrule-go v1.8.2（MIT。brain-deck だけが使う。デーモンには入らない） |
+| gui/src/calwidget.ts（新規）、preview.ts、app.ts、demo.ts、main.ts、model.ts、types.ts、todowidget.ts | カレンダーの編集とプレビュー、Todo の件数と戻る時間 |
+| gui/test/ | PNG 4 枚（Todo の 2 枚は作り直し）、calendar.json、calendar-stale.json、callayout.json、テスト |
+| config/widgets-example.yaml | 「予定」レイヤー |
+| README.md、docs/config.md、docs/protocol.md | 使い方、calendars.yaml、cron・systemd・launchd の例、終了コード 7、プロトコル |
+
+| コミット | 内容 |
+| --- | --- |
+| 76b88f3 | カレンダーのウィジェット（widget: calendar）と set_calendar、get_calendar を追加する（Todo の残りの件数と page_reset も） |
+| a46aab2 | brain-deck に calendar（sync、list、clear）を追加する |
+| 2bf3191 | 設定 GUI：カレンダーのセルを編集し、Brain の予定でプレビューに描く |
+| 2f7770a | 実機の描画テストに、カレンダーの時刻での描き直し、ページ送り、PC からの送り直しを足す |
+| 8c01c74 | カレンダー、brain-deck calendar、定期実行の例、page_reset、set_calendar の使い方とプロトコルを書く |
+
+Todo の 2 つの追加は、カレンダーと同じページの仕組みを使うので、デーモンのコミットを分けられなかった（76b88f3 に入っている）。
+
+### 残っている課題
+
+- **目と指での確かめ**：今の予定の青、最終更新の小ささ、1 分で戻ることが使いやすいかは、ユーザーがまだ確かめていない。
+- **本物のカレンダー**：ユーザーの Google、iCloud、Outlook の非公開 URL では試していない（公開の祝日カレンダーと、テスト用の ICS だけ）。
+- **macOS の実機**：フェーズ 2 から変わらず。
+- **送るが出していないもの**：予定の場所（`location`）は送っているが、画面には出していない。
+- **辞退した予定**：ICS には「自分が辞退したか」が分からない形が多いので、辞退した予定も出る。
+
 ## 追記：Todo（2026-10-07、フェーズ 3）
 
 Todo のセル（`widget: todo`）、設定 GUI の「Todo」タブ、`brain-deck todo` を作った。
