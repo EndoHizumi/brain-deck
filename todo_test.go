@@ -216,10 +216,17 @@ func newTodoTest(t *testing.T, n int) *todoTest {
 	return &todoTest{t: t, ts: ts, e: e, rt: rt, w: km.Layers[0].Grid.Cells[cellPos{0, 0}].Widget}
 }
 
+// area は、2×3 の Todo のセル（見出し付き）の、見出しの下の範囲。
+func (tt *todoTest) area() image.Rectangle {
+	return widgetArea(image.Rect(0, 0, 400, 480), todoCaption("Todo", tt.ts.Snapshot().Items))
+}
+
+func (tt *todoTest) view() (int, string, int) { return tt.w.pager.view(time.Now(), tt.w.PageReset, 0) }
+
 // row は、2×3 の Todo のセル（見出し付き）の i 行目の中ほどの点。
 func (tt *todoTest) row(i int) image.Point {
 	items := todoOrder(tt.ts.Snapshot().Items)
-	g := todoGeometry(todoArea(image.Rect(0, 0, 400, 480), "Todo"), len(items), 0)
+	g := todoGeometry(tt.area(), len(items), 0)
 	r := g.rows[i]
 	return image.Pt(r.Min.X+r.Dx()/2, r.Min.Y+r.Dy()/2)
 }
@@ -237,11 +244,11 @@ func TestTodoLongPressToggles(t *testing.T) {
 	if !h.Mapped || !h.Own || h.Col != 0 || h.Row != 0 {
 		t.Fatalf("hit = %+v", h)
 	}
-	if _, held, _ := tt.w.todo.view(); held != "t2" {
+	if _, held, _ := tt.view(); held != "t2" {
 		t.Fatalf("held = %q, want t2 (shown while pressing)", held)
 	}
 	time.Sleep(todoHold * 3)
-	if _, held, _ := tt.w.todo.view(); held != "" {
+	if _, held, _ := tt.view(); held != "" {
 		t.Errorf("held after toggling = %q", held)
 	}
 	tt.e.Release("t")
@@ -268,15 +275,15 @@ func TestTodoLongPressToggles(t *testing.T) {
 
 func TestTodoPagesAndCancel(t *testing.T) {
 	tt := newTodoTest(t, 10)
-	g := todoGeometry(todoArea(image.Rect(0, 0, 400, 480), "Todo"), 10, 0)
+	g := todoGeometry(tt.area(), 10, 0)
 	center := func(r image.Rectangle) image.Point { return image.Pt(r.Min.X+r.Dx()/2, r.Min.Y+r.Dy()/2) }
 	tt.e.PressTouch(int32(center(g.down).X), int32(center(g.down).Y))
-	if page, _, nav := tt.w.todo.view(); page != 1 || nav != 1 {
+	if page, _, nav := tt.view(); page != 1 || nav != 1 {
 		t.Fatalf("▼: page %d nav %d", page, nav)
 	}
 	tt.e.Release("t")
 	tt.tap(center(g.down), 0) // 最後のページより先には行かない
-	if page, _, nav := tt.w.todo.view(); page != 1 || nav != 0 {
+	if page, _, nav := tt.view(); page != 1 || nav != 0 {
 		t.Fatalf("▼ on the last page: page %d nav %d", page, nav)
 	}
 	// 2 ページ目の 1 行目は 8 番目の項目
@@ -286,7 +293,7 @@ func TestTodoPagesAndCancel(t *testing.T) {
 	}
 	tt.tap(center(g.up), 0)
 	tt.tap(center(g.up), 0)
-	if page, _, _ := tt.w.todo.view(); page != 0 {
+	if page, _, _ := tt.view(); page != 0 {
 		t.Fatalf("▲: page %d", page)
 	}
 	// 長押しの途中で設定を差し替えたら、切り替えない
@@ -297,7 +304,7 @@ func TestTodoPagesAndCancel(t *testing.T) {
 	if tt.ts.Snapshot().Items[0].Done {
 		t.Fatal("reload during a long press must cancel it")
 	}
-	if _, held, _ := tt.w.todo.view(); held != "" {
+	if _, held, _ := tt.view(); held != "" {
 		t.Errorf("held = %q after reload", held)
 	}
 }
@@ -357,8 +364,9 @@ func TestTodoWidgetRedraw(t *testing.T) {
 	redrawn("held", 0)
 	tt.e.Release("t")
 	redrawn("released", 0)
-	if !d.wakeAt.IsZero() {
-		t.Errorf("todo needs no timer: wakeAt %v", d.wakeAt)
+	// 触ったあとは、最初のページに戻す時刻（page_reset、既定 1 分）にだけ起きる
+	if w := time.Until(d.wakeAt); w < defaultPageReset-5*time.Second || w > defaultPageReset {
+		t.Errorf("wakeAt in %v, want about %v (page_reset)", w, defaultPageReset)
 	}
 }
 

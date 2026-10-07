@@ -61,6 +61,7 @@ type testDaemon struct {
 	clock   *TimeService
 	texts   *TextService
 	todos   *TodoService
+	cals    *CalendarService
 	dataDir string
 	ctl     *Controller
 	conn    net.Conn // GUI 側
@@ -119,8 +120,10 @@ func newTestDaemon(t *testing.T, src string) *testDaemon {
 	d.texts = NewTextService(OpenStore(d.dataDir))
 	d.todos = NewTodoService(OpenStore(d.dataDir))
 	d.todos.SetOnNotify(d.monitor.TodoChanged)
+	d.cals = NewCalendarService(OpenStore(d.dataDir))
 	d.engine.SetWidgets(NewWidgetRT(d.todos))
-	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, todos: d.todos, started: time.Now()}
+	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, todos: d.todos,
+		cals: d.cals, started: time.Now()}
 	daemonSide, gui := net.Pipe()
 	d.conn, d.rd = gui, bufio.NewReaderSize(gui, 1<<20)
 	go func() { d.served <- d.ctl.Serve(daemonSide) }()

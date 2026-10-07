@@ -34,24 +34,55 @@ var (
 	colTodoOff  = RGB{0x40, 0x48, 0x54} // これ以上送れないときの ▲ ▼
 )
 
-// todoState は、Todo のセル 1 つの、画面での状態（ページ、押している行）。
+// pagerState は、ページを送るウィジェット（Todo、カレンダー）のセル 1 つの、画面での状態（ページ、押している行）。
 // 入力の goroutine（押した、離した）と、長押しのタイマーと、描画の goroutine から触るので、ロックで守る。
-type todoState struct {
-	mu    sync.Mutex
-	page  int
-	held  string // 長押ししている項目の ID
-	nav   int    // 押している ▲（-1）か ▼（+1）
-	token uint64 // 押すたび、離すたびに増やす。古い長押しのタイマーを無効にする
-	timer *time.Timer
+type pagerState struct {
+	mu      sync.Mutex
+	page    int       // 最後に送ったページ（touched から PageReset のあいだだけ使う）
+	touched time.Time // 最後に触った時刻。ゼロなら一度も触っていない（既定のページを出す）
+	held    string    // 長押ししている項目の ID
+	nav     int       // 押している ▲（-1）か ▼（+1）
+	token   uint64    // 押すたび、離すたびに増やす。古い長押しのタイマーを無効にする
+	timer   *time.Timer
 }
 
-func (s *todoState) view() (page int, held string, nav int) {
+// pageLocked は、now の時点で出すページ。触ってから reset が過ぎていれば（一度も触っていなければ）、既定のページ def。
+// reset が 0 なら、触ったあとは戻らない。s.mu を持って呼ぶ。
+func (s *pagerState) pageLocked(now time.Time, reset time.Duration, def int) int {
+	if s.touched.IsZero() || (reset > 0 && !now.Before(s.touched.Add(reset))) {
+		return def
+	}
+	return s.page
+}
+
+// view は、now の時点のページ（既定は def）、長押ししている項目、押している矢印を返す。
+func (s *pagerState) view(now time.Time, reset time.Duration, def int) (page int, held string, nav int) {
 	if s == nil {
-		return 0, "", 0
+		return def, "", 0
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.page, s.held, s.nav
+	return s.pageLocked(now, reset, def), s.held, s.nav
+}
+
+// resetAt は、最初のページに戻る時刻（描き直す時刻）。戻らないならゼロ。
+func (s *pagerState) resetAt(reset time.Duration, now time.Time) time.Time {
+	if s == nil || reset <= 0 {
+		return time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t := s.touched.Add(reset); !s.touched.IsZero() && now.Before(t) {
+		return t
+	}
+	return time.Time{}
+}
+
+// setPage は、ページを触ったことにして決める（-render-*-page で使う）。
+func (s *pagerState) setPage(page int, now time.Time) {
+	s.mu.Lock()
+	s.page, s.touched = page, now
+	s.mu.Unlock()
 }
 
 // WidgetRT は、ウィジェットがタップを処理するのに使う、外の状態。
@@ -59,10 +90,28 @@ type WidgetRT struct {
 	mu    sync.Mutex
 	w, h  int // 画面の大きさ（論理）。画面を使わないときは 800x480
 	todos *TodoService
-	poke  func() // 画面の描き直し。待たずに返ること
+	envFn func() WidgetEnv // 今の時刻とデータ。nil なら Todo だけ
+	poke  func()           // 画面の描き直し。待たずに返ること
 }
 
 func NewWidgetRT(todos *TodoService) *WidgetRT { return &WidgetRT{w: 800, h: 480, todos: todos} }
+
+// SetEnv は、押した位置を解くときに使う、今の時刻とデータを返す関数を設定する（描画と同じもの）。
+func (rt *WidgetRT) SetEnv(f func() WidgetEnv) {
+	rt.mu.Lock()
+	rt.envFn = f
+	rt.mu.Unlock()
+}
+
+func (rt *WidgetRT) env() WidgetEnv {
+	rt.mu.Lock()
+	f := rt.envFn
+	rt.mu.Unlock()
+	if f != nil {
+		return f()
+	}
+	return WidgetEnv{Now: time.Now(), TimeSynced: true, Todo: rt.todos.Snapshot()}
+}
 
 // SetScreen は、画面の大きさと描き直しの関数を設定する（画面を開いたあと）。
 func (rt *WidgetRT) SetScreen(w, h int, poke func()) {
@@ -93,7 +142,9 @@ type widgetTouch struct {
 }
 
 // ownsTouch は、ウィジェットがタップを自分で処理し、押した位置で働くか（セル全体を光らせない）。
-func (w *WidgetDef) ownsTouch() bool { return w != nil && w.Kind == widgetTodo }
+func (w *WidgetDef) ownsTouch() bool {
+	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal)
+}
 
 // todoGeom は、Todo のセルの中の配置。
 type todoGeom struct {
@@ -157,7 +208,7 @@ func todoEllipsis(s string, w int) string {
 // drawTodo は、Todo のセルの中身を描く。area は見出しの下の範囲。
 func drawTodo(cv *Canvas, area image.Rectangle, w *WidgetDef, env WidgetEnv, subInk RGB) {
 	items := todoOrder(env.Todo.Items)
-	page, held, nav := w.todo.view()
+	page, held, nav := w.pager.view(env.Now, w.PageReset, 0)
 	if len(items) == 0 {
 		s := min(fitScale([]string{todoEmptyText}, area.Dx(), area.Dy()), 2)
 		drawCentered(cv, area, area.Min.Y+(area.Dy()-fontH*s)/2, todoEmptyText, s, subInk)
@@ -178,6 +229,11 @@ func drawTodo(cv *Canvas, area image.Rectangle, w *WidgetDef, env WidgetEnv, sub
 	if g.nav.Empty() {
 		return
 	}
+	drawPageNav(cv, g, page, nav)
+}
+
+// drawPageNav は、ページ送りの帯（▲、ページ番号、▼）を描く。Todo とカレンダーで同じ。
+func drawPageNav(cv *Canvas, g todoGeom, page, nav int) {
 	cv.fill(image.Rect(g.nav.Min.X, g.nav.Min.Y, g.nav.Max.X, g.nav.Min.Y+1), colTodoRule)
 	arrow := func(zone image.Rectangle, s string, ok, pressed bool) {
 		c := colText
@@ -225,39 +281,76 @@ func drawTodoRow(cv *Canvas, r image.Rectangle, it TodoItem, scale int, held boo
 
 // todoKey は、描き直すかどうかを決める中身。
 func todoKey(w *WidgetDef, env WidgetEnv) string {
-	page, held, nav := w.todo.view()
+	page, held, nav := w.pager.view(env.Now, w.PageReset, 0)
 	return fmt.Sprintf("%d\x00%d\x00%s\x00%d", env.Todo.Rev, page, held, nav)
 }
 
-// todoArea は、セルの範囲から、Todo の項目を並べる範囲（見出しの下）を求める。drawCell、drawWidget と同じ計算。
-func todoArea(cell image.Rectangle, label string) image.Rectangle {
-	_, _, area := widgetCaption(cell.Inset(cellGap).Inset(textMargin), label)
+// todoCaption は、Todo のセルの見出し。label のあとに、残り（未完了）の件数を足す。項目がなければ label だけ。
+func todoCaption(label string, items []TodoItem) string {
+	if len(items) == 0 {
+		return label
+	}
+	n := 0
+	for _, it := range items {
+		if !it.Done {
+			n++
+		}
+	}
+	c := fmt.Sprintf("残り %d", n)
+	if n == 0 {
+		c = "すべて完了"
+	}
+	if label == "" {
+		return c
+	}
+	return label + " " + c
+}
+
+// widgetArea は、セルの範囲から、見出しの下の範囲を求める。drawCell、drawWidget と同じ計算。
+func widgetArea(cell image.Rectangle, caption string) image.Rectangle {
+	_, _, area := widgetCaption(cell.Inset(cellGap).Inset(textMargin), caption)
 	return area
 }
 
-// touchDown は、Todo のセルを押したとき。入力の goroutine から呼ばれるので、待たずに返る。
+// touchDown は、Todo かカレンダーのセルを押したとき。入力の goroutine から呼ばれるので、待たずに返る。
+// ▲▼ ならページを送り、Todo の項目なら長押しを始める。どこを押しても「触った」ことにし、PageReset のあいだページを保つ。
 func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
 	if !w.ownsTouch() || rt == nil {
 		return
 	}
-	items := todoOrder(rt.todos.Snapshot().Items)
-	g := todoGeometry(todoArea(t.cell, label), len(items), w.Rows)
-	s := w.todo
+	env := rt.env()
+	var (
+		g     todoGeom
+		items []TodoItem
+		def   int  // 触っていないときに出すページ
+		empty bool // ページ送りの帯がない（中身がない）
+	)
+	switch w.Kind {
+	case widgetTodo:
+		items = todoOrder(env.Todo.Items)
+		g = todoGeometry(widgetArea(t.cell, todoCaption(label, items)), len(items), w.Rows)
+		empty = len(items) == 0
+	case widgetCal:
+		cl := calLayout(widgetArea(t.cell, label), w, env)
+		g, def, empty = cl.geom, cl.AutoPage, cl.Message != ""
+	}
+	s := w.pager
 	s.mu.Lock()
 	s.token++
-	s.page = min(s.page, g.pages-1)
+	page := min(s.pageLocked(env.Now, w.PageReset, def), g.pages-1)
+	s.page, s.touched = page, env.Now
 	switch {
-	case len(items) == 0:
+	case empty:
 	case t.pt.In(g.up):
 		s.nav = -1
-		s.page = max(s.page-1, 0)
+		s.page = max(page-1, 0)
 	case t.pt.In(g.down):
 		s.nav = 1
-		s.page = min(s.page+1, g.pages-1)
-	case t.pt.In(g.mid):
+		s.page = min(page+1, g.pages-1)
+	case t.pt.In(g.mid), w.Kind != widgetTodo:
 	default:
 		for i, r := range g.rows {
-			if k := s.page*g.per + i; t.pt.In(r) && k < len(items) {
+			if k := page*g.per + i; t.pt.In(r) && k < len(items) {
 				s.held = items[k].ID
 				tok := s.token
 				s.timer = time.AfterFunc(todoHold, func() { s.fire(rt, tok) })
@@ -269,7 +362,7 @@ func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
 }
 
 // fire は、長押しが続いていれば完了を切り替える（タイマーの goroutine）。
-func (s *todoState) fire(rt *WidgetRT, tok uint64) {
+func (s *pagerState) fire(rt *WidgetRT, tok uint64) {
 	s.mu.Lock()
 	id := s.held
 	if s.token != tok || id == "" {
@@ -292,7 +385,7 @@ func (w *WidgetDef) touchUp(rt *WidgetRT) {
 	if !w.ownsTouch() {
 		return
 	}
-	s := w.todo
+	s := w.pager
 	s.mu.Lock()
 	s.token++
 	if s.timer != nil {

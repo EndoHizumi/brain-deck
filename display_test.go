@@ -4,6 +4,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -55,7 +56,8 @@ touch:
 		t.Fatal(err)
 	}
 	c := cfg.Layers[0].Touch.Cells
-	if c["0,0"] != (ActionSpec{Key: "B"}) || c["1,0"] != (ActionSpec{Key: "LCTRL+Z", Label: "取り消し"}) || c["0,1"] != (ActionSpec{Key: "E"}) {
+	if !reflect.DeepEqual(c["0,0"], ActionSpec{Key: "B"}) || !reflect.DeepEqual(c["1,0"], ActionSpec{Key: "LCTRL+Z", Label: "取り消し"}) ||
+		!reflect.DeepEqual(c["0,1"], ActionSpec{Key: "E"}) {
 		t.Fatalf("cells = %+v", c)
 	}
 	if !cfg.displayEnabled() || cfg.Display.Device != "/dev/fb0" {

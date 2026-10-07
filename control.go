@@ -127,6 +127,10 @@ type request struct {
 	Rev      *uint64         `json:"rev,omitempty"`     // todo_*：送った側が見ていた項目の rev（違えば conflict）
 	Index    *int            `json:"index,omitempty"`   // todo_add、todo_move：並べた順での位置
 	Done     *bool           `json:"done,omitempty"`    // todo_update：完了
+	// set_calendar：カレンダーごとの予定（calendar.go の Calendar の配列）、送った範囲
+	Calendars json.RawMessage `json:"calendars,omitempty"`
+	From      string          `json:"from,omitempty"`
+	Days      int             `json:"days,omitempty"`
 }
 
 type response struct {
@@ -319,6 +323,7 @@ type Controller struct {
 	clock   *TimeService
 	texts   *TextService
 	todos   *TodoService
+	cals    *CalendarService
 	started time.Time
 }
 
@@ -346,7 +351,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"protocol": protocolVersion, "daemon": "lefthand", "version": daemonVersion(),
 			"max_line": maxLineBytes, "config_path": c.store.path,
 			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
-				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data"},
+				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
+				"set_calendar", "get_calendar"},
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -416,6 +422,10 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{"texts": c.texts.List(time.Now()), "ids": textIDs(c.store.Current())})
 	case "get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done":
 		return c.todo(id, req)
+	case "set_calendar":
+		return c.setCalendar(id, req)
+	case "get_calendar":
+		return ok(calendarJSON(c.cals.Snapshot(), calendarShown(c.store.Current())))
 	case "subscribe_data":
 		on := req.Enable == nil || *req.Enable
 		if on {
@@ -473,6 +483,28 @@ func (c *Controller) setText(id json.RawMessage, req request) response {
 		vlogf("control: set_text %s (%s, %d chars) by %s", req.Name, e.Style, len([]rune(e.Text)), req.Source)
 	}
 	return response{ID: id, OK: true, Result: res}
+}
+
+// setCalendar は set_calendar を処理する。保存（SD カードへの書き込み）は待たずに返す。
+func (c *Controller) setCalendar(id json.RawMessage, req request) response {
+	if len(req.Calendars) == 0 || req.Calendars[0] != '[' {
+		return errResp(id, errBadRequest, `"calendars" (an array) is required`, nil)
+	}
+	cr := CalendarRequest{From: req.From, Days: req.Days, Source: req.Source}
+	if err := json.Unmarshal(req.Calendars, &cr.Calendars); err != nil {
+		return errResp(id, errBadRequest, "calendars: "+err.Error(), nil)
+	}
+	res, d, err := c.cals.Set(cr, time.Now())
+	if err != nil {
+		return errResp(id, errBadRequest, err.Error(), nil)
+	}
+	n := 0
+	for _, r := range res {
+		n += r.Events
+	}
+	vlogf("control: set_calendar %d calendars, %d events by %s", len(res), n, req.Source)
+	return response{ID: id, OK: true, Result: map[string]any{"rev": d.Rev, "calendars": res,
+		"shown": calendarShown(c.store.Current())}}
 }
 
 // todo は Todo のコマンドを処理する。保存（SD カードへの書き込み）は待たずに返す。

@@ -19,6 +19,7 @@ const (
 	widgetClock = "clock"
 	widgetText  = "text"
 	widgetTodo  = "todo"
+	widgetCal   = "calendar"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -33,7 +34,15 @@ const (
 	unsyncedText = "時刻未設定"
 )
 
-var widgetKinds = []string{widgetClock, widgetText, widgetTodo}
+var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal}
+
+// ページを送るウィジェット（Todo、カレンダー）が、触らなければ最初のページに戻るまでの時間
+const (
+	defaultPageReset = time.Minute
+	minPageReset     = 5 * time.Second
+	maxPageReset     = 24 * time.Hour
+	pageResetOff     = "off"
+)
 
 var jaWeekdays = [...]string{"日", "月", "火", "水", "木", "金", "土"}
 
@@ -48,8 +57,11 @@ type WidgetDef struct {
 	Loc        *time.Location // clock：nil なら Brain のタイムゾーン
 	Seconds    bool           // clock：秒を出す（1 秒ごとに描き直す）
 	ID         string         // text：中身の名前
-	Rows       int            // todo：1 ページの行数。0 なら高さで決める
-	todo       *todoState     // todo：ページと、押している行
+	Rows       int            // todo、calendar：1 ページの行数。0 なら高さで決める
+	PageReset  time.Duration  // todo、calendar：最後に触ってから、最初のページに戻るまでの時間。0 なら戻らない
+	Stale      time.Duration  // calendar：最終更新がこれより古ければ、古いと出す
+	Calendars  []string       // calendar：出すカレンダーの名前。空ならすべて
+	pager      *pagerState    // todo、calendar：ページと、押している行
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -58,29 +70,70 @@ type WidgetEnv struct {
 	TimeSynced bool                 // この起動のあいだに時刻を合わせた（set_time か NTP）
 	Texts      map[string]TextEntry // text：id ごとの中身（写し）
 	Todo       TodoList             // todo：一覧（写し）
+	Calendar   *CalendarData        // calendar：予定（写し。書き換えない）。nil なら一度も受け取っていない
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
 func compileWidget(s ActionSpec) (*WidgetDef, error) {
-	if s.Rows != 0 && s.Widget != widgetTodo {
-		return nil, fmt.Errorf("rows is for widget: todo")
+	paged := s.Widget == widgetTodo || s.Widget == widgetCal
+	if s.Rows != 0 && !paged {
+		return nil, fmt.Errorf("rows is for widget: todo and calendar")
+	}
+	if s.PageReset != "" && !paged {
+		return nil, fmt.Errorf("page_reset is for widget: todo and calendar")
+	}
+	if (s.Stale != "" || s.Calendars != nil) && s.Widget != widgetCal {
+		return nil, fmt.Errorf("stale and calendars are for widget: calendar")
 	}
 	switch s.Widget {
 	case widgetClock:
 		if s.ID != "" {
 			return nil, fmt.Errorf("id is for widget: text")
 		}
-	case widgetTodo:
+	case widgetTodo, widgetCal:
 		if s.Format != "" || s.DateFormat != "" || s.TZ != "" || s.ID != "" {
-			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: todo")
+			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: %s", s.Widget)
 		}
 		if s.count() > 0 {
-			return nil, fmt.Errorf("widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*")
+			if s.Widget == widgetTodo {
+				return nil, fmt.Errorf("widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*")
+			}
+			return nil, fmt.Errorf("widget: calendar handles taps itself (▲▼ to turn pages); remove key and layer_*")
 		}
 		if s.Rows < 0 || s.Rows > todoMaxRows {
 			return nil, fmt.Errorf("rows must be 1..%d (omit it to fit the cell height)", todoMaxRows)
 		}
-		return &WidgetDef{Kind: widgetTodo, Rows: s.Rows, todo: &todoState{}}, nil
+		w := &WidgetDef{Kind: s.Widget, Rows: s.Rows, PageReset: defaultPageReset, pager: &pagerState{}}
+		switch s.PageReset {
+		case "":
+		case pageResetOff:
+			w.PageReset = 0
+		default:
+			d, err := time.ParseDuration(s.PageReset)
+			if err != nil || d < minPageReset || d > maxPageReset {
+				return nil, fmt.Errorf("page_reset must be a duration from %v to %v (such as 30s or 2m), or off", minPageReset, maxPageReset)
+			}
+			w.PageReset = d
+		}
+		if s.Widget == widgetCal {
+			w.Stale = defaultCalStale
+			if s.Stale != "" {
+				d, err := time.ParseDuration(s.Stale)
+				if err != nil || d < time.Minute || d > 30*24*time.Hour {
+					return nil, fmt.Errorf("stale must be a duration from 1m to 720h (such as 3h)")
+				}
+				w.Stale = d
+			}
+			seen := map[string]bool{}
+			for _, n := range s.Calendars {
+				if n == "" || seen[n] {
+					return nil, fmt.Errorf("calendars must be a list of distinct calendar names, got %q", s.Calendars)
+				}
+				seen[n] = true
+			}
+			w.Calendars = s.Calendars
+		}
+		return w, nil
 	case widgetText:
 		if s.Format != "" || s.DateFormat != "" || s.TZ != "" {
 			return nil, fmt.Errorf("format, date_format and tz are for widget: clock")
@@ -177,6 +230,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return fmt.Sprintf("%s\x00%s\x00%v", e.Text, e.Style, e.Expired(env.Now))
 	case widgetTodo:
 		return todoKey(w, env)
+	case widgetCal:
+		return calKey(w, env)
 	}
 	return ""
 }
@@ -195,6 +250,10 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		if e, ok := env.Texts[v.Widget.ID]; ok && e.ExpiresAt != nil && now.Before(*e.ExpiresAt) {
 			return *e.ExpiresAt // 期限が切れたら薄く描き直す
 		}
+	case widgetTodo:
+		return v.Widget.pager.resetAt(v.Widget.PageReset, now) // 最初のページに戻す
+	case widgetCal:
+		return calNext(v.Widget, env)
 	}
 	return time.Time{}
 }
@@ -202,13 +261,15 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 // drawWidget は、セルの内側 inner にウィジェットを描く。label があれば上に小さく出す。
 // ink、subInk は、押したとき（fill）に色を変えるためのもの。
 func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, ink, subInk RGB) {
-	caption, s, area := widgetCaption(inner, v.Label)
+	caption, s, area := widgetCaption(inner, widgetLabel(v.Widget, v.Label, env))
 	if caption != "" {
 		drawCentered(cv, inner, inner.Min.Y, caption, s, subInk)
 	}
 	switch v.Widget.Kind {
 	case widgetTodo:
 		drawTodo(cv, area, v.Widget, env, subInk)
+	case widgetCal:
+		drawCalendar(cv, area, v.Widget, env, subInk)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {
@@ -241,6 +302,14 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 			y += fontH * s
 		}
 	}
+}
+
+// widgetLabel は、セルの上に出す見出し。Todo は、設定の label に残りの件数を足す。
+func widgetLabel(w *WidgetDef, label string, env WidgetEnv) string {
+	if w.Kind == widgetTodo {
+		return todoCaption(label, env.Todo.Items)
+	}
+	return label
 }
 
 // widgetCaption は、見出し（label）の 1 行と倍率、見出しの下に残る範囲を返す。label が空なら inner をそのまま返す。

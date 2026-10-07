@@ -705,6 +705,8 @@ func main() {
 	pngTexts := flag.String("render-texts", "", "-render-png で、テキストのタイルに出す中身（text.json の形のファイル）")
 	pngTodo := flag.String("render-todo", "", "-render-png で、Todo のセルに出す項目（todo.json の形のファイル）")
 	pngTodoPage := flag.Int("render-todo-page", 1, "-render-png で、Todo のセルに出すページ（1 から）")
+	pngCal := flag.String("render-calendar", "", "-render-png で、カレンダーのセルに出す予定（calendar.json の形のファイル）")
+	pngCalPage := flag.Int("render-calendar-page", 0, "-render-png で、カレンダーのセルに出すページ（1 から。0 なら触っていないときのページ）")
 	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータと時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	flag.Usage = func() {
@@ -800,13 +802,31 @@ func main() {
 			}
 			env.Todo = TodoList{Rev: f.Rev, Items: f.Items}
 		}
+		if *pngCal != "" {
+			b, err := os.ReadFile(*pngCal)
+			if err != nil {
+				log.Fatal(err)
+			}
+			var d CalendarData
+			if err := json.Unmarshal(b, &d); err != nil {
+				log.Fatalf("%s: %v", *pngCal, err)
+			}
+			if err := d.prepare(); err != nil {
+				log.Fatalf("%s: %v", *pngCal, err)
+			}
+			env.Calendar = &d
+		}
 		for _, l := range km.Layers {
 			if l.Grid == nil {
 				continue
 			}
 			for _, a := range l.Grid.Cells {
-				if a.Widget.ownsTouch() {
-					a.Widget.todo.page = max(*pngTodoPage-1, 0)
+				switch {
+				case a.Widget == nil:
+				case a.Widget.Kind == widgetTodo && *pngTodoPage > 1:
+					a.Widget.pager.setPage(*pngTodoPage-1, env.Now)
+				case a.Widget.Kind == widgetCal && *pngCalPage > 0:
+					a.Widget.pager.setPage(*pngCalPage-1, env.Now)
 				}
 			}
 		}
@@ -843,14 +863,17 @@ func main() {
 	}
 	texts := NewTextService(store)
 	todos := NewTodoService(store)
+	cals := NewCalendarService(store)
 	widgetRT := NewWidgetRT(todos)
 	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
 		env.Texts = texts.Snapshot()
 		env.Todo = todos.Snapshot()
+		env.Calendar = cals.Snapshot()
 		return env
 	}
+	widgetRT.SetEnv(widgetEnv)
 
 	// 終了時に押しっぱなしを防ぐ
 	sig := make(chan os.Signal, 1)
@@ -888,6 +911,7 @@ func main() {
 				clock.SetOnChange(d.Poke)
 				texts.SetOnChange(d.Poke)
 				todos.SetOnChange(d.Poke)
+				cals.SetOnChange(d.Poke)
 				widgetRT.SetScreen(first.W, first.H, d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
@@ -906,6 +930,7 @@ func main() {
 			clock:   clock,
 			texts:   texts,
 			todos:   todos,
+			cals:    cals,
 			started: time.Now(),
 		}
 		todos.SetOnNotify(mon.TodoChanged)
