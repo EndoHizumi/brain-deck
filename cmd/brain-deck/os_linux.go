@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -14,17 +13,15 @@ const (
 	ioctlSetTermios = syscall.TCSETS
 )
 
-// candidatePorts は Brain のシリアルポートの候補を、試す順に返す。
+// settingsPort は Brain の設定用のポートを返す。
 // /dev/ttyACM の番号は、つなぎ直すと変わることがあるので、/dev/serial/by-id/ の名前で探す。
-// Brain は ACM を 2 つ持ち（コンソール用と設定 GUI 用）、どちらも名前に Brain が入る。
-// 設定 GUI 用はインターフェイス番号が大きい（-if05）ので、名前の逆順に試す。
-func candidatePorts() []string {
-	ps, _ := filepath.Glob("/dev/serial/by-id/*Brain*")
-	sort.Sort(sort.Reverse(sort.StringSlice(ps)))
-	return ps
+// コンソール用（-if03）と設定用（-if05）は、名前のインターフェイス番号で見分ける（ports.go）。
+func settingsPort() (string, error) {
+	ps, _ := filepath.Glob("/dev/serial/by-id/*")
+	return pickByID(ps)
 }
 
-const portHint = "/dev/serial/by-id/ に Brain のポートがありません。USB ケーブルと、Brain の起動を確かめてください"
+const portHint = "ls /dev/serial/by-id/ で、Brain のポート（usb-SHARP_Brain_…-if03 と -if05）があるか確かめてください。USB ケーブルと、Brain の起動も確かめてください"
 
 // holders は、path（シンボリックリンクでもよい）を開いている、自分以外のプロセスを返す。
 // /proc から見えるのは、同じユーザーのプロセスだけ（root で実行したときはすべて）。

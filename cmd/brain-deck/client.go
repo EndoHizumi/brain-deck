@@ -158,12 +158,13 @@ func connect(o connectOptions) (*Client, func(), error) {
 	if err != nil {
 		return nil, nil, &busyError{port: lockPath(), deck: true}
 	}
-	cands := []string{o.port}
-	if o.port == "" {
-		cands = candidatePorts()
-		if len(cands) == 0 {
+	// 試すのは設定用のポート 1 つだけ。コンソール用のポートは開かない（開くだけでも、書かなくても、
+	// ほかの開き手（ModemManager など）と取り合いになるため）
+	p := o.port
+	if p == "" {
+		if p, err = settingsPort(); err != nil {
 			unlock()
-			return nil, nil, errNotFound
+			return nil, nil, err
 		}
 	}
 	var lastErr error = errNoReply
@@ -177,23 +178,16 @@ func connect(o connectOptions) (*Client, func(), error) {
 			}
 			time.Sleep(retryDelay)
 		}
-		for _, p := range cands {
-			c, err := tryPort(p, o)
-			if err == nil {
-				return c, unlock, nil
-			}
-			var be *busyError
-			switch {
-			case errors.As(err, &be), errors.Is(err, errPermission):
-				// ほかのプロセスが使っているときは、残りのポート（コンソール用）には書かない
-				unlock()
-				return nil, nil, err
-			}
-			lastErr = err
-			if time.Until(o.deadline) <= 0 {
-				break
-			}
+		c, err := tryPort(p, o)
+		if err == nil {
+			return c, unlock, nil
 		}
+		var be *busyError
+		if errors.As(err, &be) || errors.Is(err, errPermission) || errors.Is(err, errNotFound) {
+			unlock()
+			return nil, nil, err
+		}
+		lastErr = err
 	}
 	unlock()
 	return nil, nil, lastErr
