@@ -935,6 +935,7 @@ func main() {
 				todos.SetOnChange(d.Poke)
 				cals.SetOnChange(d.Poke)
 				images.SetOnChange(d.Invalidate)
+				images.Preload(preloadOrder(cfg))
 				widgetRT.SetScreen(first.W, first.H, d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
@@ -947,7 +948,13 @@ func main() {
 	e.SetOnStatus(mon.LayerChanged)
 	if *serialPath != "" {
 		ctl := &Controller{
-			store:   &configStore{path: cfgPath, cfg: cfg, km: km, apply: reloader(e)},
+			store: &configStore{path: cfgPath, cfg: cfg, km: km, apply: func(c *Config, k *Keymap) error {
+				if err := reloader(e)(c, k); err != nil {
+					return err
+				}
+				images.Preload(preloadOrder(c)) // 新しい設定で使う画像を先に読む
+				return nil
+			}},
 			engine:  e,
 			monitor: mon,
 			clock:   clock,

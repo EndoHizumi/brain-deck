@@ -495,7 +495,7 @@ func bgLayout(w, h int, press string) (*Layout, mapImages) {
 	imgs["aaaaaaaaaaaaaaaa"], imgs["bbbbbbbbbbbbbbbb"], imgs["cccccccccccccccc"] = wall, cell, small
 	l.Wallpaper = "aaaaaaaaaaaaaaaa"
 	l.Cells[0].Background = "bbbbbbbbbbbbbbbb"
-	l.Cells[3].Background = "cccccccccccccccc" // 札に重なるセル。小さい画像（まわりは壁紙）
+	l.Cells[3].Background = "cccccccccccccccc"  // 札に重なるセル。小さい画像（まわりは壁紙）
 	l.Cells[11].Background = "dddddddddddddddd" // ない画像（壁紙だけ）
 	l.Images = imgs
 	return l, imgs
@@ -661,5 +661,33 @@ func BenchmarkDrawAllBackground(b *testing.B) {
 				drawAll(cv, l, st)
 			}
 		})
+	}
+}
+
+func TestImagePreload(t *testing.T) {
+	dir := t.TempDir()
+	s := NewImageStore(dir)
+	var ids []string
+	for i := 0; i < 3; i++ {
+		b := testImage(50, 50, i)
+		id, _ := imageIDOf(b)
+		os.WriteFile(s.path(id), b, 0o644)
+		ids = append(ids, id)
+	}
+	cfg := &Config{Layers: []LayerConfig{
+		{Name: "base", Touch: &GridConfig{Background: ids[1], Cells: map[string]ActionSpec{"1,0": {Key: "A", Background: ids[2]}, "0,0": {Key: "B", Background: ids[1]}}}},
+		{Name: "x", Touch: &GridConfig{Cells: map[string]ActionSpec{"0,0": {Key: "C", Background: ids[0]}}}},
+	}}
+	order := preloadOrder(cfg)
+	if strings.Join(order, ",") != strings.Join([]string{ids[1], ids[2], ids[0]}, ",") {
+		t.Fatalf("preload order %v", order)
+	}
+	s.Preload(order)
+	deadline := time.Now().Add(5 * time.Second)
+	for s.CacheBytes() < 3*(imageHeader+50*50*2) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.CacheBytes() != 3*(imageHeader+50*50*2) {
+		t.Fatalf("preloaded %d bytes", s.CacheBytes())
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -191,17 +192,25 @@ func (s *ImageStore) Image(id string) *Image {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.tick++
 	if c, ok := s.cache[id]; ok {
 		c.used = s.tick
+		s.mu.Unlock()
 		return c.img
 	}
+	s.mu.Unlock()
+	// SD カードから読むあいだは、ロックを持たない（ほかの goroutine の受け取りや先読みを待たせない）
 	t := time.Now()
 	b, err := os.ReadFile(s.path(id))
 	var img *Image
 	if err == nil {
 		img, err = parseImage(b)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c, ok := s.cache[id]; ok { // 読んでいるあいだに、ほかの goroutine が読んだ
+		c.used = s.tick
+		return c.img
 	}
 	if err != nil {
 		if !s.missing[id] {
@@ -219,6 +228,56 @@ func (s *ImageStore) Image(id string) *Image {
 	s.evictLocked(id)
 	vlogf("images: loaded %s (%dx%d) in %v, cache %d KiB", id, img.W, img.H, time.Since(t), s.cached>>10)
 	return img
+}
+
+// Preload は、ids の画像を、優先度を下げた別の goroutine で先に読み込む（キャッシュの上限まで）。
+// レイヤーを初めて切り替えたときに、SD カードからの読み込みを待たないようにするため。待たずに返る。
+func (s *ImageStore) Preload(ids []string) {
+	if s == nil || len(ids) == 0 {
+		return
+	}
+	go func() {
+		runtime.LockOSThread()
+		syscall.Setpriority(syscall.PRIO_PROCESS, syscall.Gettid(), 10)
+		t := time.Now()
+		n := 0
+		for _, id := range ids {
+			if s.CacheBytes() >= imageCacheBytes {
+				break
+			}
+			if s.Image(id) != nil {
+				n++
+			}
+		}
+		vlogf("images: preloaded %d of %d images in %v", n, len(ids), time.Since(t))
+	}()
+}
+
+// preloadOrder は、設定で使っている画像の id を、base のものから順に返す。
+func preloadOrder(cfg *Config) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, l := range cfg.Layers {
+		if l.Touch == nil {
+			continue
+		}
+		add(l.Touch.Background)
+		keys := make([]string, 0, len(l.Touch.Cells))
+		for k := range l.Touch.Cells {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			add(l.Touch.Cells[k].Background)
+		}
+	}
+	return out
 }
 
 // evictLocked は、キャッシュが上限を超えたら、使ってから長い順に捨てる（keep は捨てない）。
