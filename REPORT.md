@@ -6,6 +6,99 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：Todo（2026-10-07、フェーズ 3）
+
+Todo のセル（`widget: todo`）、設定 GUI の「Todo」タブ、`brain-deck todo` を作った。
+デーモンは実機のサービスに反映済み（4925b28）。本番の設定（`/etc/lefthand/config.yaml`）は変えていないので、今の画面に Todo は出ていない。本番のデータ（`/var/lib/lefthand/`）にも書いていない。
+
+### 作ったもの
+
+| 項目 | 内容 |
+| --- | --- |
+| Todo のセル | `{ widget: todo, span: [2, 3], label: Todo }`。`rows` で 1 ページの行数（省略すると 1 行 52 ドットで入るだけ） |
+| 表示 | 左にチェックの箱、右に 1 行の文（入りきらなければ「…」）。未完了の下に、完了を薄い色・塗った箱・取り消し線で並べる。0 件なら「Todo はありません」 |
+| ページ送り | 入りきらないとき、セルの下に帯（▲ 3/8、ページ番号 1/4、▼ 3/8）。押した瞬間に送る。送れない向きは暗くする |
+| 完了の切り替え | 項目を 0.5 秒押し続ける。押しているあいだ、その行を黄色で塗る。0.5 秒より前に離せば何もしない。押している途中で設定が差し替わったら取り消す |
+| データ | `/var/lib/lefthand/todo.json`。項目ごとに ID（t1、t2…、使い回さない）と更新番号（rev）。数の上限なし、1 項目 200 文字。保存は返事を待たせない |
+| プロトコル | `get_todo`、`todo_add`、`todo_update`、`todo_delete`、`todo_move`、`todo_clear_done`、`subscribe_data`（通知 `{"event":"todo",...}`）。古い rev での書き換えは `conflict`、ない ID は `not_found` |
+| 設定 GUI | 「キーとタッチ」「Todo」の切り替え。Todo タブで、追加（先頭にも）、完了、文の書き換え、↑↓ の並べ替え、削除、完了をまとめて消す。接続中に Brain で切り替えると通知で反映。ウィジェットの欄に Todo と行数 |
+| brain-deck | `todo [list] [--json]`、`todo add <文>|- [--top]`、`todo done|undo|rm <番号|ID>...`、`todo edit <番号|ID> <文>`、`todo clear-done`。番号は Brain の画面と同じ順。読んだときの rev を付けて書き換える |
+| 設定の例 | `config/widgets-example.yaml` に「Todo」レイヤーを足し、メニューを 4×3 にして入口を置いた |
+
+### Brain での操作（決めたことと、提案）
+
+| 操作 | 状態 |
+| --- | --- |
+| 長押し（0.5 秒）で完了の切り替え、押しているあいだ黄色 | 実装した |
+| セルの下の ▲▼ でページ送り | 実装した |
+| 完了した項目は消さずに薄く、未完了の下 | 実装した |
+| ページ番号をタップすると 1 ページ目に戻る | 提案（未実装） |
+| しばらく触らなければ 1 ページ目に戻る | 提案（未実装） |
+| 見出しに残りの数（「Todo 残り 3」） | 提案（未実装） |
+| 長押しの進み具合（0.5 秒のあいだに帯が伸びる） | 提案（未実装）。今は押した瞬間に黄色になるだけ |
+| 並べ替え、追加、削除 | Brain ではしない（文字を打てないため）。GUI と brain-deck で行う |
+
+### 確認
+
+- **ホスト側のテスト**：Go（デーモンと brain-deck。race 検出つきも、25 回続けても）と設定 GUI（80 件）がすべて通った。brain-deck は macOS（arm64）向けにもビルドできた。
+- **プレビュー**：Todo の PNG 3 枚（1 ページ目、2 ページ目の完了した項目、0 件）が `-render-png` と画素単位で一致した。配置と「…」の省略は、Go が書いた 144 通りと 30 通りの表と一致した。
+- **長押しのテスト（ホスト）**：0.5 秒で切り替わる、短く押すと変わらない、完了した行を長押しすると戻る、項目のない行は何もしない、▲▼ が端で止まる、2 ページ目の行が正しい項目になる、押している途中の設定の差し替えで取り消す、保存が詰まっていても 50 回のタップが 200 ms 以内。
+- **実機の描画テスト（`TestHWTodo`。uinput がないので、エンジンに押した座標を渡す）**：
+
+  | 測ったもの | 時間 |
+  | --- | --- |
+  | 押してから黄色の行が出るまで | 13〜31 ms |
+  | 0.5 秒たってから、切り替えた一覧が出るまで | 20〜25 ms |
+  | ▼ を押してから 2 ページ目が出るまで | 11 ms |
+  | PC から足してから出るまで | 37 ms |
+  | 2×3 の Todo のセル 1 つの描き直し | 8〜32 ms |
+
+  押したとき、切り替えたあと、2 ページ目、追加のあとのフレームバッファは、どれも同じ状態で全体を描いたものと 1 バイトも違わなかった。PressTouch は 5 ms 以内に返った（描画を待たない）。
+- **実機（手動起動、60 秒、データは /tmp）**：PC から brain-deck で、追加（6 件は標準入力から）、先頭への追加、完了、書き換え、削除、一覧。どのコマンドも 27〜59 ms で終わった。フレームバッファは、Brain の todo.json で描いた `-render-png` と画素単位で一致した（時計はデータを /tmp にしたので「時刻未設定」）。
+- **反映**：`/usr/local/bin/lefthand` を 4925b28 の版にし、サービスを再起動した。前の版は `/usr/local/bin/lefthand.prev`（76762be、フェーズ 2）。`config.yaml` のハッシュは前後で同じ。反映後、`brain-deck status` と `brain-deck todo`（読むだけ）が通った。
+
+### 直したこと
+
+- **テストの一時ディレクトリ**：データは返事のあとに別の goroutine が保存するので、テストの終わりに書いている途中だと、一時ディレクトリを消せずに失敗することがあった（フェーズ 2 のテキストのテストにもあった）。待って消し直す補助を作った。デーモンの動きは変えていない。
+
+### 同時に開けるか（フェーズ 2 から変えていない）
+
+- Linux は確かめ済み（Chromium の WebSerial も brain-deck も TIOCEXCL。片方が開いていると、もう一方は EBUSY。brain-deck は終了コード 4）。
+- macOS は、今回も Mac がないので試していない。
+- Todo を足して、ポートは増やしていない。brain-deck の todo も同じ排他を通る。
+
+### 変更したファイル
+
+| ファイル | 内容 |
+| --- | --- |
+| todo.go、todowidget.go、todo_test.go（新規） | Todo のデータ、保存、通知。セルの配置、描画、長押し、ページ送り。テストと、GUI と共有する表 |
+| widget.go、config.go | `widget: todo`、`rows`、検証 |
+| layer.go、display.go、main.go | 押した位置をウィジェットに渡す、離したとき・差し替えたときの取り消し、Todo はセル全体を光らせない。`-render-todo`、`-render-todo-page` |
+| control.go | Todo のコマンド、`subscribe_data`、`conflict`・`not_found` |
+| display_hw_test.go | `TestHWTodo` |
+| control_test.go、text_test.go、widget_test.go | テストのデータの置き場所 |
+| cmd/brain-deck/todo.go（新規）、main.go、main_test.go | `brain-deck todo` |
+| gui/src/todowidget.ts（新規）、app.ts、preview.ts、demo.ts、model.ts、types.ts、main.ts、style.css | Todo タブ、プレビュー、模擬デーモン |
+| gui/test/ | PNG 3 枚、todo.json、todolayout.json、テスト |
+| config/widgets-example.yaml | 「Todo」レイヤー |
+| README.md、docs/config.md、docs/protocol.md | 使い方、プロトコル |
+
+| コミット | 内容 |
+| --- | --- |
+| e3540d9 | Todo のウィジェット（widget: todo）と、Todo の読み書きのコマンドを追加する |
+| aeb22dd | brain-deck に todo（list、add、done、undo、edit、rm、clear-done）を追加する |
+| d47c2fd | 設定 GUI：Todo のタブを作り、Todo のセルを編集してプレビューに描く |
+| a383b5a | 実機の描画テストに、Todo のセルの長押し、ページ送り、PC からの追加を足す |
+| b011e71 | Todo のウィジェット、設定 GUI の Todo タブ、brain-deck todo の使い方とプロトコルを書く |
+| 4925b28 | テスト：データの保存が終わる前に一時ディレクトリを消して失敗することがあるのを直す |
+
+### 残っている課題
+
+- **指での確かめ**：長押しの 0.5 秒、行の高さ 52 ドット、▲▼ の帯の大きさが指で使いやすいかは、ユーザーの目と指でまだ確かめていない。
+- **実際の通知の経路**：Brain で長押しして GUI に反映することは、ホストのテスト（模擬デーモン、net.Pipe）で確かめた。本物のシリアルと本物のタッチでは、まだ。
+- **macOS の実機**：フェーズ 2 から変わらず。
+- **複数の一覧**：今は 1 つだけ。
+
 ## 追記：テキストのタイルと PC のコマンド brain-deck（2026-10-06、フェーズ 2）
 
 PC から書き換えるテキストのタイル（`widget: text`）と、PC のコマンド `brain-deck` を作った。
