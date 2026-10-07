@@ -41,6 +41,12 @@ export function sttyCommand(s: TermSize): string {
   return `stty rows ${s.rows} cols ${s.cols}`
 }
 
+// isTerminalReport は、端末（xterm.js）が問い合わせに自動で返す報告か（カーソル位置 ESC[n;mR、
+// 端末の種類 ESC[?…c / ESC[>…c、状態 ESC[0n、窓の大きさ ESC[8;…t、色 OSC 10/11/4 など）。
+export function isTerminalReport(s: string): boolean {
+  return /^(\x1b\[\??\d+(;\d+)*R|\x1b\[[?>=][\d;]*c|\x1b\[\d+n|\x1b\[\d+(;\d+)*t|\x1b\][\d;]+[^\x07\x1b]*(\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$/.test(s)
+}
+
 // 端末に出す、GUI からの知らせ（Brain には送らない）。黄色で出す
 function note(s: string): string {
   return `\r\n\x1b[33m[${s}]\x1b[0m\r\n`
@@ -63,6 +69,10 @@ export class ConsoleSession {
   private classify = false // ポートの役割がまだ分からず、届いた文字で決めるか
   private sniff = '' // 役割を決めるために、届いた文字を少し覚える
   private closing = false
+  // つないでから、ユーザーが何か打ったか。打つまでは、端末の自動の報告を送らない。
+  // getty はログイン画面を出すときに端末の大きさを問い合わせ（ESC[6n）、PC が読まないあいだは Brain 側にたまる。
+  // つないだときにたまった問い合わせへ答えると、その報告がログイン画面にユーザー名として入力されてしまう
+  private typed = false
 
   constructor(private deps: ConsoleDeps) {
     this.host = document.createElement('div')
@@ -90,7 +100,7 @@ export class ConsoleSession {
     if (!this.termLoading)
       this.termLoading = this.deps.createTerminal().then((term) => {
         term.open(this.host)
-        term.onData((s) => void this.sendBytes(this.enc.encode(s)))
+        term.onData((s) => this.input(s))
         term.onBinary((b) => void this.sendBytes(b))
         term.write('\x1b[90mBrain のコンソール（/dev/ttyGS0）。「接続」を押してください。\x1b[0m\r\n')
         this.term = term
@@ -161,6 +171,7 @@ export class ConsoleSession {
       this.classify = !ports.role(port) // 役割がまだ分からないときだけ調べる
       this.sniff = ''
       this.closing = false
+      this.typed = false
       t.onData = (b) => this.t === t && this.onData(b)
       t.onClose = (reason) => this.t === t && this.onClose(reason)
       this.state = 'open'
@@ -223,6 +234,14 @@ export class ConsoleSession {
   // forget は、抜いたポートを、次の接続で使わないようにする。
   forget(port: SerialPort): void {
     if (this.lastPort === port) this.lastPort = null
+  }
+
+  // input は端末からの入力（打った文字、貼り付け、端末の自動の報告）。
+  private input(s: string): void {
+    if (isTerminalReport(s)) {
+      if (!this.typed) return
+    } else this.typed = true
+    void this.sendBytes(this.enc.encode(s))
   }
 
   private async sendBytes(b: Uint8Array): Promise<void> {

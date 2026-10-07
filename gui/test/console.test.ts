@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from '../src/app'
-import type { TermLike } from '../src/console'
+import { isTerminalReport, type TermLike } from '../src/console'
 import { FakeDaemon, FakeTransport } from '../src/demo'
 import { ConsoleTransport, sampleConfig, testFont, twoPortSerial } from './helpers'
 
@@ -98,6 +98,27 @@ describe('コンソールのタブ', () => {
     await vi.waitFor(() => expect(t.sent()).toBe('user\r\x03'))
     t.term.type('echo 日本語\r')
     await vi.waitFor(() => expect(t.sent()).toContain('echo 日本語\r'))
+  })
+
+  it('たまっていた問い合わせへの端末の自動の報告は、ユーザーが打つまで送らない', async () => {
+    const t = await openConsole()
+    // getty の ESC[6n に、xterm.js がカーソル位置を返したことにする
+    t.term.type('\x1b[4;1R')
+    t.term.type('\x1b[30;136R\x1b[30;136R')
+    t.term.type('\x1b[?1;2c')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(t.sent()).toBe('')
+    // 打ったあとの問い合わせ（getty の起動し直し、resize など）には答える
+    t.term.type('u')
+    t.term.type('\x1b[30;136R')
+    await vi.waitFor(() => expect(t.sent()).toBe('u\x1b[30;136R'))
+  })
+
+  it('端末の自動の報告を見分ける', () => {
+    for (const r of ['\x1b[4;1R', '\x1b[30;136R\x1b[30;136R', '\x1b[?1;2c', '\x1b[>0;276;0c', '\x1b[0n', '\x1b[8;24;80t', '\x1b]11;rgb:1010/1616/1f1f\x1b\\'])
+      expect(isTerminalReport(r), JSON.stringify(r)).toBe(true)
+    for (const k of ['a', '\r', '\x1b[A', '\x1b[1;5C', '\x1bOP', '\x1b', '\x03', 'ls\r', '\x1b[200~paste\x1b[201~'])
+      expect(isTerminalReport(k), JSON.stringify(k)).toBe(false)
   })
 
   it('UTF-8 の文字が途中で切れて届いても、化けない', async () => {
