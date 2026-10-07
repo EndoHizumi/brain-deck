@@ -175,6 +175,7 @@ type Engine struct {
 	onStatus func(EngineStatus)
 	widgets  *WidgetRT    // 押した位置で働くウィジェット（Todo）に渡す状態。nil なら 800x480 とみなす
 	touchAt  *widgetTouch // PressTouch から press に、押した位置を渡す
+	pressing string       // press の途中で、押している入力（レイヤーが変わっても、この入力のマウスのボタンは離さない）
 }
 
 // SetWidgets は、ウィジェットがタップを処理するのに使う状態を設定する。
@@ -276,6 +277,8 @@ func (e *Engine) Release(id string) {
 		e.refresh()
 	case actWidget:
 		a.Widget.touchUp(e.widgets)
+	case actMouse:
+		e.out.mouse.Release(id)
 	}
 }
 
@@ -285,6 +288,8 @@ func (e *Engine) press(id string, a *Action) {
 		return
 	}
 	e.down[id] = a
+	e.pressing = id
+	defer func() { e.pressing = "" }()
 	consumeOneshot := true
 	if a != nil {
 		switch a.Kind {
@@ -312,6 +317,12 @@ func (e *Engine) press(id string, a *Action) {
 				e.stack = append(e.stack, stackEntry{layer: a.Layer, kind: actTo})
 			}
 			consumeOneshot = false
+		case actMouse:
+			if a.Mouse.Button != 0 {
+				e.out.mouse.Press(id, a.Mouse.Button)
+			} else {
+				e.out.mouse.StartScroll(id, a.Mouse.V, a.Mouse.H)
+			}
 		case actWidget:
 			// ウィジェットに任せる。待たずに返る
 			if e.touchAt != nil {
@@ -363,6 +374,8 @@ func (e *Engine) refresh() {
 	e.view = v
 	if e.gen > 1 {
 		vlogf("layer: %s", e.describe())
+		// レイヤーが変わったら、押しているマウスのボタンを離す（今押した入力のものは残す）
+		e.out.mouse.ReleaseExcept(e.pressing)
 	}
 	if e.onView != nil {
 		e.onView(v)

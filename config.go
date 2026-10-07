@@ -84,8 +84,10 @@ type ActionSpec struct {
 	LayerToggle  string `yaml:"layer_toggle,omitempty" json:"layer_toggle,omitempty"`
 	LayerOneshot string `yaml:"layer_oneshot,omitempty" json:"layer_oneshot,omitempty"`
 	LayerTo      string `yaml:"layer_to,omitempty" json:"layer_to,omitempty"`
-	Label        string `yaml:"label,omitempty" json:"label,omitempty"`
-	Span         Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
+	// Mouse はマウスの操作（left、right、middle、scroll_up など。mouse.go）。押しているあいだボタンを押す
+	Mouse string `yaml:"mouse,omitempty" json:"mouse,omitempty"`
+	Label string `yaml:"label,omitempty" json:"label,omitempty"`
+	Span  Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
 	// Background はセルの背景画像の id（/var/lib/lefthand/images/<id>.565）。タッチのセルだけ
 	Background string `yaml:"background,omitempty" json:"background,omitempty"`
 
@@ -99,6 +101,7 @@ type ActionSpec struct {
 	PageReset  string   `yaml:"page_reset,omitempty" json:"page_reset,omitempty"`   // todo、calendar：触らなければ最初のページに戻るまでの時間。off で戻らない
 	Stale      string   `yaml:"stale,omitempty" json:"stale,omitempty"`             // calendar：最終更新がこれより古ければ、古いと分かるように出す
 	Calendars  []string `yaml:"calendars,omitempty" json:"calendars,omitempty"`     // calendar：出すカレンダーの名前。省略するとすべて
+
 }
 
 // Span はセルの大きさ [列数, 行数]。書かなければ [1, 1]。
@@ -119,7 +122,7 @@ func (s Span) MarshalYAML() (any, error) {
 var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
-	"page_reset": true, "stale": true, "calendars": true, "background": true,
+	"page_reset": true, "stale": true, "calendars": true, "background": true, "mouse": true,
 }
 
 func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
@@ -133,7 +136,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, background)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, background)", k.Line, k.Value)
 			}
 		}
 	}
@@ -142,7 +145,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	if c := a.count(); c > 1 || (c == 0 && a.Widget == "") {
-		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to (a widget cell may omit them)", n.Line)
+		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse (a widget cell may omit them)", n.Line)
 	}
 	return nil
 }
@@ -175,7 +178,7 @@ func (a SoftArea) MarshalYAML() (any, error) {
 
 func (a ActionSpec) count() int {
 	n := 0
-	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo} {
+	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse} {
 		if s != "" {
 			n++
 		}
@@ -330,9 +333,10 @@ const (
 	actOneshot                // 次の 1 キーだけレイヤーを重ねる
 	actTo                     // base とそのレイヤーだけにする
 	actWidget                 // ウィジェットのセルで、key も layer_* も書いていない（タップはウィジェットに任せる）
+	actMouse                  // マウスのボタンかスクロール
 )
 
-var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget"}
+var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse"}
 
 func (k ActKind) String() string { return actNames[k] }
 
@@ -341,8 +345,9 @@ func (k ActKind) isLayer() bool { return k >= actHold && k <= actTo }
 // Action は組み立て済みの割り当て。
 type Action struct {
 	Kind         ActKind
-	Combo        Combo // actKey のとき
-	Layer        int   // layer_* の行き先
+	Combo        Combo       // actKey のとき
+	Mouse        mouseAction // actMouse のとき
+	Layer        int         // layer_* の行き先
 	Spec         ActionSpec
 	SpanW, SpanH int        // セルの大きさ（タッチのセル）。1 以上
 	Widget       *WidgetDef // ウィジェットのセルなら、その中身
@@ -492,6 +497,13 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			a.Kind, target = actOneshot, s.LayerOneshot
 		case s.LayerTo != "":
 			a.Kind, target = actTo, s.LayerTo
+		case s.Mouse != "":
+			a.Kind = actMouse
+			m, err := parseMouse(s.Mouse)
+			if err != nil {
+				fail(path, "%s: %v", where, err)
+			}
+			a.Mouse = m
 		default:
 			fail(path, "%s: empty assignment", where)
 		}
@@ -747,4 +759,16 @@ func (km *Keymap) unreachable() []string {
 func (a ActionSpec) hasWidgetFields() bool {
 	return a.Format != "" || a.DateFormat != "" || a.TZ != "" || a.ID != "" || a.Rows != 0 ||
 		a.PageReset != "" || a.Stale != "" || a.Calendars != nil
+}
+
+// usesMouse は、設定のどこかでマウスを使うか（mouse:）。
+func (km *Keymap) usesMouse() bool {
+	for _, l := range km.Layers {
+		for _, a := range km.allActions(l) {
+			if a.Kind == actMouse {
+				return true
+			}
+		}
+	}
+	return false
 }

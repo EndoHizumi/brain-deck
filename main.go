@@ -619,6 +619,9 @@ func cellView(km *Keymap, a *Action) CellView {
 		return CellView{Mapped: true, Layer: true, Label: label, Sub: sub, Background: a.Spec.Background}
 	}
 	keys := prettyCombo(a.Spec.Key)
+	if a.Kind == actMouse {
+		keys = a.Mouse.Pretty
+	}
 	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background}
 	if v.Label == "" || v.Label == keys {
 		v.Label, v.Sub = keys, ""
@@ -885,6 +888,9 @@ func main() {
 	hl := detectHID(cfg.HIDDevice)
 	log.Printf("hid: %s", hl.Source)
 	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID)}
+	if hl.MouseID == 0 && km.usesMouse() {
+		log.Printf("warning: the config uses the mouse (mouse:), but the USB gadget has no mouse; run gadget-setup.sh")
+	}
 	e := NewEngine(km, s)
 	store := OpenStore(*dataDir)
 	clock := NewTimeService(store)
