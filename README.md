@@ -27,10 +27,11 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 9. [時刻合わせ](#時刻合わせ)
 10. [タッチのキャリブレーション](#タッチのキャリブレーション)
 11. [日常の操作](#日常の操作)
-12. [画面とコンソール](#画面とコンソール)
-13. [困ったとき](#困ったとき)
-14. [開発](#開発)
-15. [フォントとライセンス](#フォントとライセンス)
+12. [シリアルコンソール](#シリアルコンソール)
+13. [画面とコンソール](#画面とコンソール)
+14. [困ったとき](#困ったとき)
+15. [開発](#開発)
+16. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -78,7 +79,7 @@ go test ./...
 PC から Brain にファイルを送り、Brain 上で install.sh を実行する。
 
 ```sh
-scp -r lefthand config.yaml install.sh gadget-setup.sh systemd brain:lefthand/
+scp -r lefthand config.yaml install.sh gadget-setup.sh console-setup.sh systemd brain:lefthand/
 ssh brain 'cd ~/lefthand && sudo sh install.sh'
 ```
 
@@ -106,6 +107,11 @@ install.sh は次のファイルを配置し、`systemctl daemon-reload` を行�
 
 - **ガジェットの設定**：drop-in と gadget-setup.sh は、次に Brain を起動したときから使われる。再起動せずに設定 GUI 用のシリアルを足すときは、`ssh brain sudo /usr/local/sbin/lefthand-gadget-setup` を実行する。USB を一度付け直すので、SSH が数秒止まる。そのあいだ lefthand.service を止め、終わったら再開する（このカーネルでは、/dev/hidg0 を開いたまま付け直すと、HID が使えなくなるため）。SSH が切れても止まらないよう、`sudo systemd-run --collect /usr/local/sbin/lefthand-gadget-setup` で実行するとよい。
 - **元に戻す**：drop-in を消して `systemctl daemon-reload` すると、Brainux 標準のガジェット設定に戻る。Brainux 本体のファイルは書き換えていない。
+- **シリアルコンソール**：1 つ目のシリアル（/dev/ttyGS0）でログインできるようにするには、一度だけ次を実行する（[シリアルコンソール](#シリアルコンソール)）。
+
+  ```sh
+  ssh brain 'cd ~/lefthand && sudo sh console-setup.sh on'
+  ```
 
 ## PC との接続
 
@@ -115,7 +121,7 @@ USB でつなぐと、PC には次の 4 つが見える。
 | --- | --- | --- | --- |
 | HID キーボード | 「SHARP Brain」というキーボード | /dev/hidg0 | 左手デバイスとしての入力 |
 | NCM | ネットワークインターフェース（Linux では enx8a158b443a01） | usb0 | SSH |
-| CDC-ACM（1 つ目） | シリアルポート（Linux では /dev/ttyACM0） | /dev/ttyGS0 | シリアルコンソール用。getty は立てていない |
+| CDC-ACM（1 つ目） | シリアルポート（Linux では /dev/ttyACM0） | /dev/ttyGS0 | シリアルコンソール（getty のログイン画面）。設定 GUI のコンソールのタブ |
 | CDC-ACM（2 つ目） | シリアルポート（Linux では /dev/ttyACM1） | /dev/ttyGS1 | 設定 GUI |
 
 キーボードとしては、つなぐだけで使える。SSH を使うには、PC 側のインターフェースに固定 IP を付ける。PC に DHCP サーバーは要らない。
@@ -368,7 +374,15 @@ sudo usermod -aG dialout $USER
 
 ログインし直さずに今だけ使うなら、`sudo setfacl -m u:$USER:rw /dev/ttyACM1` でもよい。ただし、ケーブルを抜き差ししたり Brain を再起動したりすると、デバイスが作り直されて権限は消える。
 
-ModemManager が動いている PC では、つないだ直後の数秒、ModemManager がポートを調べるために開くことがある。そのあいだは開けないので、少し待ってからつなぎ直す。気になるなら、udev の規則で Brain（1d6b:0104）に `ENV{ID_MM_DEVICE_IGNORE}="1"` を付けて、調べないようにする。
+**ModemManager に注意**：ModemManager が動いている Linux の PC（Ubuntu などは既定で動く）では、Brain をつなぐたびに、ModemManager が 2 つのシリアルを数十秒かけて調べ、AT コマンドを送る。そのあいだは GUI からも開けないことがある。それよりも困るのは、1 つ目のシリアル（コンソール）ではログイン画面が待っているので、AT がユーザー名とパスワードとして入力され、Brain に「ログインの失敗」が残ること。Brain を使う PC には、ModemManager に Brain（1d6b:0104）を調べさせない udev の規則を入れておく。
+
+```sh
+sudo install -m 0644 contrib/udev/70-brain-modemmanager.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+# そのあと、Brain のケーブルを抜き差しする
+```
+
+規則の中身は `ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ENV{ID_MM_DEVICE_IGNORE}="1"` の 1 行。効いているかは、ケーブルを抜き差ししたあと `journalctl -b -u ModemManager | tail` に Brain（`usb3/3-2` など）の行が増えないことで分かる。
 
 ### 使い方
 
@@ -389,6 +403,7 @@ ModemManager が動いている PC では、つないだ直後の数秒、ModemM
 - **セルの大きさ**：セルを選び、「大きさ」の列と行を変える。広げた範囲に、このレイヤーのセルがあれば、消してよいか聞く。
 - **時刻**：接続するたびに、PC の時刻を Brain に送って合わせる。ずれていたときと、Brain のタイムゾーンが PC と違うときは、そのことを出す。
 - **GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`display`（`press_style` を除く）は、デーモンを再起動しないと変えられないので、GUI からの保存では変えられない（変えると誤りになる）。ファイルを直接編集して、サービスを再起動する。
+- **コンソール**：上の「コンソール」タブで、Brain のシリアルコンソール（1 つ目のシリアル）にログインできる（[シリアルコンソール](#シリアルコンソール)）。設定のタブとは別のポートなので、両方を同時に開いておける。
 - **ほかの人が同時に**：ポートは 1 つのタブしか開けない。GUI が接続しているあいだは、brain-deck も使えない（[同時に使えない仕組み](#設定-gui-と同時に使えない仕組み)）。SSH でファイルを直接編集したときは、GUI で「切断」して接続し直すと読み直す。
 
 ## brain-deck（PC のコマンド）
@@ -778,6 +793,43 @@ ssh brain 'cd ~/lefthand && sudo timeout 60 ./lefthand -v /etc/lefthand/config.y
 デーモンが動いているあいだは、Brain のキーボードがコンソールに届かない。
 デーモンを止めると、画面がログイン画面の ly に戻り、キーボードも使えるようになる。
 
+## シリアルコンソール
+
+1 つ目のシリアル（Brain の /dev/ttyGS0、PC の Linux では /dev/ttyACM0、macOS では番号の小さい /dev/cu.usbmodem0123456789…）で、Brain にログインできる。ネットワーク（SSH）の設定が壊れたときにも使える。
+
+### 有効にする・元に戻す
+
+```sh
+ssh brain 'cd ~/lefthand && sudo sh console-setup.sh on'      # 有効にして、今すぐ起動する
+ssh brain 'cd ~/lefthand && sh console-setup.sh status'        # 状態を見る
+ssh brain 'cd ~/lefthand && sudo sh console-setup.sh off'     # 元に戻す
+```
+
+console-setup.sh は、Brainux 本体のファイルを書き換えない。systemd の標準の `serial-getty@.service` を、次の 3 つで動かすだけ。`off` で 3 つとも消す。
+
+| 置くもの | 役目 |
+| --- | --- |
+| /etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service | `systemctl enable`。起動時に動かす |
+| /etc/systemd/system/dev-ttyGS0.device.wants/serial-getty@ttyGS0.service | Wants のリンク。ttyGS0 が作られたとき（起動時に遅れてできたときも）に動かす |
+| /etc/systemd/system/serial-getty@ttyGS0.service.d/lefthand.conf | 端末の種類を `xterm-256color` にする（既定の vt220 では色が出ない） |
+
+- **起動の順序**：ttyGS0 は、`ethernet_gadget.service`（gadget-setup.sh）がガジェットを作ったときにできる。getty は ttyGS0 ができるのを待ってから起動する。
+- **USB を付け直したとき**：gadget-setup.sh が USB を付け直すと、getty の端末は一度切れる（ハングアップ）。getty は `Restart=always` ですぐ起動し直し、ログイン画面に戻る。ログインしていたシェルは終わる。
+- **パスワード**：ログインには、ユーザー名とパスワードが要る（Brainux の設定のまま。console-setup.sh は変えない）。
+
+> **初期パスワードを変えること**：Brainux のユーザー `user` の初期パスワード（`brain`）のままだと、USB ケーブルで PC につなげるだけで、誰でもログインして sudo できる。シリアルコンソールを有効にしたら、Brain で `passwd` を実行して、ほかの人に分からないパスワードに変える。SSH は鍵でログインしているなら、パスワードを変えても影響しない。
+
+### 使い方
+
+- **設定 GUI**：「コンソール」タブで「接続」を押す。初めてのときは、ポートの一覧から 1 つ目（Linux では ttyACM0）を選ぶ。ログイン画面が出ていなければ Enter を押す。GUI は自分からは何も送らない（打った文字と、下の stty だけを送る）。
+  - **ポートを覚える**：選んだポートは、ページを開いているあいだ覚えていて、次の接続では聞かない。設定のタブで設定用のポートが分かっていれば、コンソールはその逆なので聞かない（逆も同じ）。ページを開き直したときと、ケーブルを抜き差ししたときは、ブラウザが別のポートとして扱うので、もう一度選ぶ。
+  - **設定用を選んだとき**：何か打つと lefthand のエラー（JSON）が返るので、GUI が「これは設定用のポートです」と出す。「切断」して、もう一方を選ぶ。
+  - **端末の大きさ**：シリアルでは端末の大きさが Brain に伝わらない（`vi` や `less` が 24×80 のまま描く）。シェルのプロンプトが出ているときに「大きさを合わせる」を押すと、`stty rows <行> cols <桁>` を送る。ログイン画面やエディタに入力されてしまうので、自動では送らない。窓の大きさを変えたら、押し直す。
+  - **文字コード**：UTF-8。Brain のロケールは `en_US.UTF-8` なので、日本語のファイル名や出力も、そのまま表示できる。等幅の和文フォント（Noto Sans Mono CJK JP など）が PC にないと、全角の文字の間が空いて見える。
+  - **切断**：「切断」で閉じる。ケーブルが抜けたときや、Brain が USB を付け直したときは、端末と帯に「ケーブルが抜けたか、Brain の USB が付け直されました」と出る。つなぎ直してから「接続」を押す。シェルはログインしたまま残るので、使い終わったら `exit` でログアウトする。
+  - **届かないキー**：Ctrl+W、Ctrl+T、Ctrl+N など、ブラウザが先に使うキーは Brain に届かない。
+- **端末ソフト**：`screen /dev/ttyACM0 115200`、`picocom /dev/ttyACM0`、macOS では `screen /dev/cu.usbmodem01234567894` など。ACM なので速度はどれでもよい。端末の大きさは、同じように `stty rows … cols …` で伝える。使い終わったら閉じる（開いたままだと、GUI のコンソールのタブで開けない）。
+
 ## 画面とコンソール
 
 Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も使っている。
@@ -818,6 +870,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | 画面が戻らず、デーモンの表示が残っている | `ssh brain sudo /usr/local/bin/lefthand -restore-console` で元の VT に戻す |
 | 画面に何も表示されない | ログに `display disabled` が出ていないか。設定の `display.enabled` が false になっていないか |
 | ラベルの一部が □ になる | フォントにない文字。JIS 第一・第二水準の漢字と、一般的な記号は表示できる。設定 GUI では、入力したときに知らせる |
+| コンソールのタブで何も出ない | Enter を押す。`ssh brain sh ~/lefthand/console-setup.sh status` で getty が active か。設定用のポートを選んでいないか（何か打つと「設定用のポートです」と出る） |
+| コンソールでログインに失敗する、Brain に覚えのない失敗が残る | PC の ModemManager が AT を送っていないか（[設定 GUI の権限の節](#linux-でシリアルを使う権限)の udev の規則） |
 | 設定 GUI がつながらない | ポートの一覧に Brain が 2 つあるか（`ls /dev/ttyACM*` で 2 つ）。1 つしかないなら、Brain のガジェットが古い（[インストール](#インストール)の「ガジェットの設定」）。Linux で開けないなら dialout グループ（[設定 GUI](#linux-でシリアルを使う権限)）。ログに `control: listening on /dev/ttyGS1` が出ているか |
 | 設定 GUI で保存できない | 右の「検証」の一覧に誤りがないか。`hid_device` などを変えていないか |
 | 時計に「時刻未設定」と出る | Brain を起動してから、時刻を合わせていない。設定 GUI で接続する（[時刻合わせ](#時刻合わせ)） |
@@ -855,8 +909,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | font.go、font/ | 埋め込みフォントと、そのライセンス |
 | tools/mkfont/ | BDF フォントを埋め込み用の形式に変換するツール |
 | gadget-setup.sh | USB ガジェットを作るスクリプト。bash で実行すること（sh では HID の設定が壊れる） |
-| systemd/ | サービスと drop-in |
+| systemd/ | サービスと drop-in（serial-getty@ttyGS0.service.d/ はシリアルコンソールの getty） |
 | install.sh | Brain 上での配置 |
+| console-setup.sh | シリアルコンソール（ttyGS0 の getty）を有効にする・元に戻す |
+| contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則 |
 | config.yaml | 設定の例。実機と同じ値 |
 | config/current.yaml | Brain で動いている本番の設定の写し（2026-10-07 にダッシュボードのレイヤーを足して反映。メニューの「ダッシュボード」から入り、HOME で戻る） |
 | config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |
