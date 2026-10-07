@@ -290,7 +290,7 @@ func TestImageQuotaAndFreeSpace(t *testing.T) {
 	}
 
 	oldF := imageFreeSpace
-	imageFreeSpace = func(string) (int64, error) { return imageReserve + int64(len(b)) - 1, nil }
+	imageFreeSpace = func(string) (int64, int64, error) { return imageReserve + int64(len(b)) - 1, 1 << 40, nil }
 	m = d.call("image_begin", begin)
 	imageFreeSpace = oldF
 	if c := errCode(m); c != errNoSpace || !strings.Contains(m["error"].(map[string]any)["message"].(string), "SD card") {
@@ -689,5 +689,14 @@ func TestImagePreload(t *testing.T) {
 	}
 	if s.CacheBytes() != 3*(imageHeader+50*50*2) {
 		t.Fatalf("preloaded %d bytes", s.CacheBytes())
+	}
+}
+
+func TestImageReserve(t *testing.T) {
+	if r := reserveFor(3 << 30); r != imageReserve {
+		t.Errorf("SD card: reserve %d", r)
+	}
+	if r := reserveFor(57 << 20); r != (57<<20)/10 {
+		t.Errorf("small tmpfs: reserve %d", r)
 	}
 }

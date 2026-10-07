@@ -53,10 +53,10 @@ const (
 // 上限。テストで小さくするので変数にしてある
 var (
 	imageQuota      int64 = 16 << 20         // images の合計の上限
-	imageReserve    int64 = 64 << 20         // 保存したあとも、ファイルシステムに残しておく空き
+	imageReserve    int64 = 64 << 20         // 保存したあとも、ファイルシステムに残しておく空き（ファイルシステムの 10% のほうが小さければ、そちら）
 	imageCacheBytes       = 4 << 20          // 読み込んだ画像をメモリに置いておく上限
 	imageUploadIdle       = 60 * time.Second // image_chunk が来ないまま、これだけたつと受け取りをやめる
-	imageFreeSpace        = statfsFree       // ファイルシステムの空き（テストで差し替える）
+	imageFreeSpace        = statfsFree       // ファイルシステムの空きと大きさ（テストで差し替える）
 )
 
 var imageIDRE = regexp.MustCompile(`^[0-9a-f]{16}$`)
@@ -369,12 +369,18 @@ func (s *ImageStore) files() (map[string]int64, error) {
 	return out, nil
 }
 
-func statfsFree(dir string) (int64, error) {
+func statfsFree(dir string) (free, size int64, err error) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(dir, &st); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return int64(st.Bavail) * int64(st.Bsize), nil
+	return int64(st.Bavail) * int64(st.Bsize), int64(st.Blocks) * int64(st.Bsize), nil
+}
+
+// reserveFor は、大きさ size のファイルシステムに残しておく空き。SD カード（3 GB）では imageReserve（64 MiB）、
+// 小さなファイルシステム（-data-dir を tmpfs の /tmp にしたときなど）では、その 10%。
+func reserveFor(size int64) int64 {
+	return min(imageReserve, size/10)
 }
 
 // ImageInfo は list_images で返す、画像 1 枚の情報。
@@ -408,7 +414,7 @@ func (s *ImageStore) List(refs map[string][]string) (ImageList, error) {
 	}
 	x := s.loadIndexLocked()
 	out := ImageList{Images: []ImageInfo{}, LimitBytes: imageQuota, MaxImage: imageMaxBytes, MaxW: imageMaxSide,
-		MaxPixels: imageMaxPixels, ReserveBytes: imageReserve, ChunkBytes: imageChunkMax, Missing: []string{}}
+		MaxPixels: imageMaxPixels, ChunkBytes: imageChunkMax, Missing: []string{}}
 	for id, n := range files {
 		m, ok := x.Images[id]
 		if !ok { // index.json がない、壊れたとき。大きさはヘッダから読む
@@ -435,7 +441,8 @@ func (s *ImageStore) List(refs map[string][]string) (ImageList, error) {
 		}
 	}
 	sort.Strings(out.Missing)
-	out.FreeBytes, _ = imageFreeSpace(s.dir)
+	free, size, _ := imageFreeSpace(s.dir)
+	out.FreeBytes, out.ReserveBytes = free, reserveFor(size)
 	return out, nil
 }
 
@@ -598,14 +605,14 @@ func (s *ImageStore) Begin(b ImageBegin, now time.Time) (BeginResult, error) {
 			"the images would take %s, over the limit of %s (now %s in %d images). Remove unused images first (prune_images)",
 			kib(total+b.Bytes), kib(imageQuota), kib(total), len(files))
 	}
-	free, err := imageFreeSpace(s.dir)
+	free, size, err := imageFreeSpace(s.dir)
 	if err != nil {
 		return BeginResult{}, fmt.Errorf("checking free space: %w", err)
 	}
-	if free-b.Bytes < imageReserve {
+	if reserve := reserveFor(size); free-b.Bytes < reserve {
 		return BeginResult{}, imageErr(errImageNoSpace,
 			"the SD card has %s free; saving %s would leave less than %s, which is kept for the system",
-			kib(free), kib(b.Bytes), kib(imageReserve))
+			kib(free), kib(b.Bytes), kib(reserve))
 	}
 	var rnd [6]byte
 	rand.Read(rnd[:])
