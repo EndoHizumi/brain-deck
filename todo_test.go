@@ -72,7 +72,7 @@ func todoTexts(items []TodoItem) string {
 }
 
 func TestTodoServiceOps(t *testing.T) {
-	dir := t.TempDir()
+	dir := dataDir(t)
 	ts := NewTodoService(OpenStore(dir))
 	ts.saved = make(chan struct{}, 64)
 	now := time.Date(2026, 10, 7, 1, 0, 0, 0, time.UTC)
@@ -136,24 +136,32 @@ func TestTodoServiceOps(t *testing.T) {
 	if it, _ := ts.Toggle(b.ID, now, "brain"); it.Done || it.DoneAt != nil {
 		t.Fatalf("toggle back = %+v", it)
 	}
-	// 保存は返事のあとに行われる。最後の版が書かれるまで待つ
-	for deadline := time.Now().Add(5 * time.Second); ; {
-		var f todoFile
-		if ts.store.Load(todoStoreName, &f) == nil && f.Rev == ts.Snapshot().Rev {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("todo.json was not saved")
-		}
-		<-ts.saved
-	}
+	waitTodoSaved(t, ts)
 	// デーモンを起動し直しても残り、ID を使い回さない
 	ts2 := NewTodoService(OpenStore(dir))
 	if got := ts2.Snapshot(); todoTexts(got.Items) != "b" || got.Rev != ts.Snapshot().Rev {
 		t.Fatalf("after restart: %s rev %d (want rev %d)", todoTexts(got.Items), got.Rev, ts.Snapshot().Rev)
 	}
+	ts2.saved = make(chan struct{}, 64)
 	if d, _, _ := ts2.Add("d", -1, now, "test"); d.ID != "t4" {
 		t.Errorf("new id after restart = %s, want t4", d.ID)
+	}
+	waitTodoSaved(t, ts2) // 書いている途中で TempDir を消さない
+}
+
+// waitTodoSaved は、保存は返事のあとに行われるので、今の版が todo.json に書かれるまで待つ。ts.saved を作っておくこと。
+func waitTodoSaved(t *testing.T, ts *TodoService) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		var f todoFile
+		if ts.store.Load(todoStoreName, &f) == nil && f.Rev == ts.Snapshot().Rev {
+			return
+		}
+		select {
+		case <-ts.saved:
+		case <-time.After(time.Until(deadline)):
+			t.Fatal("todo.json was not saved")
+		}
 	}
 }
 
@@ -196,7 +204,9 @@ func newTodoTest(t *testing.T, n int) *todoTest {
 	todoHold = 60 * time.Millisecond
 	t.Cleanup(func() { todoHold = old })
 	_, km := compileText(t, todoConfig)
-	ts := NewTodoService(OpenStore(t.TempDir()))
+	ts := NewTodoService(OpenStore(dataDir(t)))
+	ts.saved = make(chan struct{}, 256)
+	t.Cleanup(func() { waitTodoSaved(t, ts) }) // TempDir を消す前に、保存が終わるのを待つ
 	for i := 0; i < n; i++ {
 		ts.Add(string(rune('a'+i)), -1, time.Now(), "test")
 	}
@@ -407,7 +417,10 @@ func TestProtocolTodo(t *testing.T) {
 	if _, err := d.todos.Toggle("t2", time.Now(), "brain"); err != nil {
 		t.Fatal(err)
 	}
-	ev := d.readMsg()
+	// 購読の前の変更の通知が、遅れて届くことがある。rev 5 まで読む
+	var ev map[string]any
+	for ev = d.readMsg(); ev["event"] == "todo" && ev["rev"].(float64) < 5; ev = d.readMsg() {
+	}
 	if ev["event"] != "todo" || ev["rev"] != float64(5) {
 		t.Fatalf("event = %v", ev)
 	}

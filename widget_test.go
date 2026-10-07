@@ -310,7 +310,7 @@ func TestSetTime(t *testing.T) {
 		t.Errorf("system clock set to %v, want about %v", fakeClockSet, target)
 	}
 	// clock.json は返事のあとに書く
-	clockFile := filepath.Join(filepath.Dir(d.path), "data", "clock.json")
+	clockFile := filepath.Join(d.dataDir, "clock.json")
 	for i := 0; i < 100; i++ {
 		if b, err := os.ReadFile(clockFile); err == nil && strings.Contains(string(b), `"source": "test"`) {
 			break
@@ -334,7 +334,7 @@ func TestSetTime(t *testing.T) {
 
 	// デーモンを起動し直しても、同じ起動のあいだなら合わせたまま。Brain を再起動すると未設定に戻る
 	d.clock.save() // 返事のあとに書いている分を、書き終えるまで待つ
-	dir := filepath.Join(filepath.Dir(d.path), "data")
+	dir := d.dataDir
 	if !NewTimeService(OpenStore(dir)).Synced() {
 		t.Error("restarting the daemon should keep the synced state")
 	}

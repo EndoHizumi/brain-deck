@@ -61,6 +61,7 @@ type testDaemon struct {
 	clock   *TimeService
 	texts   *TextService
 	todos   *TodoService
+	dataDir string
 	ctl     *Controller
 	conn    net.Conn // GUI 側
 	rd      *bufio.Reader
@@ -113,9 +114,10 @@ func newTestDaemon(t *testing.T, src string) *testDaemon {
 	d.monitor = &Monitor{}
 	d.engine.SetOnStatus(d.monitor.LayerChanged)
 	d.store = &configStore{path: d.path, cfg: cfg, km: km, apply: reloader(d.engine)}
-	d.clock = NewTimeService(OpenStore(filepath.Join(dir, "data")))
-	d.texts = NewTextService(OpenStore(filepath.Join(dir, "data")))
-	d.todos = NewTodoService(OpenStore(filepath.Join(dir, "data")))
+	d.dataDir = dataDir(t)
+	d.clock = NewTimeService(OpenStore(d.dataDir))
+	d.texts = NewTextService(OpenStore(d.dataDir))
+	d.todos = NewTodoService(OpenStore(d.dataDir))
 	d.todos.SetOnNotify(d.monitor.TodoChanged)
 	d.engine.SetWidgets(NewWidgetRT(d.todos))
 	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, todos: d.todos, started: time.Now()}
@@ -681,4 +683,20 @@ func TestSerialRawModeOnPTY(t *testing.T) {
 	if m["id"] != float64(7) || m["ok"] != true {
 		t.Fatalf("reply %v", m)
 	}
+}
+
+// dataDir は、ウィジェットのデータを置く一時ディレクトリ。データは返事のあとに別の goroutine が保存するので、
+// テストの終わりに書いている途中のことがある。t.TempDir は消せないと失敗するので、少し待って消し直す。
+func dataDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "lefthand-data-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 100 && os.RemoveAll(dir) != nil; i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	return dir
 }

@@ -56,7 +56,7 @@ func TestTextWidgetConfig(t *testing.T) {
 }
 
 func TestTextServiceSetAndPersist(t *testing.T) {
-	dir := t.TempDir()
+	dir := dataDir(t)
 	ts := NewTextService(OpenStore(dir))
 	ts.saved = make(chan struct{}, 16)
 	now := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
@@ -97,7 +97,7 @@ func TestTextServiceSetAndPersist(t *testing.T) {
 }
 
 func TestTextServiceEvictsOldest(t *testing.T) {
-	ts := NewTextService(OpenStore(t.TempDir()))
+	ts := NewTextService(OpenStore(dataDir(t)))
 	now := time.Now()
 	for i := 0; i <= textMaxEntries; i++ {
 		ts.Set(TextRequest{Name: "t" + string(rune('A'+i/26)) + string(rune('a'+i%26)), Text: "x"}, now.Add(time.Duration(i)*time.Second), true)
@@ -113,7 +113,7 @@ func TestTextServiceEvictsOldest(t *testing.T) {
 
 // 時刻を合わせる前に書いたテキストは、時刻を合わせたときに、同じだけ時刻を動かす
 func TestTextClockStepped(t *testing.T) {
-	ts := NewTextService(OpenStore(t.TempDir()))
+	ts := NewTextService(OpenStore(dataDir(t)))
 	brainNow := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC) // 37 時間遅れている
 	ts.Set(TextRequest{Name: "a", Text: "x", TTL: 10 * time.Minute}, brainNow, false)
 	ts.Set(TextRequest{Name: "b", Text: "y", TTL: 10 * time.Minute}, brainNow, true)
@@ -217,7 +217,7 @@ func TestProtocolSetText(t *testing.T) {
 		t.Errorf("entry = %v", e)
 	}
 	<-d.texts.saved
-	b, err := os.ReadFile(filepath.Join(filepath.Dir(d.path), "data", "text.json"))
+	b, err := os.ReadFile(filepath.Join(d.dataDir, "text.json"))
 	if err != nil || !strings.Contains(string(b), "ビルド成功") {
 		t.Errorf("text.json = %s %v", b, err)
 	}
