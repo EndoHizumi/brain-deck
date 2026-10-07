@@ -6,8 +6,8 @@ USB HID キーボードとして PC に送る。タッチパネルの画面に�
 
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
-- **ウィジェット**：タッチのセルに、キーの代わりに時計やテキストを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
-- **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Brain の時刻を合わせたりする。
+- **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定を表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、Brain の時刻を合わせたりする。
 - **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI が接続したときに PC の時刻に合わせる。
 - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
 - **PC から見た Brain**：標準の USB キーボードとして見えるので、PC 側に専用のソフトは要らない。同じ USB ケーブルで、設定や保守のためのネットワーク（SSH）とシリアルも使える。
@@ -233,7 +233,7 @@ touch:
 
 ### ウィジェットとセルの大きさ
 
-タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）。
+タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）。
 また、どのセルも `span: [列数, 行数]` で、右と下のセルにまたがる大きさにできる。
 
 ```yaml
@@ -244,6 +244,7 @@ cells:
   "0,2": { key: ENTER, span: [3, 1], label: "決定" }              # 横に 3 つぶんのキー
   "2,1": { widget: text, id: build, label: "ビルド" }             # テキスト。中身は PC から brain-deck で書き換える
   "0,0": { widget: todo, span: [2, 3], label: Todo }              # Todo の一覧（別のレイヤーの例）
+  "0,0": { widget: calendar, span: [2, 3], label: 予定 }          # 今日の予定と次の予定（別のレイヤーの例）
 ```
 
 - **書式**：`format`（時刻、既定 `15:04`）と `date_format`（日付、既定 `1月2日({wday})`、`none` で出さない）は Go の書き方。`{wday}` は日本語の曜日。詳しくは [docs/config.md](docs/config.md) の「ウィジェット」。
@@ -251,7 +252,8 @@ cells:
 - **描き直し**：時計は 1 分に 1 回（秒を出すときだけ 1 秒に 1 回）、変わったセルだけを描き直す。実機で、秒つきの時計 1 つの描き直しは約 4 ms。
 - **時刻を合わせていないとき**：時刻を橙色で描き、日付の代わりに「時刻未設定」と出す（[時刻合わせ](#時刻合わせ)）。
 - **テキスト**：中身は設定ファイルではなく Brain のデータ（`/var/lib/lefthand/text.json`）で、PC の [brain-deck](#brain-deckpc-のコマンド) から書き換える。色は通常・成功・失敗・警告の 4 種類。有効期限を過ぎると、消さずに薄く表示する。一度も書いていない id は「未設定」と出る。長い文は折り返し、入りきらなければ「…」で切る。
-- **Todo**：項目は Brain のデータ（`/var/lib/lefthand/todo.json`）で、設定 GUI の「Todo」タブか [brain-deck todo](#todo) で書き換える。未完了の下に、完了した項目を薄く（取り消し線で）並べる。Brain では、**項目を 0.5 秒押し続けると完了を切り替える**（押しているあいだ、その行が黄色になる）。入りきらないときは、セルの下の帯の **▲ ▼ をタップしてページを送る**（画面右の帯の ▲▼ はレイヤーの切り替えに使っているため、別にした）。`rows: 3` で 1 ページの行数を決められる。Todo のセルには `key` や `layer_*` は書けない。
+- **Todo**：項目は Brain のデータ（`/var/lib/lefthand/todo.json`）で、設定 GUI の「Todo」タブか [brain-deck todo](#todo) で書き換える。未完了の下に、完了した項目を薄く（取り消し線で）並べる。Brain では、**項目を 0.5 秒押し続けると完了を切り替える**（押しているあいだ、その行が黄色になる）。入りきらないときは、セルの下の帯の **▲ ▼ をタップしてページを送る**（画面右の帯の ▲▼ はレイヤーの切り替えに使っているため、別にした）。`rows: 3` で 1 ページの行数を決められる。見出しには残りの件数を出す（「Todo 残り 3」）。ページを送ったあと 1 分触らなければ、1 ページ目に戻る（`page_reset: 30s` で変えられる。`off` で戻らない）。Todo のセルには `key` や `layer_*` は書けない。
+- **カレンダー**：予定は Brain のデータ（`/var/lib/lefthand/calendar.json`）で、PC の [brain-deck calendar sync](#カレンダー) が ICS の URL から取ってきて送る。今日の予定（終日、時刻の順）と、今日より先の次の予定を 1 つ出す。**今の予定は行を青く塗り**、終わった予定は薄く出す。左の色の帯はカレンダーの色。いちばん下に**最終更新の時刻**を小さく出し、3 時間より古い（`stale: 3h` で変えられる）、取得に失敗した、Brain の時刻を合わせていない、のどれかなら橙色にする。入りきらないときは Todo と同じく下の ▲▼ でページを送り、触っていないときは「今かこれからの予定」があるページを出す。`calendars: [仕事]` で出すカレンダーを選べる。
 - **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」と「Todo」のレイヤーを足したもの。
 
 ### データの置き場所（/var/lib/lefthand）
@@ -263,13 +265,14 @@ cells:
 | clock.json | 最後に時刻を合わせた記録（起動ごとの ID、時刻、ずれ、送った側） |
 | text.json | テキストのタイルの中身（id ごとに、テキスト、色、書いた時刻、有効期限、送った側）。64 個まで覚え、超えたら古いものから捨てる |
 | todo.json | Todo の項目（ID、文、完了、更新番号、時刻、変えた側）。数の上限はない |
+| calendar.json | カレンダーの予定（カレンダーごとに、名前、色、取ってきた時刻、取得の失敗、予定）。展開したあとの予定で、1000 件まで |
 
 - **書き込み**：一時ファイルに書いて rename する。SD カードへの書き込みは数秒かかることがあるので、通信の返事は書き込みを待たずに返す。続けて書き換えたときは、まとめて 1 回書く。
 - **消すとき**：`brain-deck text <id> --clear`。全部消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/text.json`。
 
 - **Todo を全部消すとき**：GUI の「Todo」タブか `brain-deck todo rm`。ファイルごと消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/todo.json`。
 
-カレンダーのデータも、ここに置く予定。
+- **予定を消すとき**：`brain-deck calendar clear`。
 
 ### 今のレイヤーの表示
 
@@ -368,6 +371,7 @@ brain-deck text --list                                     # Brain にあるテ�
 brain-deck todo add "牛乳を買う"                           # Todo を足す
 brain-deck todo                                            # Todo の一覧（番号は Brain の画面と同じ順）
 brain-deck todo done 2                                     # 2 番を完了にする
+brain-deck calendar sync                                   # カレンダー（ICS）の予定を取ってきて送る
 brain-deck time sync                                       # PC の時刻を Brain に送る
 brain-deck status                                          # 版、レイヤー、Brain の時刻
 ```
@@ -425,6 +429,112 @@ $ brain-deck todo
 - **並べ替え**：コマンドではできない。設定 GUI の「Todo」タブで行う。
 - **速さ**：実機で、1 回のコマンドは 30〜60 ms。Brain の画面は 10〜30 ms で描き直す。
 
+### カレンダー
+
+ICS（iCalendar）の URL から予定を取ってきて、Brain のカレンダーのセル（`widget: calendar`）に送る。Brain はインターネットに出ない。取ってくるのも、繰り返しの予定とタイムゾーンを解くのも PC で行い、Brain には「今日から 7 日先まで」の予定だけを送る。
+
+```sh
+brain-deck calendar sync                   # ~/.config/brain-deck/calendars.yaml のカレンダーを送る
+brain-deck calendar sync --dry-run         # 取ってきた予定を表示するだけ（Brain には送らない）
+brain-deck calendar sync --ics "https://…/basic.ics" --days 3   # 設定ファイルを使わず、URL を直接（何度でも書ける）
+brain-deck calendar                        # Brain にある予定と、カレンダーごとの最終更新
+brain-deck calendar clear                  # Brain の予定を消す
+```
+
+```
+$ brain-deck calendar sync
+10/7〜10/14 の予定を送りました（仕事：12 件、家：3 件）
+Brain の時刻を合わせました（719ms 遅れていた。今 2026-10-07 10:37:43）
+```
+
+**設定ファイル**（`~/.config/brain-deck/calendars.yaml`。`$XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/brain-deck/`。macOS も同じ場所）
+
+```yaml
+days: 7                       # 今日から何日先までを送るか（1〜31。既定 7）
+calendars:
+  - name: 仕事                # Brain の画面と、セルの calendars: で使う名前（32 文字まで）
+    url: https://calendar.google.com/calendar/ical/xxxx/private-xxxx/basic.ics
+    color: blue               # #rrggbb か、blue green orange purple yellow cyan pink gray red white
+  - name: 家
+    url: webcal://p00-caldav.icloud.com/published/2/xxxx
+    color: green
+```
+
+- **URL は秘密の情報**：ICS の非公開 URL を知っていれば、だれでも予定を読める。このファイルはリポジトリに入れず、`chmod 600` にする（ほかのユーザーが読めると注意を出す）。brain-deck は、エラーにも `-v` のログにも、Brain に送るデータにも URL を出さない（ホスト名だけ）。
+- **URL の調べ方**：Google カレンダーは「設定と共有」→ カレンダーを選ぶ →「iCal 形式の非公開 URL」。iCloud は、カレンダーの「共有」→「公開カレンダー」の URL（`webcal://`）。Outlook（Microsoft 365）は「設定」→「予定表」→「共有の予定表」→「予定表を公開する」の ICS のリンク。ファイル（`/home/me/cal.ics`、`file://…`）も読める。
+- **時刻**：PC の時刻を正とする。予定を送る前に、Brain の時刻を PC に合わせる（`--no-time-sync` で合わせない）。「今日」と時刻の表示は、Brain のタイムゾーン（PC と同じ Asia/Tokyo を想定）で決める。
+- **範囲**：今日の 0 時から `days` 日先の終わりまで（既定 7 で、今日を含めて 8 日分）。範囲の前から続いている予定も送る。
+- **繰り返し**：RRULE（毎日、毎週、毎月、毎年、間隔、回数、終わりの日、BYDAY など）、EXDATE（除いた回）、RDATE、RECURRENCE-ID（1 回だけ時刻や名前を変えた回）、STATUS:CANCELLED（中止した予定や回）に対応する。繰り返しは、その予定のタイムゾーンの壁時計の時刻で数えるので、夏時間をまたいでも 10:00 の予定は 10:00 のまま。
+- **終日の予定**：日付だけで送り、Brain の日付で今日かどうかを決める。何日も続く予定は、毎日「終日」に出る。
+- **タイムゾーン**：TZID の IANA の名前（Google、iCloud）、Windows の名前（Outlook の「Tokyo Standard Time」など、よく使うもの）、ファイルの中の VTIMEZONE の順に解決する。TZID のない時刻は、カレンダーの X-WR-TIMEZONE か、PC のタイムゾーンとみなす。知らない名前は PC のタイムゾーンとみなし、注意を出す。
+- **送るもの**：予定の名前、場所、始まりと終わりだけ。説明、参加者、通知は送らない。予定は合わせて 1000 件まで（超えたら先の予定を送らず、注意を出す）。
+- **取得に失敗したとき**：ほかのカレンダーは送り、失敗したカレンダーは Brain に前の予定を残す。Brain の画面では、最終更新の行が橙色になり「失敗 1」と出る。終了コードは 7。
+- **時間**：予定の取得は、ポートを開く前に行う（取得に時間がかかっても、そのあいだ設定 GUI を締め出さない）。Brain とのやりとりは 0.1 秒ほど（実機）。
+
+### 定期的に予定を送る（cron、systemd、launchd）
+
+予定は自動では更新されない。PC で定期的に `brain-deck calendar sync` を実行する。設定はユーザーが行う。Brain がつながっていない（終了コード 3）、設定 GUI の接続中（4）は、何もせずに終わる。
+
+cron（`crontab -e`）：
+
+```cron
+# 15 分ごとに、予定を送る（Brain の時刻も合わせる）。失敗したときだけログに残す
+*/15 * * * * $HOME/.local/bin/brain-deck -q calendar sync >> $HOME/.cache/brain-deck.log 2>&1
+```
+
+systemd のユーザータイマー（Linux。スリープから戻ったあとも、逃した回をすぐ実行する）：
+
+```ini
+# ~/.config/systemd/user/brain-deck-calendar.service
+[Unit]
+Description=Brain にカレンダーの予定を送る
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/brain-deck -q calendar sync
+# 3（Brain がない）と 4（設定 GUI の接続中）は失敗にしない
+SuccessExitStatus=3 4
+```
+
+```ini
+# ~/.config/systemd/user/brain-deck-calendar.timer
+[Unit]
+Description=15 分ごとに Brain にカレンダーの予定を送る
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now brain-deck-calendar.timer
+journalctl --user -u brain-deck-calendar   # 結果を見る
+```
+
+macOS の launchd（`~/Library/LaunchAgents/local.brain-deck.calendar.plist`。`launchctl load` で読み込む）：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>local.brain-deck.calendar</string>
+  <key>ProgramArguments</key><array>
+    <string>/Users/me/.local/bin/brain-deck</string><string>-q</string><string>calendar</string><string>sync</string>
+  </array>
+  <key>StartInterval</key><integer>900</integer>
+  <key>StandardErrorPath</key><string>/tmp/brain-deck.log</string>
+</dict></plist>
+```
+
+- **dialout（Linux）**：cron と同じく、実行するユーザーが dialout グループに入っている必要がある（[cron で時刻を合わせる](#cron-で時刻を合わせる)の注意も参照）。systemd のユーザータイマーは、ログインし直せば新しいグループで動く。
+- **時刻合わせ**：`calendar sync` は時刻も合わせるので、別に `time sync` の cron を置かなくてよい。
+- **間隔**：短くしても Brain の負担は小さい（受け取って描き直すだけ）。ICS の提供元によっては、短い間隔での取得を制限することがある（Google は数時間遅れることがある）。15 分〜1 時間を勧める。
+
 ### 終了コード
 
 | コード | 意味 | 例 |
@@ -436,8 +546,9 @@ $ brain-deck todo
 | 4 | 設定 GUI が接続中（ほかのプログラムがポートを使っている） | 「設定 GUI が接続中です（chromium (pid 1234) が … を開いています）」。ほかの brain-deck が 5 秒以内に終わらないときも |
 | 5 | Brain がエラーを返した | `--style` の誤り、古い lefthand（`set_text` がない）、Todo を読んだあとに Brain で変わった |
 | 6 | ポートを開く権限がない | Linux で dialout に入っていない |
+| 7 | 予定の取得に失敗した（`calendar sync`） | ICS の URL が 404、ネットワークにつながらない。取れたカレンダーは送っている |
 
-- **待つ時間**：全体で 5 秒（`--timeout` で変える）。Brain が見つからない、GUI が接続中のときは、すぐに終わる。ビルドのスクリプトから呼んでも止まらない。
+- **待つ時間**：Brain との通信は、全体で 5 秒（`--timeout` で変える）。`calendar sync` の予定の取得は、これとは別に 30 秒まで（`--fetch-timeout`）。Brain が見つからない、GUI が接続中のときは、すぐに終わる。ビルドのスクリプトから呼んでも止まらない。
 - **出力**：成功したときは 1 行を標準出力に、エラーは標準エラーに出す。`-q` で成功の出力を消す。`-v` で通信の中身を出す。
 
 ### ポートの探し方
@@ -724,13 +835,20 @@ TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/todo.png -render-layer todo
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/todo-page2.png -render-layer todo -render-todo-page 2 -render-time $T -render-texts $X -render-todo $D $C
 echo '{"rev":0,"next_id":1,"items":[]}' > /tmp/empty.json
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/todo-empty.png -render-layer todo -render-time $T -render-texts $X -render-todo /tmp/empty.json $C
+# カレンダー。予定は gui/test/fixtures/calendar.json（今は 09:30〜10:30 の予定）と calendar-stale.json（古い、家の取得に失敗）
+K=gui/test/fixtures/calendar.json
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar.png -render-layer calendar -render-time $T -render-calendar $K $C
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-page2.png -render-layer calendar -render-calendar-page 2 -render-time $T -render-calendar $K $C
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-stale.png -render-layer calendar -render-time $T -render-calendar gui/test/fixtures/calendar-stale.json $C
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-none.png -render-layer calendar -render-time $T -render-unsynced $C
 ```
 
 時計の書式は、GUI（`gui/src/clock.ts`）でも Go と同じ結果になるよう作り直している。Go の結果の表（`gui/test/fixtures/goformat.json`）と比べるので、書式の処理を変えたら `LEFTHAND_UPDATE_GOFORMAT=1 go test -run GoFormatTable` で書き直す。
 テキストの折り返し（`gui/src/textwidget.ts`）も同じく、Go の結果の表（`gui/test/fixtures/textlayout.json`）と比べる。折り返し方を変えたら `LEFTHAND_UPDATE_TEXTLAYOUT=1 go test -run TextLayoutTable` で書き直す。
 Todo の配置と「…」での省略（`gui/src/todowidget.ts`）も、Go の表（`gui/test/fixtures/todolayout.json`）と比べる。変えたら `LEFTHAND_UPDATE_TODOLAYOUT=1 go test -run TodoLayoutTable`。
+カレンダーの行、ページ、最終更新（`gui/src/calwidget.ts`）も、Go の表（`gui/test/fixtures/callayout.json`。3 つの予定 × 6 つの時刻 × 4 つの大きさ × 5 つの設定）と比べる。変えたら `LEFTHAND_UPDATE_CALLAYOUT=1 go test -run CalLayoutTable`。
 
-brain-deck のテストは、PTY を Brain の代わりにして、ポートの排他、開き直し、終了コードを確かめる（Linux だけ）。macOS 向けは `GOOS=darwin go vet ./cmd/brain-deck` でビルドできることだけを確かめている。
+brain-deck のテストは、PTY を Brain の代わりにして、ポートの排他、開き直し、終了コードを確かめる（Linux だけ）。カレンダーは、Google と Outlook の形の ICS（繰り返し、例外、中止、夏時間、Windows の名前、VTIMEZONE）の展開と、ローカルの HTTP サーバーからの `calendar sync`（URL が漏れないこと、取得の失敗、終了コード 7）を確かめる。macOS 向けは `GOOS=darwin go vet ./cmd/brain-deck` でビルドできることだけを確かめている。
 
 本体キーの表（keymap_pwsh2.go）を変えたら、GUI に同梱した表も `LEFTHAND_UPDATE_KEYMAP=1 go test -run KeymapJSON` で書き直す。
 
@@ -752,8 +870,10 @@ ssh brain 'sudo systemctl stop lefthand.service; cd ~/lefthand && sudo LEFTHAND_
 ```
 
 `TestHWTodo` は、Todo のセルの行と ▼ を（エンジンを通して）押し、長押しの黄色、完了の切り替え、ページ送りの描き直しの時間をログに出し、フレームバッファが全体を描き直したものと同じことを確かめる。
+`TestHWCalendar` は、6 秒後に始まって 9 秒後に終わる予定で、予定の始まりと終わりに自分で描き直すことと、▲▼、PC から送り直したときの描き直しの時間を測る。
 
 ### コマンドラインのオプション
+
 
 ```
 lefthand [-v] [-serial /dev/ttyGS1] [-data-dir /var/lib/lefthand] [config.yaml]
@@ -774,6 +894,8 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-texts texts.json            テキストのタイルの中身（text.json と同じ形）
          -render-todo todo.json              Todo のセルの項目（todo.json と同じ形）
          -render-todo-page 2                 Todo のセルに出すページ（1 から）
+         -render-calendar calendar.json      カレンダーのセルの予定（calendar.json と同じ形）
+         -render-calendar-page 2             カレンダーのセルに出すページ（1 から。省略すると触っていないときのページ）
 ```
 
 ## フォントとライセンス

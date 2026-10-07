@@ -56,7 +56,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 
 - `protocol` はこの文書の版。互換性のない変更をしたら上げる。GUI は違えば使わない。
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
-- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
+- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
 
 ### get_config
@@ -298,6 +298,47 @@ Todo のセル（`{ widget: todo }`）の項目を読み書きする。項目は
 - **文**：前後の空白を除き、改行とタブは空白にする。空と、200 文字を超えるものは `bad_request`。
 - **保存**：返事は、`todo.json` の書き込み（SD カード）を待たない。続けて変えたときは、まとめて書く。
 - **数**：上限はない。
+
+### set_calendar
+
+カレンダーのセル（`{ widget: calendar }`）の予定を、まとめて差し替える。PC の `brain-deck calendar sync` が、ICS の URL から取ってきて送る。
+
+```json
+→ {"id":30,"cmd":"set_calendar","from":"2026-10-06","days":7,"source":"brain-deck","calendars":[
+   {"name":"仕事","color":"#4f9dff","fetched_at":"2026-10-06T00:35:00Z","events":[
+     {"title":"設計レビュー","start":"2026-10-06T00:30:00Z","end":"2026-10-06T01:30:00Z","location":"会議室A"},
+     {"title":"社内イベント週間","day":"2026-10-05","end_day":"2026-10-10"}]},
+   {"name":"家","color":"#50d880","error":"取得できません（HTTP 404）","events":[]}]}
+← {"id":30,"ok":true,"result":{"rev":4,"shown":true,"calendars":[
+   {"name":"仕事","events":2,"fetched_at":"2026-10-06T00:35:00Z"},
+   {"name":"家","events":3,"fetched_at":"2026-10-05T13:10:00Z","error":"取得できません（HTTP 404）","kept":true}]}}
+```
+
+| 引数 | 内容 |
+| --- | --- |
+| `calendars` | 必須。カレンダーの配列（16 個まで）。送らなかったカレンダーは Brain から消える |
+| `name` | 1〜32 文字。ほかと重ならない。セルの `calendars` で選ぶときの名前 |
+| `color` | `#rrggbb`。省略すると、順に決まった色 |
+| `fetched_at` | 予定を取ってきた時刻（PC の時刻）。画面の「更新」に出る |
+| `error` | 取得に失敗したときの説明（200 文字まで）。`events` が空なら、Brain は前に受け取った予定と `fetched_at` を残す（結果の `kept`） |
+| `events` | 予定。時刻の決まった予定は `start` と `end`（RFC 3339）、終日の予定は `day` と `end_day`（YYYY-MM-DD。`end_day` の日は含まない。省略すると 1 日）。`title` と `location` は 200 文字まで（超えたら切る）。改行は空白にする |
+| `from`、`days` | 送った範囲（記録用） |
+
+- **展開済み**：繰り返し（RRULE）、例外、タイムゾーンは PC で解いてから送る。Brain は受け取った予定をそのまま出す。
+- **数**：すべてのカレンダーの予定を合わせて 1000 件まで。1 行の上限（256 KiB）にも収まる。
+- **保存**：`/var/lib/lefthand/calendar.json` に書く。返事は書き込みを待たない。
+- **誤り**：`name` の重なり、`color` の形、`start` と `day` の両方、`end` が `start` より前、制御文字などは `bad_request`。何も変えない。
+- **消すとき**：`calendars` を空の配列にして送る（`brain-deck calendar clear`）。
+
+### get_calendar
+
+```json
+→ {"id":31,"cmd":"get_calendar"}
+← {"id":31,"ok":true,"result":{"rev":4,"received_at":"2026-10-06T00:35:02Z","from":"2026-10-06","days":7,"source":"brain-deck",
+   "shown":true,"calendars":[{"name":"仕事","color":"#4f9dff","fetched_at":"...","events":[...]}]}}
+```
+
+Brain にある予定を返す。形は `set_calendar` の引数と同じ（`error` を含む）。一度も受け取っていなければ `rev` は 0、`calendars` は空。`shown` は、今の設定にカレンダーのセルがあるか。設定 GUI は、接続したときに読んでプレビューに描く。
 
 ### subscribe_data
 
