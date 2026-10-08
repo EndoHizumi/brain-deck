@@ -9,7 +9,8 @@
 #   - /etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service（systemctl enable。起動時に動かす）
 #   - /etc/systemd/system/dev-ttyGS0.device.wants/serial-getty@ttyGS0.service
 #     （ttyGS0 ができたとき、作り直されたときにも起動する）
-#   - /etc/systemd/system/serial-getty@ttyGS0.service.d/lefthand.conf（端末の種類を xterm-256color にする）
+#   - /etc/systemd/system/serial-getty@ttyGS0.service.d/lefthand.conf（端末の種類を xterm-256color にし、
+#     起動したときに何も書かず、Enter が届いてからログイン画面を出す。中身の説明はそのファイルに書いてある）
 # を置くだけ。gadget-setup.sh が USB を付け直すと getty は一度切れるが、serial-getty@.service の
 # Restart=always で起動し直す。
 # ログインにはパスワードが要る（Brainux の設定のまま。このスクリプトは変えない）。

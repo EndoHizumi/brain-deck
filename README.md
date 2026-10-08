@@ -942,17 +942,18 @@ console-setup.sh は、Brainux 本体のファイルを書き換えない。syst
 | --- | --- |
 | /etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service | `systemctl enable`。起動時に動かす |
 | /etc/systemd/system/dev-ttyGS0.device.wants/serial-getty@ttyGS0.service | Wants のリンク。ttyGS0 が作られたとき（起動時に遅れてできたときも）に動かす |
-| /etc/systemd/system/serial-getty@ttyGS0.service.d/lefthand.conf | 端末の種類を `xterm-256color` にする（既定の vt220 では色が出ない） |
+| /etc/systemd/system/serial-getty@ttyGS0.service.d/lefthand.conf | 端末の種類を `xterm-256color` にする（既定の vt220 では色が出ない）。起動したときに何も書かず、Enter が届いてからログイン画面を出す（下の「ログイン画面を Enter まで出さない理由」） |
 
 - **起動の順序**：ttyGS0 は、`ethernet_gadget.service`（gadget-setup.sh）がガジェットを作ったときにできる。getty は ttyGS0 ができるのを待ってから起動する。
 - **USB を付け直したとき**：gadget-setup.sh が USB を付け直すと、getty の端末は一度切れる（ハングアップ）。getty は `Restart=always` ですぐ起動し直し、ログイン画面に戻る。ログインしていたシェルは終わる。
+- **ログイン画面を Enter まで出さない理由**：getty が起動したとき（起動時、USB を付け直したとき、[端末モード](#端末モード)を抜けたとき）に PC がポートを開いていないと、書いたもの（systemd の端末のリセットと大きさの問い合わせ、ログイン画面）は USB の送信待ちに残り、あとで PC がポートを開いた瞬間に届く。PC の tty が生のモードになる前（エコーがオン）に届くと、PC がそれを Brain に送り返し、getty がユーザー名として読んで、ログインの失敗が残ることがあった（設定 GUI の Chromium でも起きた。以前の `FAILED LOGIN … FOR ^[[6n…` の記録はこれ）。そこで drop-in で systemd のリセットをやめ（`TTYReset=no`）、agetty に `--wait-cr` を付けた。Enter が届くまでに打った文字は捨てる。前の drop-in は `lefthand.conf.prev` に残してある。
 - **パスワード**：ログインには、ユーザー名とパスワードが要る（Brainux の設定のまま。console-setup.sh は変えない）。
 
 > **初期パスワードを変えること**：Brainux のユーザー `user` の初期パスワード（`brain`）のままだと、USB ケーブルで PC につなげるだけで、誰でもログインして sudo できる。シリアルコンソールを有効にしたら、Brain で `passwd` を実行して、ほかの人に分からないパスワードに変える。SSH は鍵でログインしているなら、パスワードを変えても影響しない。
 
 ### 使い方
 
-- **設定 GUI**：「コンソール」タブで「接続」を押す。初めてのときは、ポートの一覧から 1 つ目（Linux では ttyACM0）を選ぶ。ログイン画面が出ていなければ Enter を押す。GUI は自分からは何も送らない（打った文字と、下の stty だけを送る）。
+- **設定 GUI**：「コンソール」タブで「接続」を押す。初めてのときは、ポートの一覧から 1 つ目（Linux では ttyACM0）を選ぶ。Enter を押すとログイン画面が出る（getty は Enter が届くまで何も出さない）。GUI は自分からは何も送らない（打った文字と、下の stty だけを送る）。
   - **ポートを覚える**：選んだポートは、ページを開いているあいだ覚えていて、次の接続では聞かない。設定のタブで設定用のポートが分かっていれば、コンソールはその逆なので聞かない（逆も同じ）。ページを開き直したときと、ケーブルを抜き差ししたときは、ブラウザが別のポートとして扱うので、もう一度選ぶ。
   - **設定用を選んだとき**：何か打つと lefthand のエラー（JSON）が返るので、GUI が「これは設定用のポートです」と出す。「切断」して、もう一方を選ぶ。
   - **端末の大きさ**：シリアルでは端末の大きさが Brain に伝わらない（`vi` や `less` が 24×80 のまま描く）。シェルのプロンプトが出ているときに「大きさを合わせる」を押すと、`stty rows <行> cols <桁>` を送る。ログイン画面やエディタに入力されてしまうので、自動では送らない。窓の大きさを変えたら、押し直す。
