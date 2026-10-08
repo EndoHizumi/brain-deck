@@ -41,8 +41,9 @@ type USBMode struct {
 	dev       string
 	script    string
 	switching bool
-	onChange  []func()                                                   // 切り替えたあと（画面の描き直し、トラックパッドの取り消し）
-	run       func(ctx context.Context, script string, mouse bool) error // テストで差し替える
+	terminal  bool                                                                 // 端末モード（構成の名前に terminal を付ける。termmode.go）
+	onChange  []func()                                                             // 切り替えたあと（画面の描き直し、トラックパッドの取り消し）
+	run       func(ctx context.Context, script string, mouse, terminal bool) error // テストで差し替える
 	detect    func(dev string) HIDLayout
 }
 
@@ -107,8 +108,33 @@ func (u *USBMode) Request(mode string) (mouse, changed bool, err error) {
 	return mouse, true, nil
 }
 
+// SetTerminal は、USB の構成の名前を端末モードのもの（on）か、ふだんのものにして、付け直す。終わるまで待つ。
+// PC の udev は、端末モードの名前のときだけ、1 つ目のシリアルで getty を起動する（contrib/udev/71-brain-terminal.rules）。
+// HID の形（マウスのあり・なし）は変えない。
+func (u *USBMode) SetTerminal(on bool) error {
+	if u == nil {
+		return errors.New("USB mode switching is not available")
+	}
+	deadline := time.Now().Add(40 * time.Second)
+	for {
+		u.mu.Lock()
+		if !u.switching {
+			break
+		}
+		u.mu.Unlock()
+		if time.Now().After(deadline) {
+			return errUSBBusy
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	u.switching = true
+	u.terminal = on
+	u.mu.Unlock()
+	return u.apply(u.Mouse())
+}
+
 // apply は、USB を付け直して形を変える。キーとボタンをすべて離してから行う。
-func (u *USBMode) apply(mouse bool) {
+func (u *USBMode) apply(mouse bool) error {
 	start := time.Now()
 	u.s.releaseAll()
 	// 付け直しのあいだは、キーボードとマウスのレポートを書かせない（入力は、終わってから届く）
@@ -116,7 +142,10 @@ func (u *USBMode) apply(mouse bool) {
 	u.s.mouse.mu.Lock()
 	u.hid.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err := u.run(ctx, u.script, mouse)
+	u.mu.Lock()
+	terminal := u.terminal
+	u.mu.Unlock()
+	err := u.run(ctx, u.script, mouse, terminal)
 	cancel()
 	l := u.detect(u.dev)
 	u.s.kbdID = l.KeyboardID
@@ -139,15 +168,14 @@ func (u *USBMode) apply(mouse bool) {
 	for _, f := range fs {
 		f()
 	}
+	return err
 }
 
-func runGadgetSetup(ctx context.Context, script string, mouse bool) error {
-	m := "0"
-	if mouse {
-		m = "1"
-	}
+// runGadgetSetup は gadget-setup.sh を実行する。mouse は HID の形、terminal は構成の名前（端末モード）。
+func runGadgetSetup(ctx context.Context, script string, mouse, terminal bool) error {
+	b := map[bool]string{false: "0", true: "1"}
 	cmd := exec.CommandContext(ctx, script)
-	cmd.Env = append(os.Environ(), "HID_MOUSE="+m, "LEFTHAND_SELF=1")
+	cmd.Env = append(os.Environ(), "HID_MOUSE="+b[mouse], "GADGET_TERMINAL="+b[terminal], "LEFTHAND_SELF=1")
 	out, err := cmd.CombinedOutput()
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if l != "" {

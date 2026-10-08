@@ -16,10 +16,11 @@ type fakeGadget struct {
 	mu    sync.Mutex
 	mouse bool
 	runs  []bool
+	terms []bool        // 付け直すたびの構成の名前（端末モードか）
 	block chan struct{} // 閉じるまで付け直しを終えない
 }
 
-func (g *fakeGadget) run(ctx context.Context, script string, mouse bool) error {
+func (g *fakeGadget) run(ctx context.Context, script string, mouse, terminal bool) error {
 	if g.block != nil {
 		<-g.block
 	}
@@ -27,6 +28,7 @@ func (g *fakeGadget) run(ctx context.Context, script string, mouse bool) error {
 	defer g.mu.Unlock()
 	g.mouse = mouse
 	g.runs = append(g.runs, mouse)
+	g.terms = append(g.terms, terminal)
 	return nil
 }
 
@@ -148,4 +150,50 @@ layers:
 			t.Errorf("%s: %v", bad, err)
 		}
 	}
+}
+
+// 端末モードの構成の名前は、マウスの切り替えで付け直しても残る。端末モードの切り替えでは HID の形を変えない
+func TestUSBModeTerminalName(t *testing.T) {
+	old := usbSwitchDelay
+	usbSwitchDelay = 0
+	defer func() { usbSwitchDelay = old }()
+	h := &hidRec{}
+	s := &State{hid: h, active: map[string]Combo{}, mouse: NewMouse(h, 0)}
+	g := &fakeGadget{}
+	u := NewUSBMode(s, NewHIDWriter(os.DevNull), "/dev/null", "gadget-setup")
+	u.run, u.detect = g.run, g.detect
+	changed := make(chan struct{}, 4)
+	u.OnChange(func() { changed <- struct{}{} })
+	if err := u.SetTerminal(true); err != nil {
+		t.Fatal(err)
+	}
+	<-changed
+	if _, ch, err := u.Request(usbMouse); err != nil || !ch {
+		t.Fatalf("mouse: %v %v", ch, err)
+	}
+	<-changed
+	if err := u.SetTerminal(false); err != nil {
+		t.Fatal(err)
+	}
+	<-changed
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if want := []bool{true, true, false}; !equalBools(g.terms, want) {
+		t.Errorf("terminal names = %v, want %v", g.terms, want)
+	}
+	if want := []bool{false, true, true}; !equalBools(g.runs, want) {
+		t.Errorf("mouse = %v, want %v", g.runs, want)
+	}
+}
+
+func equalBools(a, b []bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

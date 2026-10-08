@@ -26,6 +26,7 @@
 #   - HID の形（マウスのあり・なし）が HID_MOUSE と違えば、作り直す。HID の属性はリンク中は書けないので、
 #     HID と、そのあとの ACM 2 つのリンクを外し、属性を書いて、同じ順でリンクし直す（番号は変わらない）。
 #     ACM のファンクションそのもの（ttyGS0、ttyGS1）は消さない
+#   - 構成の名前を GADGET_TERMINAL に合わせる（端末モードでは「NCM+HID+ACM+ACM terminal」）。違えば切り離して書き換える
 #   - UDC が未接続なら接続し、usb0 に固定 IP を付ける
 #
 # 環境変数（動作確認用）:
@@ -33,6 +34,7 @@
 #   SKIP_BIND=1  UDC への接続と IP 設定をしない
 #   HID_MOUSE    0（既定）でキーボードだけ（ブートキーボード）、1 でキーボードとマウス。/etc/lefthand/gadget.env にも書ける
 #   LEFTHAND_SELF=1  lefthand から実行するとき。lefthand.service を止めない（lefthand が /dev/hidg0 を閉じてから呼ぶ）
+#   GADGET_TERMINAL  1 で端末モードの構成の名前にする（lefthand の端末モードだけが渡す。起動したときは 0）
 set -e
 
 GADGET_ENV=${GADGET_ENV:-/etc/lefthand/gadget.env}
@@ -252,6 +254,23 @@ if [ "$hid_ok" = 1 ]; then
   if [ "$rc" != 0 ]; then
     echo "設定 GUI 用の ACM を追加できませんでした。GUI は使えませんが、ほかは動きます" >&2
   fi
+fi
+
+# 構成の名前。端末モード（lefthand の termmode.go が GADGET_TERMINAL=1 で実行する）では、最後に " terminal" を付ける。
+# PC の udev の規則（contrib/udev/71-brain-terminal.rules）は、この名前のときだけ 1 つ目のシリアル（-if03）で
+# getty を起動する。ふだんの名前では何も起動しないので、Brain 側の getty（ttyGS0）とぶつからない。
+# 名前は付け直したときに PC に伝わるので、違っていれば UDC から切り離して書き換える
+set_conf_name() {
+  [ -e "$G/configs/c.1/acm.usb1" ] || return 0
+  local want="NCM+HID+ACM+ACM" f="$G/configs/c.1/strings/0x409/configuration"
+  [ "${GADGET_TERMINAL:-0}" = 1 ] && want="$want terminal"
+  [ "$(cat "$f")" = "$want" ] && return 0
+  unbind_udc
+  echo "$want" > "$f"
+  echo "configuration: $want"
+}
+if [ "$hid_ok" = 1 ]; then
+  set_conf_name || echo "構成の名前を変えられませんでした" >&2
 fi
 
 if [ "${SKIP_BIND:-0}" = 1 ]; then
