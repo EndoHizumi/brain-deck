@@ -84,6 +84,7 @@ func TestReportExitCodes(t *testing.T) {
 // fakeBrain は PTY のマスター側で、lefthand の代わりに返事をする。
 type fakeBrain struct {
 	mouse   bool // USB にマウスがあるか（set_usb_mode）
+	term    bool // 端末モード（set_terminal）
 	master  *os.File
 	slave   string
 	got     chan map[string]any
@@ -142,7 +143,12 @@ func (f *fakeBrain) serve(commands []string) {
 			res = map[string]any{"protocol": 1, "daemon": "lefthand", "version": "test", "commands": commands}
 		case "get_status":
 			res = map[string]any{"time": map[string]any{"now": time.Now().Format(time.RFC3339Nano), "synced": true},
-				"hid": map[string]any{"mouse": f.mouse, "switching": false}}
+				"hid":      map[string]any{"mouse": f.mouse, "switching": false},
+				"terminal": map[string]any{"active": f.term, "state": map[bool]string{true: "on", false: "off"}[f.term], "transport": "serial", "cols": 100, "rows": 31}}
+		case "set_terminal":
+			want := map[string]bool{"on": true, "off": false, "toggle": !f.term}[req["mode"].(string)]
+			res = map[string]any{"terminal": want, "info": map[string]any{"active": f.term, "state": map[bool]string{true: "on", false: "off"}[f.term]}}
+			f.term = want
 		case "set_usb_mode":
 			want := map[string]bool{"mouse": true, "keyboard": false, "toggle": !f.mouse}[req["mode"].(string)]
 			res = map[string]any{"mouse": want, "switching": want != f.mouse}
@@ -267,6 +273,27 @@ func TestUSBMode(t *testing.T) {
 		t.Fatalf("status: %d %s", code, out)
 	}
 	if code, _, _ := runCLI(t, "--port", f.slave, "usb-mode", "on"); code != exitUsage {
+		t.Fatalf("bad mode: %d", code)
+	}
+}
+
+func TestTerminal(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := newFakeBrain(t)
+	go f.serve([]string{"hello", "get_status", "set_terminal"})
+	if code, out, errs := runCLI(t, "--port", f.slave, "terminal"); code != exitOK || !strings.Contains(out, "オフ") {
+		t.Fatalf("show: %d %s %s", code, out, errs)
+	}
+	if code, out, errs := runCLI(t, "--port", f.slave, "terminal", "on"); code != exitOK || !strings.Contains(out, "端末モードに入ります") {
+		t.Fatalf("on: %d %s %s", code, out, errs)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "status"); code != exitOK || !strings.Contains(out, "端末モード\tオン（シリアル） 100×31") {
+		t.Fatalf("status: %d %s", code, out)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "terminal", "toggle"); code != exitOK || !strings.Contains(out, "抜けます") {
+		t.Fatalf("toggle: %d %s", code, out)
+	}
+	if code, _, _ := runCLI(t, "--port", f.slave, "terminal", "yes"); code != exitUsage {
 		t.Fatalf("bad mode: %d", code)
 	}
 }

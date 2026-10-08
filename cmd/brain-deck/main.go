@@ -85,6 +85,8 @@ const usage = `使い方：
   brain-deck status                   Brain の状態（版、時刻、レイヤー、USB の形）
   brain-deck usb-mode [keyboard|mouse|toggle]  USB の形を見る・切り替える。keyboard はキーボードだけ（ブートキーボード。
                                       起動したときの形）、mouse はキーボードとマウス。USB を付け直すので、2〜3 秒切れる
+  brain-deck terminal [on|off|toggle] 端末モード（Brain の画面とキーボードで PC にログインする）を見る・切り替える。
+                                      シリアルの端末モードでは、入るとき・抜けるときに USB を付け直す
   brain-deck version
 
 共通のオプション：
@@ -275,6 +277,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd = status
 	case "usb-mode":
 		cmd, err = usbModeCommand(o)
+	case "terminal":
+		cmd, err = terminalCommand(o)
 	default:
 		err = usageError("知らないコマンド " + strconv.Quote(o.args[0]))
 	}
@@ -558,9 +562,10 @@ func status(c *Client) (string, error) {
 			Layer string `json:"layer"`
 			Label string `json:"label"`
 		} `json:"status"`
-		Uptime int      `json:"uptime_sec"`
-		Time   timeInfo `json:"time"`
-		HID    *usbHID  `json:"hid"`
+		Uptime int       `json:"uptime_sec"`
+		Time   timeInfo  `json:"time"`
+		HID    *usbHID   `json:"hid"`
+		Term   *termInfo `json:"terminal"`
 	}
 	json.Unmarshal(raw, &st)
 	sync := "合わせてある"
@@ -574,7 +579,98 @@ func status(c *Client) (string, error) {
 	if st.HID != nil {
 		out += "\nUSB\t" + st.HID.describe()
 	}
+	if st.Term != nil {
+		out += "\n端末モード\t" + st.Term.describe()
+	}
 	return out, nil
+}
+
+// termInfo は get_status の terminal（lefthand の termmode.go の TermInfo）。
+type termInfo struct {
+	Active    bool   `json:"active"`
+	State     string `json:"state"`
+	Transport string `json:"transport"`
+	Status    string `json:"status"`
+	Cols      int    `json:"cols"`
+	Rows      int    `json:"rows"`
+}
+
+func (t termInfo) describe() string {
+	switch t.State {
+	case "off":
+		return "オフ"
+	case "entering":
+		return "入っている途中"
+	case "leaving":
+		return "抜けている途中"
+	}
+	s := "オン"
+	if t.Transport == "command" {
+		s += "（コマンド）"
+	} else {
+		s += "（シリアル）"
+	}
+	if t.Cols > 0 {
+		s += fmt.Sprintf(" %d×%d", t.Cols, t.Rows)
+	}
+	if t.Status != "" {
+		s += "：" + t.Status
+	}
+	return s
+}
+
+// terminalCommand は terminal。引数がなければ今の状態を出し、あれば切り替える。
+func terminalCommand(o *options) (func(*Client) (string, error), error) {
+	if len(o.args) > 2 {
+		return nil, usageError("terminal の引数は on、off、toggle のどれか 1 つです")
+	}
+	old := errors.New("Brain の lefthand が古く、端末モードがありません")
+	if len(o.args) == 1 {
+		return func(c *Client) (string, error) {
+			raw, err := c.Call("get_status", nil, callTimeout())
+			if err != nil {
+				return "", err
+			}
+			var st struct {
+				Term *termInfo `json:"terminal"`
+			}
+			json.Unmarshal(raw, &st)
+			if st.Term == nil {
+				return "", old
+			}
+			return "端末モードは " + st.Term.describe(), nil
+		}, nil
+	}
+	mode := o.args[1]
+	switch mode {
+	case "on", "off", "toggle":
+	default:
+		return nil, usageError("terminal の引数は on、off、toggle のどれかです（" + strconv.Quote(mode) + "）")
+	}
+	return func(c *Client) (string, error) {
+		if !c.Hello.has("set_terminal") {
+			return "", old
+		}
+		raw, err := c.Call("set_terminal", map[string]any{"mode": mode}, callTimeout())
+		if err != nil {
+			return "", err
+		}
+		var r struct {
+			Terminal bool     `json:"terminal"`
+			Info     termInfo `json:"info"`
+		}
+		json.Unmarshal(raw, &r)
+		if r.Terminal {
+			if r.Info.State == "on" {
+				return "端末モードに入っています", nil
+			}
+			return "端末モードに入ります。シリアルの端末モードでは USB を付け直すので、数秒、キー入力、SSH、シリアルが切れます", nil
+		}
+		if r.Info.State == "off" {
+			return "端末モードではありません", nil
+		}
+		return "端末モードを抜けます。シリアルの端末モードでは USB を付け直すので、数秒、SSH とシリアルが切れます", nil
+	}, nil
 }
 
 // usbHID は get_status の hid。
