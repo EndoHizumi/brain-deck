@@ -1137,11 +1137,25 @@ terminal:
 
 ### 確かめた結果（2026-10-08）
 
-- 端末モードに入るのに約 4 秒、抜けるのに約 4 秒（実機）。入るあいだに Brain の getty を止め、抜けたあとに起動し直す（PID が変わる）。PC の構成の名前が `… terminal` になり、抜けると元に戻る。
-- PC から送った日本語、色、ログイン画面が Brain の画面に出る。Brain は端末の大きさ（`ESC[8;31;100t`）、カーソルの位置、端末の種類の問い合わせに答える。
-- lefthand を SIGKILL で止めても、ExecStopPost が構成の名前と Brain の getty を元に戻す。
-- `terminal.command` で、コマンドが `user` の権限で 31×100 の PTY で動き、日本語の出力が出る。
-- ログインの失敗の記録は、Brain と PC のどちらでも増えなかった。
+- **PC 側の設定を入れた PC（Ubuntu 22.04）で**：Brain を端末モードにすると、PC で `brain-terminal-getty@ttyACM0` が起動し、Brain の画面に PC のログイン画面（`hizumi-M10 login:`）が出た。抜けると PC の getty は止まり、構成の名前は `NCM+HID+ACM+ACM` に戻り、Brain の getty が起動し直した。入る・抜けるを続けて 15 回繰り返し、PC にも Brain にもログインの試みは 1 回もなかった。
+- **時間**：入るのに約 4 秒、抜けるのに約 4 秒。
+- **端末**：PC から送った日本語、色、ログイン画面が Brain の画面に出る。Brain は端末の大きさ（`ESC[8;31;100t`）、カーソルの位置、端末の種類の問い合わせに答える。profile.d のスクリプトは、その答えで `stty rows 31 cols 100` を実行する（bash と dash で、模擬の端末で確かめた）。
+- **抜けたあと**：設定 GUI のコンソールのタブ（Chromium の WebSerial）でつなぐと、何も届かず（送り返しなし）、Enter でログイン画面が出る。
+- **落ちたとき**：lefthand を SIGKILL で止めても、ExecStopPost が構成の名前と Brain の getty を元に戻した。
+- **terminal.command**：コマンドが `user` の権限で 31×100 の PTY で動き、日本語の出力が出る。USB と Brain の getty は触らない。
+- **確かめていないこと**：Brain の本体キーでの実際のログインと打鍵（Brain のカーネルに uinput がないので、自動では押せない）。下の「目で確かめる手順」で確かめる。
+
+### 目で確かめる手順
+
+1. PC で `brain-deck terminal on`（または設定 GUI のコンソールのタブの「端末モードに入る」）。約 4 秒で Brain の画面が黒い端末になり、上の帯に「端末モード」「シリアル：PC のログイン画面」、下にタッチのキーが出る。
+2. Brain のキーボードで PC のユーザー名、決定、パスワード、決定と打つ。ログインすると帯が「PC とつながっています」になる。
+3. `stty size` が `31 100` になる。`ls --color`、`echo 日本語` が化けずに出る。
+4. 記号：記号 + シフト + G で `|`、記号 + シフト + D で `~`、記号 + G で `\`、記号 + シフト + K、L で `{` `}`、記号 + シフト + N、M で `<` `>`。タッチのキー（1 ページ目）の `|` も押す。
+5. ページアップ（Ctrl）+ C で `^C`、文字切り替え（Alt）+ B、国語で Tab の補完、↑ で履歴、`vi` か `less` を開いて矢印と Esc、`:q`。
+6. ▶ で 2 ページ目、Ctrl を押してから C、Esc、矢印。▲ で履歴を見て、何か打つと戻る。
+7. HOME（または文字切り替え + 戻る）で抜ける。約 4 秒で元のレイヤーの画面に戻り、本体キーが PC にキーとして届く。
+8. 設定 GUI のコンソールのタブで接続し、Enter で Brain のログイン画面が出る。
+9. ログインの失敗が増えていないこと：PC で `journalctl -b | grep -iE 'FAILED LOGIN|authentication failure'`、Brain で `sudo journalctl --since today | grep -i 'FAILED LOGIN'`（2 で打ち間違えたぶんは増える）。
 
 ## 画面とコンソール
 

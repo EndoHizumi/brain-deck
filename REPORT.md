@@ -6,6 +6,50 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：端末モード（2026-10-08）
+
+Brain の画面とキーボードで、USB でつないだ PC（画面やキーボードのない PC）にログインして操作できるようにした（README の「端末モード」）。PC の OS が起動したあとだけ使える。BIOS、GRUB、カーネルのメッセージは見えない。
+
+### 決めたこと
+
+| 項目 | 決めたこと | 理由 |
+| --- | --- | --- |
+| getty がぶつかる問題 | PC の getty は、USB の構成の名前が `NCM+HID+ACM+ACM terminal` のときだけ udev が起動する（`contrib/udev/71-brain-terminal.rules`、BindsTo でデバイスが消えると止まる）。lefthand は、USB を切り離しているあいだに Brain の getty を止めて ttyGS0 を開き（生のモードにし）、名前を変えて付け直す。抜けるときは、切り離しているあいだに ttyGS0 を閉じ、名前を戻して付け直してから、Brain の getty を起動する | PC が「端末モードか」を知る手段が要る。ACM の DCD は、PC で調べると Brain の getty が開いていても 0 で、使えない（f_acm は開いたときに一度だけ状態を送り、PC がポートを開く前だと届かない）。ふだんの名前では PC は何も起動しないので、設定 GUI のコンソールのタブは今までどおり使える |
+| 端末の作り方 | B：lefthand の中に端末（VT100 / xterm の一部）を作り、k8x12 で描く。キーは US 配列で文字にする | A（Brainux の VT と fbterm など）は、カーネルのキーマップを通るので `\|` などが打てず、タッチの帯も使えない。picocom などもなく、SD カードの空きは約 100 MB |
+| シリアルと ssh | シリアルを主にし、ssh などは `terminal.command`（Brain の上で PTY につないで動かす）で選べるようにした | シリアルは PC のネットワークの設定や sshd によらず使える（ヘッドレスの PC の保守に向く）。ssh は getty の問題がなく、大きさもそのまま伝わる |
+| 文字 | `wide`（既定）：半角の英数記号を k8x12 の全角英数の字形（8×12）で描き、100 桁 × 31 行 | 半角（4×12）を横に伸ばすと `&` と `8`、`#` と `H` が見分けにくかった |
+| 端末の大きさ | Brain は CSI 18 t に答え、PC の `/etc/profile.d/brain-terminal.sh` がログイン時に `stty rows 31 cols 100` を実行する（`BRAIN_TERMINAL=1` のときだけ） | シリアルでは大きさが伝わらない |
+
+### 実機で見つけて直したこと
+
+| 見つけたこと | 原因 | 直し方 |
+| --- | --- | --- |
+| 入るのに 25 秒かかった（`systemctl stop` が 15 秒戻らない） | u_serial は、USB がつながったまま最後に閉じられると、PC が読んでいない出力を最大 15 秒（GS_CLOSE_TIMEOUT）待つ。TCFLSH は効かない（flush_buffer がない）。また、開いたまま付け直すと、残った出力を次の接続で PC に送る | gadget-setup.sh に切り離すだけの `GADGET_UNBIND_ONLY` を足し、切り離しているあいだに getty の停止と ttyGS0 の開け閉めをする。今は入る・抜けるとも約 4 秒 |
+| PC にログインの失敗が 1 件残った（4 回に 1 回） | lefthand が付け直したあとに ttyGS0 を開いていたので、生のモードにするまでのあいだ、Brain の getty が残したエコーありの設定で、PC の getty のログイン画面を送り返していた | ttyGS0 も切り離しているあいだに開いて生のモードにする。そのあと 15 回繰り返して、ログインの試みは 0 回 |
+| 抜けたあと、PC でポートを開くと Brain の getty に `^[[!p^[]104^G…` が入力された（設定 GUI の Chromium でも） | getty が起動したときに書いたもの（systemd の端末のリセットと大きさの問い合わせ、ログイン画面）が USB の送信待ちに残り、PC の tty が生のモードになる前（エコーがオン）に届いて送り返される。以前の `FAILED LOGIN … FOR ^[[6n…` の 3 件もこれ | Brain の getty の drop-in で `TTYReset=no` と `agetty --wait-cr`。Enter が届くまで何も書かない。Chromium でつないでも何も届かず、Enter でログイン画面が出る。設定 GUI が誤ってこのポートに `hello` を送っても、捨ててログイン画面を出すだけ（ログインの試みにならない） |
+| 端末モードの画面の隙間に前の画面が残った | 全体を描き直したときに、帯、格子、キーの 3 つの範囲しか写していなかった | 全体を写す |
+
+### 確認
+
+- **ホスト側のテスト**：端末（制御シーケンス、全角、UTF-8 の分割、スクロールの範囲、別画面、SGR、問い合わせへの答え、描き直しの記録）、キーの変換（シェルの記号すべて、Ctrl、Alt、矢印、抜ける、履歴）、描画（流れたときに点をずらした画面が全体を描いた画面と同じ）、端末モードの出入り（入る前のキーを離す、HID に送らない、HOME で抜ける、レイヤーに戻る）、getty がぶつからないこと（Brain の getty と PC の getty が同時に動かない、getty の停止と ttyGS0 の開け閉めは切り離しているあいだだけ）、設定の検証、brain-deck terminal、設定 GUI（135 件）。`go test -race` も通った。
+- **実機**：README の「確かめた結果」。PC 側の設定はユーザーが入れた。Brain の本体キーでのログインと打鍵は、ユーザーに目で確かめてもらう（README の「目で確かめる手順」）。
+- **ログインの失敗の記録**：Brain は作業の前と同じ 3 件（すべて 10-07）。PC は、ttyGS0 を開く順を直す前の 1 件（10:09:38、`user unknown`）だけで、直したあとは 0 件。
+
+### 反映
+
+- Brain：`/usr/local/bin/lefthand` と `/usr/local/sbin/lefthand-gadget-setup` を入れ替えた（前の版は `.prev`。lefthand.prev は作業の前の 01:42 の版）。`/etc/systemd/system/serial-getty@ttyGS0.service.d/lefthand.conf` を入れ替えた（前の版は同じディレクトリの `lefthand.conf.prev`。`.conf` で終わらないので systemd は読まない）。
+- PC：`~/.local/bin/brain-deck`（前の版は `brain-deck.prev`）。PC 側の 3 つのファイルはユーザーが入れた。
+- `/etc/lefthand/config.yaml` と `/var/lib/lefthand/` は変えていない。今の本番の設定には `terminal` の割り当てがないので、入るのは設定 GUI か brain-deck から（割り当てたいときは、設定 GUI でキーかセルの種類を「端末モード」にする）。
+
+### 残っている課題
+
+- 本体キーでの打鍵（特に記号 + シフト + G の `|` など 3 キーの同時押し）と、画面の文字の読みやすさは、目で確かめていない。
+- PC 側の設定は Linux（systemd、udev）だけ。Windows と macOS は試していない。
+- 端末の大きさは固定（100×31）。シリアルでは、ログインしたときに一度だけ PC に伝える。
+- ssh（`terminal.command`）は、PTY とコマンドの起動までを確かめた。PC への鍵での ssh ログインは試していない（Brain の鍵を PC に入れる必要がある）。
+- 日本語の入力はできない（表示だけ）。マウスの操作もできない。
+
+
 ## 追記：トラックパッドの既定値と、記録で見つかった判定の直し（2026-10-08）
 
 Brain で動きごとにタッチを記録し（`tools/record-touch.sh`、8 つ）、判定のコードで再生して、ブレ対策、感度、加速、タップとドラッグの時間、スクロールの量を決めた。
