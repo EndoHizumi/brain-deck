@@ -295,15 +295,26 @@ func (m *TermMode) enter() {
 	m.gettyOn = false
 	m.setStatus("USB を付け直しています…", 1)
 	time.Sleep(usbSwitchDelay) // 設定 GUI や brain-deck への返事を送り終えてから
+	// ttyGS0 も、切り離しているあいだに開いて生のモードにする。Brain の getty が残した設定（エコーあり）のまま
+	// つながると、開いてから生のモードにするまでのあいだに届いた PC の getty のログイン画面を ttyGS0 が
+	// 送り返し、PC の getty がそれをユーザー名として読んで、PC にログインの失敗が残る（実機で 4 回に 1 回起きた）。
+	// u_serial は設定を開き直しても保つので、あとで開き直すとき（USB の付け直しのあと）は、初めから生のモード
+	var c termConn
+	var openErr error
 	err := m.usb.SetTerminal(true, func() {
-		if tc.Getty == "none" || m.systemctl("is-active", "--quiet", tc.Getty) != nil {
-			return
+		if tc.Getty != "none" && m.systemctl("is-active", "--quiet", tc.Getty) == nil {
+			if err := m.systemctl("stop", tc.Getty); err != nil {
+				log.Printf("terminal: stop %s: %v", tc.Getty, err)
+			}
+			m.gettyOn = true
+			writeTermMarker(tc.Getty, true)
 		}
-		if err := m.systemctl("stop", tc.Getty); err != nil {
-			log.Printf("terminal: stop %s: %v", tc.Getty, err)
+		for i := 0; i < 20; i++ {
+			if c, openErr = m.openPort(tc.Port); openErr == nil {
+				return
+			}
+			time.Sleep(250 * time.Millisecond)
 		}
-		m.gettyOn = true
-		writeTermMarker(tc.Getty, true)
 	})
 	if !m.gettyOn {
 		writeTermMarker(tc.Getty, false)
@@ -312,16 +323,12 @@ func (m *TermMode) enter() {
 		log.Printf("terminal: %v", err)
 		m.feedNote("USB の構成の名前を変えられませんでした（PC の getty が起動しないかもしれません）：" + err.Error())
 	}
-	var c termConn
-	for i := 0; i < 20; i++ {
-		if c, err = m.openPort(tc.Port); err == nil {
-			break
+	if c == nil {
+		if openErr == nil {
+			openErr = errors.New("not opened")
 		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	if err != nil {
-		log.Printf("terminal: open %s: %v", tc.Port, err)
-		m.feedNote("開けません：" + err.Error())
+		log.Printf("terminal: open %s: %v", tc.Port, openErr)
+		m.feedNote("開けません：" + openErr.Error())
 		m.finishEnter(nil, "シリアルを開けません", 2)
 		return
 	}

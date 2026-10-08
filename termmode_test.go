@@ -243,6 +243,9 @@ func TestTerminalGettyNeverBoth(t *testing.T) {
 		case ev == "usb normal":
 			pc, bound = false, true
 		case strings.HasPrefix(ev, "open "):
+			if bound {
+				t.Errorf("event %d: lefthand opened ttyGS0 while the USB is connected (echo before raw mode)", i)
+			}
 			if brain {
 				t.Errorf("event %d: lefthand opened ttyGS0 while the Brain getty runs", i)
 			}
