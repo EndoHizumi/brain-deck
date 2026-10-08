@@ -925,7 +925,9 @@ ssh brain 'cd ~/lefthand && sudo timeout 60 ./lefthand -v /etc/lefthand/config.y
 Brain の画面（フレームバッファ /dev/fb0）を、PC に PNG で保存する。PC で、リポジトリの中で実行する。lefthand は止めない。
 
 ```sh
-tools/fbshot.sh                      # brain-YYYYmmdd-HHMMSS.png に保存
+# PC で実行する（ssh brain を付けない。スクリプトが自分で Brain に ssh する）
+cd ~/brainix-lefthand-device/lefthand
+tools/fbshot.sh                      # 今のディレクトリの brain-YYYYmmdd-HHMMSS.png に保存
 tools/fbshot.sh shot.png             # 名前を指定する
 tools/fbshot.sh -raw fb.raw out.png  # 保存してある生のデータを変換するだけ
 ```
