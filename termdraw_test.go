@@ -111,3 +111,14 @@ func TestTermScrollBlitSame(t *testing.T) {
 		}
 	}
 }
+
+// 全体を描き直したときは、画面全体を写す（隙間に前の画面が残らない）
+func TestTermFullBlitsWholeScreen(t *testing.T) {
+	g := termLayout(800, 480, "wide")
+	tm := NewTerm(g.Cols, g.Rows, 10, nil)
+	cv := NewCanvas(800, 480, 1600, rgb565, 0)
+	rs := (&termRenderer{g: g}).render(cv, true, func(f *termFrame) termStatus { tm.TakeFrame(f); return termStatus{Pressed: -1} })
+	if len(rs) != 1 || rs[0] != image.Rect(0, 0, 800, 480) {
+		t.Errorf("full render blits %v", rs)
+	}
+}

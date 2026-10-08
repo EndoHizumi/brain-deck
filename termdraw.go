@@ -122,9 +122,13 @@ func (r *termRenderer) render(cv *Canvas, full bool, take func(f *termFrame) ter
 	if p := r.padKey(st); p != r.lastPad {
 		r.lastPad = p
 		r.drawPad(cv, st)
-		rs = append(rs, r.g.Pad)
+		rs = append(rs, image.Rect(0, r.g.Pad.Min.Y, r.g.W, r.g.H)) // 右の、ページの名前も
 	}
 	rs = append(rs, r.drawText(cv, f)...)
+	if full {
+		// 帯、格子、キーのあいだの隙間にも、前の画面が残らないよう、全体を写す
+		return []image.Rectangle{image.Rect(0, 0, cv.W, cv.H)}
+	}
 	return rs
 }
 
