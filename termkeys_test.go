@@ -2,11 +2,56 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	evdev "github.com/holoplot/go-evdev"
 )
 
 // 本体キーの押し方（docs/keymap-pwsh2.md）で、シェルの記号がすべて打てること
+// now は、テストのキーのイベントの時刻。呼ぶたびに 100 ミリ秒進む（人が打つ間隔）
+var testClock = time.Unix(1e9, 0)
+
+func now() time.Time {
+	testClock = testClock.Add(100 * time.Millisecond)
+	return testClock
+}
+
+// 記号を先に離したときの、カーネルの押し直し（KEY_1 を離して、すぐ KEY_Q を押す）は文字にしない
+func TestTermKeysSymbolGhost(t *testing.T) {
+	var k termKeys
+	t0 := now()
+	var got string
+	ev := func(code evdev.EvCode, v int32, at time.Time) { got += string(k.event(code, v, false, at).out) }
+	// 記号 + Q で 1、記号を離す（カーネル：1 を離して Q を押す）、Q を離す
+	ev(evdev.KEY_1, 1, t0)
+	ev(evdev.KEY_1, 0, t0.Add(200*time.Millisecond))
+	ev(evdev.KEY_Q, 1, t0.Add(200*time.Millisecond+300*time.Microsecond))
+	ev(evdev.KEY_Q, 0, t0.Add(300*time.Millisecond))
+	// Q を押したまま記号を押す（Q を離して 1 を押す）
+	ev(evdev.KEY_Q, 1, t0.Add(400*time.Millisecond))
+	ev(evdev.KEY_Q, 0, t0.Add(500*time.Millisecond))
+	ev(evdev.KEY_1, 1, t0.Add(500*time.Millisecond+200*time.Microsecond))
+	ev(evdev.KEY_1, 0, t0.Add(600*time.Millisecond))
+	// シフトと記号で |（G）。記号を先に離しても g は入らない
+	ev(evdev.KEY_LEFTSHIFT, 1, t0.Add(700*time.Millisecond))
+	ev(evdev.KEY_BACKSLASH, 1, t0.Add(750*time.Millisecond))
+	ev(evdev.KEY_BACKSLASH, 0, t0.Add(800*time.Millisecond))
+	ev(evdev.KEY_G, 1, t0.Add(800*time.Millisecond+100*time.Microsecond))
+	ev(evdev.KEY_LEFTSHIFT, 0, t0.Add(850*time.Millisecond))
+	ev(evdev.KEY_G, 0, t0.Add(900*time.Millisecond))
+	// 人がふつうに 1 と q を続けて打つ（離してから 80 ミリ秒）のは、両方とも入る
+	ev(evdev.KEY_1, 1, t0.Add(1000*time.Millisecond))
+	ev(evdev.KEY_1, 0, t0.Add(1050*time.Millisecond))
+	ev(evdev.KEY_Q, 1, t0.Add(1130*time.Millisecond))
+	ev(evdev.KEY_Q, 0, t0.Add(1200*time.Millisecond))
+	if got != "1q|1q" {
+		t.Errorf("typed %q, want %q", got, "1q|1q")
+	}
+	if symbolPairs[evdev.KEY_Q] != evdev.KEY_1 || symbolPairs[evdev.KEY_SLASH] != evdev.KEY_MINUS || symbolPairs[evdev.KEY_G] != evdev.KEY_BACKSLASH {
+		t.Errorf("symbol pairs: %v", symbolPairs)
+	}
+}
+
 func TestTermKeysSymbols(t *testing.T) {
 	type step struct {
 		code  evdev.EvCode
@@ -62,7 +107,7 @@ func TestTermKeysSymbols(t *testing.T) {
 		var k termKeys
 		var got string
 		for _, s := range c.steps {
-			r := k.event(s.code, s.value, false)
+			r := k.event(s.code, s.value, false, now())
 			got += string(r.out)
 			if r.exit {
 				t.Errorf("%s: exits", c.name)
@@ -76,29 +121,29 @@ func TestTermKeysSymbols(t *testing.T) {
 
 func TestTermKeysExitAndScroll(t *testing.T) {
 	var k termKeys
-	k.event(evdev.KEY_LEFTALT, 1, false)
-	if r := k.event(evdev.KEY_ESC, 1, false); !r.exit || r.out != nil {
+	k.event(evdev.KEY_LEFTALT, 1, false, now())
+	if r := k.event(evdev.KEY_ESC, 1, false, now()); !r.exit || r.out != nil {
 		t.Errorf("Alt+Esc = %+v, want exit", r)
 	}
-	k.event(evdev.KEY_ESC, 0, false)
-	k.event(evdev.KEY_LEFTALT, 0, false)
-	if r := k.event(evdev.KEY_ESC, 1, false); r.exit {
+	k.event(evdev.KEY_ESC, 0, false, now())
+	k.event(evdev.KEY_LEFTALT, 0, false, now())
+	if r := k.event(evdev.KEY_ESC, 1, false, now()); r.exit {
 		t.Error("Esc alone exits")
 	}
-	k.event(evdev.KEY_LEFTSHIFT, 1, false)
-	if r := k.event(evdev.KEY_PAGEUP, 1, false); r.scroll != 1 {
+	k.event(evdev.KEY_LEFTSHIFT, 1, false, now())
+	if r := k.event(evdev.KEY_PAGEUP, 1, false, now()); r.scroll != 1 {
 		t.Errorf("Shift+PgUp = %+v", r)
 	}
-	k.event(evdev.KEY_LEFTSHIFT, 0, false)
-	if r := k.event(evdev.KEY_PAGEUP, 1, false); string(r.out) != "\x1b[5~" {
+	k.event(evdev.KEY_LEFTSHIFT, 0, false, now())
+	if r := k.event(evdev.KEY_PAGEUP, 1, false, now()); string(r.out) != "\x1b[5~" {
 		t.Errorf("PgUp = %q", r.out)
 	}
-	// オートリピートでも送る
-	if r := k.event(evdev.KEY_A, 2, false); string(r.out) != "a" {
-		t.Errorf("repeat = %q", r.out)
+	// カーネルのオートリピートは使わない（termmode.go が自分で繰り返す）
+	if r := k.event(evdev.KEY_A, 2, false, now()); r.out != nil {
+		t.Errorf("kernel repeat = %q", r.out)
 	}
 	// アプリケーションのカーソルキー
-	if r := k.event(evdev.KEY_UP, 1, true); string(r.out) != "\x1bOA" {
+	if r := k.event(evdev.KEY_UP, 1, true, now()); string(r.out) != "\x1bOA" {
 		t.Errorf("app cursor = %q", r.out)
 	}
 }
@@ -113,7 +158,7 @@ func TestTermPadSticky(t *testing.T) {
 		t.Errorf("sticky Ctrl stayed: %q", got)
 	}
 	k.oneCtrl = true
-	if r := k.event(evdev.KEY_C, 1, false); string(r.out) != "\x03" {
+	if r := k.event(evdev.KEY_C, 1, false, now()); string(r.out) != "\x03" {
 		t.Errorf("touch Ctrl + C key = %q", r.out)
 	}
 	k.oneAlt = true

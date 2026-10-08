@@ -92,6 +92,8 @@ type TermMode struct {
 	geom     termGeom
 	term     *Term
 	keys     termKeys
+	repCode  evdev.EvCode // 繰り返しているキー
+	repGen   int          // 繰り返しを止めるたびに増える
 	page     int
 	pressed  int // 押しているタッチのキー（-1 なし）
 	conn     termConn
@@ -395,6 +397,7 @@ func (m *TermMode) leave() {
 	m.mu.Lock()
 	m.state = termOff
 	m.keys.reset()
+	m.repGen++
 	m.status = ""
 	d := m.disp
 	m.mu.Unlock()
@@ -643,13 +646,20 @@ func udcState() string {
 
 // KeyEvent は、端末モードのあいだの本体キー（value：1 押す、0 離す、2 リピート）。
 func (m *TermMode) KeyEvent(code evdev.EvCode, value int32) {
+	if value == 2 {
+		return // カーネルのオートリピートは使わない（termKeys.event）
+	}
 	m.mu.Lock()
 	if m.state == termOff && !m.want {
 		m.mu.Unlock()
 		return
 	}
+	if value == 1 || code == m.repCode {
+		m.repGen++ // ほかのキーを押した・繰り返していたキーを離した
+		m.repCode = 0
+	}
 	app := m.term != nil && m.term.AppCursor()
-	r := m.keys.event(code, value, app)
+	r := m.keys.event(code, value, app, time.Now())
 	var poke bool
 	if r.scroll != 0 && m.term != nil {
 		poke = m.term.Scroll(r.scroll * max(m.geom.Rows-1, 1))
@@ -675,9 +685,36 @@ func (m *TermMode) KeyEvent(code evdev.EvCode, value int32) {
 		return
 	}
 	m.send(r.out)
+	if value == 1 && len(r.out) > 0 && !isModifier(code) {
+		m.mu.Lock()
+		m.repCode = code
+		gen := m.repGen
+		m.mu.Unlock()
+		out := r.out
+		time.AfterFunc(termRepeatDelay, func() { m.repeat(gen, out) })
+	}
 	if poke {
 		m.disp.Poke()
 	}
+}
+
+// termRepeatDelay、termRepeatEvery は、端末モードのキーの繰り返し。押し続けてから繰り返し始めるまでと、その間隔。
+// カーネルの既定（250 ミリ秒）より長くし、ゆっくり打っても同じ文字が 2 つ入らないようにする
+const (
+	termRepeatDelay = 500 * time.Millisecond
+	termRepeatEvery = 40 * time.Millisecond
+)
+
+// repeat は、押し続けているキーの文字をもう一度送り、次を予約する。離したら（repGen が変わったら）止まる。
+func (m *TermMode) repeat(gen int, out []byte) {
+	m.mu.Lock()
+	ok := m.repGen == gen && m.state == termOn && m.want
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	m.send(out)
+	time.AfterFunc(termRepeatEvery, func() { m.repeat(gen, out) })
 }
 
 // softActions は、端末モードのあいだの、画面右のソフトキーの働き。

@@ -172,16 +172,16 @@ func TestTerminalEnterExit(t *testing.T) {
 	press(evdev.KEY_Q)
 	press(evdev.KEY_LEFTSHIFT, evdev.KEY_BACKSLASH)
 	press(evdev.KEY_LEFTCTRL, evdev.KEY_C)
-	r.e.RepeatKey(evdev.KEY_W)
+	r.e.RepeatKey(evdev.KEY_W) // カーネルのオートリピートは使わない
 	// タッチのキー：1 ページ目の左上は |
 	g := r.m.geometry()
 	r.e.PressTouchAt(10, int32(300*(g.Pad.Min.Y+5)/g.H), time.Now())
 	r.e.Release("t")
 	deadline = time.Now().Add(2 * time.Second)
-	for r.sentText() != "q|\x03w|" && time.Now().Before(deadline) {
+	for r.sentText() != "q|\x03|" && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := r.sentText(); got != "q|\x03w|" {
+	if got := r.sentText(); got != "q|\x03|" {
 		t.Errorf("sent to PC = %q", got)
 	}
 	if reps := r.hid.take(); len(reps) > 0 {
@@ -313,4 +313,39 @@ func TestTerminalConfigValidate(t *testing.T) {
 	if _, _, err := compileYAML(t, "terminal: { command: [ssh, me@192.168.7.1], user: user, font: narrow }\nlayers: [{name: base, keys: {KEY_A: {terminal: toggle, label: 端末}}}]"); err != nil {
 		t.Errorf("valid config: %v", err)
 	}
+}
+
+// 押し続けたときは、0.5 秒たってから繰り返す。それより早く離せば 1 文字だけ
+func TestTerminalKeyRepeat(t *testing.T) {
+	r := newTermRig(t)
+	r.m.Request("on")
+	r.waitState("on")
+	r.e.PressKey(evdev.KEY_A)
+	time.Sleep(300 * time.Millisecond) // カーネルなら繰り返し始めている長さ
+	r.e.ReleaseKey(evdev.KEY_A)
+	time.Sleep(400 * time.Millisecond)
+	if got := r.sentText(); got != "a" {
+		t.Fatalf("short press sent %q, want %q", got, "a")
+	}
+	r.e.PressKey(evdev.KEY_B)
+	time.Sleep(termRepeatDelay + 5*termRepeatEvery)
+	r.e.ReleaseKey(evdev.KEY_B)
+	n := strings.Count(r.sentText(), "b")
+	time.Sleep(200 * time.Millisecond)
+	if n < 3 || strings.Count(r.sentText(), "b") != n {
+		t.Errorf("long press: %q (repeats must start after the delay and stop on release)", r.sentText())
+	}
+	// 繰り返しているあいだに別のキーを押すと、前のキーの繰り返しは止まる
+	r.e.PressKey(evdev.KEY_C)
+	time.Sleep(termRepeatDelay + 3*termRepeatEvery)
+	r.e.PressKey(evdev.KEY_D)
+	before := strings.Count(r.sentText(), "c")
+	time.Sleep(200 * time.Millisecond)
+	r.e.ReleaseKey(evdev.KEY_D)
+	r.e.ReleaseKey(evdev.KEY_C)
+	if strings.Count(r.sentText(), "c") != before {
+		t.Errorf("c kept repeating after d was pressed: %q", r.sentText())
+	}
+	r.m.Request("off")
+	r.waitState("off")
 }

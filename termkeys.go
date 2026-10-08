@@ -2,6 +2,7 @@ package main
 
 import (
 	"strconv"
+	"time"
 
 	evdev "github.com/holoplot/go-evdev"
 )
@@ -63,7 +64,30 @@ var tildeKeys = map[evdev.EvCode]int{
 type termKeys struct {
 	shift, ctrl, alt int  // 押している数
 	oneCtrl, oneAlt  bool // タッチの Ctrl、Alt（次の 1 キーだけ）
+
+	lastUp   evdev.EvCode          // 最後に離したキー（記号の押し直しを見分ける）
+	lastUpAt time.Time             // その時刻
+	ghost    map[evdev.EvCode]bool // 記号の押し直しで届いた「押す」（指は同じキーのまま。文字にしない）
 }
+
+// symbolGhost は、記号の押し直しとみなす、離してから押すまでの時間の上限。
+// カーネルは同じ割り込みの中で「離す」と「押す」を続けて送るので、ふつうは 1 ミリ秒もかからない。
+// 人が 2 つのキーを続けて打つときは、これよりずっと長い
+const symbolGhost = 15 * time.Millisecond
+
+// symbolPairs は、記号を押しながらのときと、そうでないときとで、同じ物理キーが出すキーコードの組（両方向）。
+// keymap_pwsh2.go の表から作る（Q と KEY_1、G と KEY_BACKSLASH など）。
+var symbolPairs = func() map[evdev.EvCode]evdev.EvCode {
+	m := map[evdev.EvCode]evdev.EvCode{}
+	for _, k := range pwsh2Keymap().Keys {
+		a, okA := evdev.KEYFromString[k.Code]
+		b, okB := evdev.KEYFromString[k.Symbol]
+		if okA && okB && a != b {
+			m[a], m[b] = b, a
+		}
+	}
+	return m
+}()
 
 func isModifier(code evdev.EvCode) bool {
 	switch code {
@@ -77,8 +101,15 @@ func isModifier(code evdev.EvCode) bool {
 // reset は修飾キーの状態を消す（端末モードに入るとき、抜けるとき）。
 func (k *termKeys) reset() { *k = termKeys{} }
 
-// event はキーのイベント（value：1 押す、0 離す、2 オートリピート）を処理する。
-func (k *termKeys) event(code evdev.EvCode, value int32, appCursor bool) termKeyResult {
+// event はキーのイベント（value：1 押す、0 離す）を処理する。t はイベントを受け取った時刻。
+// カーネルのオートリピート（value 2）は使わない（Brain は 250 ミリ秒で繰り返し始め、パスワードを打つときに
+// 気づかないまま同じ文字が入る）。繰り返しは termmode.go が、長めの間を置いて自分で行う。
+//
+// 記号の押し直し：あるキーを押したまま「記号」を押す・離すと、カーネルは前のコードの「離す」と、
+// 新しいコードの「押す」を続けて送る（docs/keymap-pwsh2.md）。たとえば 記号 + Q で 1 を打ち、Q より先に
+// 記号を離すと、1 を離して Q を押したことになり、余計な q が入る。そこで、離した直後（symbolGhost 以内）に
+// その組のキーが押されたら、同じ指のままとみなして文字にしない。
+func (k *termKeys) event(code evdev.EvCode, value int32, appCursor bool, t time.Time) termKeyResult {
 	if isModifier(code) {
 		d := map[int32]int{1: 1, 0: -1}[value]
 		switch code {
@@ -91,7 +122,22 @@ func (k *termKeys) event(code evdev.EvCode, value int32, appCursor bool) termKey
 		}
 		return termKeyResult{}
 	}
-	if value == 0 {
+	switch value {
+	case 0:
+		delete(k.ghost, code)
+		k.lastUp, k.lastUpAt = code, t
+		return termKeyResult{}
+	case 1:
+		if p, ok := symbolPairs[code]; ok && p == k.lastUp && t.Sub(k.lastUpAt) < symbolGhost {
+			if k.ghost == nil {
+				k.ghost = map[evdev.EvCode]bool{}
+			}
+			k.ghost[code] = true
+			k.lastUp = 0
+			return termKeyResult{}
+		}
+		k.lastUp = 0
+	default:
 		return termKeyResult{}
 	}
 	ctrl, alt, shift := k.ctrl > 0 || k.oneCtrl, k.alt > 0 || k.oneAlt, k.shift > 0
