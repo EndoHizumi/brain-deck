@@ -1,0 +1,23 @@
+# PC（Linux）用。Brain の端末モードで、Brain から PC にログインするための getty。
+# 71-brain-terminal.rules が、Brain が端末モードでつながったときだけ起動する（enable はしない）。
+# 中身は systemd の serial-getty@.service と同じで、次の 2 つだけが違う。
+#   - 端末の種類を xterm-256color にする（Brain の端末は xterm の一部を実装している）
+#   - BRAIN_TERMINAL=1 を付ける。login -p でシェルまで届き、/etc/profile.d/brain-terminal.sh が端末の大きさを合わせる
+#   sudo install -m 0644 brain-terminal-getty@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+[Unit]
+Description=Login from the Brain terminal mode on %I
+BindsTo=dev-%i.device
+After=dev-%i.device systemd-user-sessions.service
+
+[Service]
+Environment=BRAIN_TERMINAL=1
+ExecStart=-/sbin/agetty -o '-p -- \\u' --keep-baud 115200,57600,38400,9600 %I xterm-256color
+Type=idle
+Restart=always
+UtmpIdentifier=%I
+TTYPath=/dev/%I
+TTYReset=yes
+TTYVHangup=yes
+IgnoreSIGPIPE=no
+SendSIGHUP=yes

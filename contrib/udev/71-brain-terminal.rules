@@ -1,0 +1,11 @@
+# PC（Linux）用。Brain が端末モードのとき（USB の構成の名前が「… terminal」）だけ、
+# Brain の 1 つ目のシリアル（インターフェイス 3。/dev/serial/by-id/…-if03）で getty を起動する。
+# ふだんの名前（NCM+HID+ACM+ACM）では何もしないので、Brain 側のログイン画面（設定 GUI のコンソールのタブ）とぶつからない。
+# Brain が端末モードを抜けると USB を付け直してデバイスが消えるので、getty も止まる（BindsTo）。
+#   sudo install -m 0644 71-brain-terminal.rules /etc/udev/rules.d/
+#   sudo install -m 0644 ../systemd/brain-terminal-getty@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo udevadm control --reload
+# 70-brain-modemmanager.rules（ModemManager に調べさせない）と一緒に使う。どちらも ENV を足すだけなので、ぶつからない。
+# ID_USB_INTERFACE_NUM は、標準の 60-serial.rules（usb_id）が付ける。
+ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyACM*", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ATTRS{configuration}=="* terminal", ENV{ID_USB_INTERFACE_NUM}=="03", TAG+="systemd", ENV{SYSTEMD_WANTS}+="brain-terminal-getty@%k.service"
