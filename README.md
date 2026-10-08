@@ -906,6 +906,7 @@ NCM（USB のネットワーク）で、Brain の timesyncd が PC から時刻�
 | 止める | `ssh brain sudo systemctl stop lefthand.service` |
 | 再開する | `ssh brain sudo systemctl start lefthand.service` |
 | 設定を反映する | `ssh brain sudo systemctl restart lefthand.service` |
+| 画面のスクリーンショット | `tools/fbshot.sh`（下の「画面のスクリーンショット」） |
 
 ### ログを見ながら試す
 
@@ -918,6 +919,22 @@ ssh brain 'cd ~/lefthand && sudo timeout 60 ./lefthand -v /etc/lefthand/config.y
 
 手動で起動するときは、必ず `timeout` で時間を区切る。
 デーモンはキーボードを専有するので、Brain 側からは止められない。
+
+### 画面のスクリーンショット
+
+Brain の画面（フレームバッファ /dev/fb0）を、PC に PNG で保存する。PC で、リポジトリの中で実行する。lefthand は止めない。
+
+```sh
+tools/fbshot.sh                      # brain-YYYYmmdd-HHMMSS.png に保存
+tools/fbshot.sh shot.png             # 名前を指定する
+tools/fbshot.sh -raw fb.raw out.png  # 保存してある生のデータを変換するだけ
+```
+
+- **取れるもの**：そのとき Brain の画面に出ているもの。端末モードなら端末の画面、ウィジェットはそのときの中身。
+- **仕組み**：`ssh brain` で `sudo head -c … /dev/fb0` を読み（800×480、1 ドット 2 バイトの RGB565 で 768,000 バイト）、PC の python3 で PNG にする。追加のライブラリは要らない。1 秒もかからない。
+- **接続先**：既定は `ssh brain`。変えるときは `BRAIN=user@192.168.7.2 tools/fbshot.sh`。
+- **回転**：`display.rotate` で回転していても、回転する前の向き（フレームバッファのまま）で保存する。
+- **実機なしで見た目を確かめるとき**：設定から描くなら `lefthand -render-png`（[開発](#開発)）。
 
 ### Brain 本体で文字を打つとき
 
@@ -1291,6 +1308,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | tools/mkbg/ | 例の画像（グラデーションと模様）を作るツール |
 | config/trackpad-example.yaml | トラックパッドとマウスのボタンの例（current.yaml に「マウス」のレイヤーを足したもの） |
 | tools/record-touch.sh | トラックパッドの調整のために、動きごとにタッチを記録する（Brain で実行） |
+| tools/fbshot.sh | Brain の画面のスクリーンショットを、PC に PNG で保存する（PC で実行） |
 | testdata/touch/ | Brain で記録したタッチ（テストで再生する） |
 | contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごとに実行する、ユーザー単位の systemd のタイマー |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
