@@ -44,11 +44,12 @@ type USBMode struct {
 	terminal  bool                                                                 // 端末モード（構成の名前に terminal を付ける。termmode.go）
 	onChange  []func()                                                             // 切り替えたあと（画面の描き直し、トラックパッドの取り消し）
 	run       func(ctx context.Context, script string, mouse, terminal bool) error // テストで差し替える
+	unbind    func(ctx context.Context, script string) error                       // 切り離すだけ（テストで差し替える）
 	detect    func(dev string) HIDLayout
 }
 
 func NewUSBMode(s *State, hid *HIDWriter, dev, script string) *USBMode {
-	return &USBMode{s: s, hid: hid, dev: dev, script: script, run: runGadgetSetup, detect: detectHID}
+	return &USBMode{s: s, hid: hid, dev: dev, script: script, run: runGadgetSetup, unbind: runGadgetUnbind, detect: detectHID}
 }
 
 // OnChange は、切り替えたあとに呼ぶ関数を足す。
@@ -110,8 +111,9 @@ func (u *USBMode) Request(mode string) (mouse, changed bool, err error) {
 
 // SetTerminal は、USB の構成の名前を端末モードのもの（on）か、ふだんのものにして、付け直す。終わるまで待つ。
 // PC の udev は、端末モードの名前のときだけ、1 つ目のシリアルで getty を起動する（contrib/udev/71-brain-terminal.rules）。
-// HID の形（マウスのあり・なし）は変えない。
-func (u *USBMode) SetTerminal(on bool) error {
+// HID の形（マウスのあり・なし）は変えない。unbound は、UDC から切り離しているあいだに呼ぶ（nil でもよい）。
+// 端末モードは、ここで Brain の getty を止めたり、ttyGS0 を閉じたりする（termmode.go）。
+func (u *USBMode) SetTerminal(on bool, unbound func()) error {
 	if u == nil {
 		return errors.New("USB mode switching is not available")
 	}
@@ -130,11 +132,14 @@ func (u *USBMode) SetTerminal(on bool) error {
 	u.switching = true
 	u.terminal = on
 	u.mu.Unlock()
-	return u.apply(u.Mouse())
+	return u.applyHook(u.Mouse(), unbound)
 }
 
 // apply は、USB を付け直して形を変える。キーとボタンをすべて離してから行う。
-func (u *USBMode) apply(mouse bool) error {
+func (u *USBMode) apply(mouse bool) error { return u.applyHook(mouse, nil) }
+
+// applyHook は apply と同じ。unbound があれば、先に UDC から切り離して unbound を呼んでから付け直す。
+func (u *USBMode) applyHook(mouse bool, unbound func()) error {
 	start := time.Now()
 	u.s.releaseAll()
 	// 付け直しのあいだは、キーボードとマウスのレポートを書かせない（入力は、終わってから届く）
@@ -145,6 +150,12 @@ func (u *USBMode) apply(mouse bool) error {
 	u.mu.Lock()
 	terminal := u.terminal
 	u.mu.Unlock()
+	if unbound != nil {
+		if err := u.unbind(ctx, u.script); err != nil {
+			log.Printf("usb: %v", err)
+		}
+		unbound()
+	}
 	err := u.run(ctx, u.script, mouse, terminal)
 	cancel()
 	l := u.detect(u.dev)
@@ -184,6 +195,17 @@ func runGadgetSetup(ctx context.Context, script string, mouse, terminal bool) er
 	}
 	if err != nil {
 		return fmt.Errorf("%s: %v: %s", script, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// runGadgetUnbind は、gadget-setup.sh で UDC から切り離すだけ行う。
+func runGadgetUnbind(ctx context.Context, script string) error {
+	cmd := exec.CommandContext(ctx, script)
+	cmd.Env = append(os.Environ(), "GADGET_UNBIND_ONLY=1", "LEFTHAND_SELF=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s (unbind): %v: %s", script, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

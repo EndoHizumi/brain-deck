@@ -289,26 +289,30 @@ func (m *TermMode) enter() {
 		return
 	}
 
-	// シリアル：Brain の getty を止め、USB の構成の名前を変えてから開く
+	// シリアル：USB を切り離しているあいだに Brain の getty を止め、構成の名前を変えて付け直してから開く。
+	// 切り離しているあいだなら、getty が閉じるときに u_serial が送っていない出力を待たずに捨てる
+	// （つながっていると最大 15 秒待ち、getty のログイン画面の残りが PC に届くことがある）
 	m.gettyOn = false
-	if tc.Getty != "none" {
-		if m.systemctl("is-active", "--quiet", tc.Getty) == nil {
-			m.setStatus("Brain の getty を止めています…", 1)
-			if err := m.systemctl("stop", tc.Getty); err != nil {
-				log.Printf("terminal: stop %s: %v", tc.Getty, err)
-			}
-			m.gettyOn = true
-		}
-	}
-	writeTermMarker(tc.Getty, m.gettyOn)
 	m.setStatus("USB を付け直しています…", 1)
 	time.Sleep(usbSwitchDelay) // 設定 GUI や brain-deck への返事を送り終えてから
-	if err := m.usb.SetTerminal(true); err != nil {
+	err := m.usb.SetTerminal(true, func() {
+		if tc.Getty == "none" || m.systemctl("is-active", "--quiet", tc.Getty) != nil {
+			return
+		}
+		if err := m.systemctl("stop", tc.Getty); err != nil {
+			log.Printf("terminal: stop %s: %v", tc.Getty, err)
+		}
+		m.gettyOn = true
+		writeTermMarker(tc.Getty, true)
+	})
+	if !m.gettyOn {
+		writeTermMarker(tc.Getty, false)
+	}
+	if err != nil {
 		log.Printf("terminal: %v", err)
 		m.feedNote("USB の構成の名前を変えられませんでした（PC の getty が起動しないかもしれません）：" + err.Error())
 	}
 	var c termConn
-	var err error
 	for i := 0; i < 20; i++ {
 		if c, err = m.openPort(tc.Port); err == nil {
 			break
@@ -359,12 +363,19 @@ func (m *TermMode) leave() {
 	}
 	m.wmu.Unlock()
 	m.notify()
-	if c != nil {
-		c.Close()
-	}
-	if len(tc.Command) == 0 {
+	if len(tc.Command) > 0 {
+		if c != nil {
+			c.Close()
+		}
+	} else {
+		// 切り離しているあいだに ttyGS0 を閉じる（送っていない出力を待たずに捨てる）。付け直してから Brain の getty を起動する
 		time.Sleep(usbSwitchDelay)
-		if err := m.usb.SetTerminal(false); err != nil {
+		err := m.usb.SetTerminal(false, func() {
+			if c != nil {
+				c.Close()
+			}
+		})
+		if err != nil {
 			log.Printf("terminal: %v", err)
 		}
 		if m.gettyOn {
@@ -857,9 +868,10 @@ func openTermSerial(path string) (termConn, error) {
 // ---------- getty と、落ちたあとの後始末 ----------
 
 func runSystemctl(args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "systemctl", args...).CombinedOutput()
+	// --no-ask-password：systemctl が起こすパスワードの問い合わせのエージェントが出力を握り、戻りが遅れないように
+	out, err := exec.CommandContext(ctx, "systemctl", append([]string{"--no-ask-password"}, args...)...).CombinedOutput()
 	if err != nil && len(out) > 0 {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}

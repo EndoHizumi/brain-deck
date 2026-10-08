@@ -35,6 +35,8 @@
 #   HID_MOUSE    0（既定）でキーボードだけ（ブートキーボード）、1 でキーボードとマウス。/etc/lefthand/gadget.env にも書ける
 #   LEFTHAND_SELF=1  lefthand から実行するとき。lefthand.service を止めない（lefthand が /dev/hidg0 を閉じてから呼ぶ）
 #   GADGET_TERMINAL  1 で端末モードの構成の名前にする（lefthand の端末モードだけが渡す。起動したときは 0）
+#   GADGET_UNBIND_ONLY=1  UDC から切り離すだけで終わる。lefthand の端末モードが、切り離しているあいだに
+#                    Brain の getty を止める・ttyGS0 を閉じるために使う（そのあと、もう一度このスクリプトで付ける）
 set -e
 
 GADGET_ENV=${GADGET_ENV:-/etc/lefthand/gadget.env}
@@ -84,6 +86,15 @@ unbind_udc() {
   fi
   echo "" > "$G/UDC"
 }
+
+# 切り離すだけ（端末モードの切り替えの前半）。USB がつながっていないあいだに ttyGS0 を閉じると、
+# u_serial は送っていない出力を待たずに捨てる（つながっていれば、PC が読むまで最大 15 秒待ち、
+# 開いたまま付け直すと、残った出力を次の接続で PC に送ってしまう）
+if [ "${GADGET_UNBIND_ONLY:-0}" = 1 ]; then
+  [ -d "$G" ] && unbind_udc
+  echo "unbound"
+  exit 0
+fi
 
 create_eth() {
   modprobe libcomposite 2>/dev/null || true

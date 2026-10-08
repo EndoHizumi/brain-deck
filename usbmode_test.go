@@ -164,7 +164,9 @@ func TestUSBModeTerminalName(t *testing.T) {
 	u.run, u.detect = g.run, g.detect
 	changed := make(chan struct{}, 4)
 	u.OnChange(func() { changed <- struct{}{} })
-	if err := u.SetTerminal(true); err != nil {
+	u.unbind = func(context.Context, string) error { return nil }
+	hooked := 0
+	if err := u.SetTerminal(true, func() { hooked++ }); err != nil {
 		t.Fatal(err)
 	}
 	<-changed
@@ -172,10 +174,13 @@ func TestUSBModeTerminalName(t *testing.T) {
 		t.Fatalf("mouse: %v %v", ch, err)
 	}
 	<-changed
-	if err := u.SetTerminal(false); err != nil {
+	if err := u.SetTerminal(false, nil); err != nil {
 		t.Fatal(err)
 	}
 	<-changed
+	if hooked != 1 {
+		t.Errorf("unbound hook called %d times", hooked)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if want := []bool{true, true, false}; !equalBools(g.terms, want) {

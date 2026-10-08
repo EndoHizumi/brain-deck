@@ -106,6 +106,10 @@ func newTermRig(t *testing.T) *termRig {
 		r.log(map[bool]string{true: "usb terminal", false: "usb normal"}[terminal])
 		return nil
 	}
+	u.unbind = func(ctx context.Context, script string) error {
+		r.log("usb unbind")
+		return nil
+	}
 	u.detect = func(string) HIDLayout { return HIDLayout{Source: "fake"} }
 	r.m = NewTermMode(func() *Config { return cfg }, u, s, "gadget-setup")
 	r.m.systemctl = func(args ...string) error {
@@ -220,23 +224,33 @@ func TestTerminalGettyNeverBoth(t *testing.T) {
 	r.m.Request("off")
 	r.waitState("off")
 
-	brain, pc, open := true, false, false
+	// bound：USB がつながっている。getty や lefthand が ttyGS0 を閉じるのは、切り離しているあいだだけにする
+	// （つながっていると、送っていない出力を最大 15 秒待ち、残りが次の接続で PC に届く）
+	brain, pc, open, bound := true, false, false, true
 	for i, ev := range r.events() {
 		switch {
+		case ev == "usb unbind":
+			bound, pc = false, false
 		case ev == "systemctl stop serial-getty@ttyGS0.service":
+			if bound {
+				t.Errorf("event %d: the Brain getty stopped while the USB is connected", i)
+			}
 			brain = false
 		case ev == "systemctl start serial-getty@ttyGS0.service":
 			brain = true
 		case ev == "usb terminal":
-			pc = true
+			pc, bound = true, true
 		case ev == "usb normal":
-			pc = false
+			pc, bound = false, true
 		case strings.HasPrefix(ev, "open "):
 			if brain {
 				t.Errorf("event %d: lefthand opened ttyGS0 while the Brain getty runs", i)
 			}
 			open = true
 		case ev == "close ttyGS0":
+			if bound {
+				t.Errorf("event %d: lefthand closed ttyGS0 while the USB is connected", i)
+			}
 			open = false
 		}
 		if brain && pc {
