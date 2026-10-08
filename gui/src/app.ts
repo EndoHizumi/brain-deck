@@ -9,7 +9,7 @@ import {
 import defaultKeymap from './keymap-pwsh2.json'
 import {
   CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
-  PAD_NUM_FIELDS, USB_LABELS, WIDGET_FIELDS, WIDGET_LABELS, ownsTouch,
+  PAD_NUM_FIELDS, TERM_LABELS, USB_LABELS, WIDGET_FIELDS, ACTION_FIELDS, WIDGET_LABELS, ownsTouch,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
   isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
   resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
@@ -30,7 +30,7 @@ import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './por
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, BrainImage, Config, EngineStatus, GetTextResult, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MouseAction, UsbMode,
+  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MouseAction, UsbMode, TermInfo, TermMode,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -141,6 +141,7 @@ export class App {
   learning = false
   brainStatus: EngineStatus | null = null
   brainMouse: boolean | null = null // Brain のガジェットにマウスがあるか（get_status の hid.mouse。古い lefthand なら null）
+  brainTerm: TermInfo | null = null // Brain の端末モード（get_status の terminal。古い lefthand なら null）
   flash: Selection | null = null
   // プレビューで、マウスで押さえているセル（"列,行"）。押したときの見た目で描く
   previewPress: string | null = null
@@ -365,6 +366,7 @@ export class App {
       this.stopLearning(false)
       this.brainStatus = null
       this.brainMouse = null
+      this.brainTerm = null
       this.todo = null
       this.calendar = null
       this.brainImages = null
@@ -430,9 +432,10 @@ export class App {
       this.layer = 0
       this.sel = null
     }
-    const st = await c.request<{ status: EngineStatus; hid?: { mouse: boolean } }>('get_status')
+    const st = await c.request<{ status: EngineStatus; hid?: { mouse: boolean }; terminal?: TermInfo }>('get_status')
     this.brainStatus = st.status
     this.brainMouse = st.hid ? st.hid.mouse : null
+    this.brainTerm = st.terminal ?? null
     if (this.hello?.commands?.includes('get_text')) this.texts = (await c.request<GetTextResult>('get_text')).texts ?? {}
     await this.loadTodo()
     this.calendar = this.hello?.commands?.includes('get_calendar') ? await c.request<CalendarData>('get_calendar') : null
@@ -947,6 +950,9 @@ export class App {
       case 'usb_mode':
         a = { usb_mode: cur?.usb_mode ?? 'toggle' }
         break
+      case 'terminal':
+        a = { terminal: cur?.terminal ?? 'toggle' }
+        break
       case 'key':
         a = { key: cur && actionKind(cur) === 'key' ? cur.key : '' }
         break
@@ -971,6 +977,7 @@ export class App {
     if (kind === 'key') a.key = cur.key && cur.key.toLowerCase() !== 'none' ? cur.key : ''
     else if (kind === 'mouse') a.mouse = cur.mouse ?? 'left'
     else if (kind === 'usb_mode') a.usb_mode = cur.usb_mode ?? 'toggle'
+    else if (kind === 'terminal') a.terminal = cur.terminal ?? 'toggle'
     else if (LAYER_KINDS.includes(kind as LayerKind)) {
       const others = this.cfg!.layers.filter((_, i) => i !== this.layer && !(kind === 'layer_toggle' && i === 0))
       a[kind as LayerKind] = actionTarget(cur) || others[0]?.name || ''
@@ -1038,7 +1045,7 @@ export class App {
     if (w !== 'trackpad') for (const f of PAD_FIELDS) delete a[f]
     // Todo、カレンダー、トラックパッドは押した位置で働く（長押しで完了、▲▼ でページ送り、タップでクリック）ので、
     // タップしたときのキーやレイヤーは書けない
-    if (ownsTouch(w)) for (const k of ['key', ...LAYER_KINDS, 'mouse', 'usb_mode'] as const) delete a[k]
+    if (ownsTouch(w)) for (const k of ACTION_FIELDS) delete a[k]
     this.setAction(a)
   }
 
@@ -1095,6 +1102,12 @@ export class App {
     }
     if (n.event === 'todo') {
       this.applyTodo(n)
+      return
+    }
+    if (n.event === 'terminal') {
+      const { event: _, ...t } = n
+      this.brainTerm = t
+      this.render()
       return
     }
     if (n.event === 'input' && this.learning) this.learn(n)
@@ -1432,7 +1445,9 @@ export class App {
             c.open ? '● 接続中' : c.state === 'connecting' ? '… 接続中' : '○ 未接続'),
           c.open
             ? h('button', { id: 'console-disconnect', onclick: () => void c.disconnect() }, '切断')
-            : h('button', { class: 'primary', id: 'console-connect', disabled: c.state !== 'idle' || !this.deps.serial, onclick: () => void c.connect() }, '接続'),
+            : h('button', { class: 'primary', id: 'console-connect', disabled: c.state !== 'idle' || !this.deps.serial || !!this.brainTerm?.active,
+              title: this.brainTerm?.active ? 'Brain が端末モードのあいだ、Brain のログイン画面は止めてあります' : undefined,
+              onclick: () => void c.connect() }, '接続'),
           h('button', { id: 'console-size', disabled: !c.open || !size, onclick: () => void c.sendSize(),
             title: 'シリアルでは端末の大きさが伝わらないので、シェルのプロンプトが出ているときに押して伝えます' },
             size ? `大きさを合わせる（${sttyCommand(size)} を送る）` : '大きさを合わせる'),
@@ -1440,6 +1455,7 @@ export class App {
             `端末 ${size.cols}×${size.rows}　`, c.open ? (synced ? 'Brain に伝えてあります' : 'Brain にはまだ伝えていません') : '') : null,
         ),
         c.status ? h('div', { class: `msg ${c.status.level}`, id: 'console-status' }, c.status.text) : null,
+        this.viewTermPanel(),
         h('p', { class: 'hint' },
           'Brain の 1 つ目のシリアル（/dev/ttyGS0）のログイン画面です。ユーザー名とパスワードでログインします。',
           '「大きさを合わせる」は、シェルのプロンプトが出ているときだけ押してください（ログイン画面やエディタの中では、そのまま入力されます）。',
@@ -2114,12 +2130,13 @@ export class App {
       body.push(h('label', { class: 'row' }, 'タップしたとき ', h('select', { 'data-focus': 'tap', id: 'tap',
         onchange: (e: Event) => this.setTap((e.target as HTMLSelectElement).value as ActionKind) },
         h('option', { value: 'widget', selected: tap === 'widget' }, '何もしない'),
-        (['key', ...LAYER_KINDS, 'mouse', 'usb_mode'] as ActionKind[]).map((k) => h('option', { value: k, selected: tap === k }, KIND_LABELS[k])))))
+        ([...ACTION_FIELDS] as ActionKind[]).map((k) => h('option', { value: k, selected: tap === k }, KIND_LABELS[k])))))
     }
     const act = tap ?? kind
     if (own && act === 'key') body.push(this.viewComboEditor(own))
     if (own && act === 'mouse') body.push(...this.viewMouseEditor(own))
     if (own && act === 'usb_mode') body.push(...this.viewUsbModeEditor(own))
+    if (own && act === 'terminal') body.push(...this.viewTermEditor(own))
     if (own && LAYER_KINDS.includes(act as LayerKind)) {
       const lk = act as LayerKind
       body.push(h('label', { class: 'row' }, '行き先 ', h('select', { 'data-focus': 'target', id: 'target',
@@ -2302,6 +2319,48 @@ export class App {
     ]
   }
 
+  // viewTermEditor は、端末モードの切り替えの欄。
+  private viewTermEditor(own: ActionSpec): HTMLElement[] {
+    return [
+      h('label', { class: 'row' }, '切り替え ', h('select', { 'data-focus': 'terminal', id: 'terminal',
+        onchange: (e: Event) => this.patchAction({ terminal: (e.target as HTMLSelectElement).value as TermMode }) },
+        ([['toggle', '押すたびに入る・抜ける（toggle）'], ['on', '入る（on）'], ['off', '抜ける（off）']] as const)
+          .map(([v, t]) => h('option', { value: v, selected: own.terminal === v }, t)))),
+      h('p', { class: 'hint' }, '端末モードでは、Brain の画面とキーボードで PC にログインして操作します（PC 側の設定が要ります。README の「端末モード」）。' +
+        '端末モードのあいだ、本体キーは PC にキーとして送らず、端末の入力になります。抜けるのは、画面右の帯の HOME か、文字切り替え + 戻る。' +
+        '入るとき・抜けるときに USB を付け直すので、数秒、キー入力、SSH、設定 GUI の接続が切れます。'),
+    ]
+  }
+
+  // setTerminal は、Brain の端末モードを切り替える。シリアルの端末モードでは、返事のあとに USB が付け直される。
+  async setTerminal(mode: TermMode): Promise<void> {
+    if (!this.client) return
+    try {
+      const r = await this.client.request<{ terminal: boolean; info: TermInfo }>('set_terminal', { mode })
+      this.brainTerm = { ...(this.brainTerm ?? { state: 'off' }), active: r.terminal } as TermInfo
+      this.say(r.terminal ? 'Brain を端末モードにします。USB を付け直すので、数秒後に接続し直してください'
+        : 'Brain の端末モードを抜けます。USB を付け直すので、数秒後に接続し直してください')
+      this.render()
+    } catch (e: any) {
+      this.say(`切り替えられません：${e?.message ?? e}`, 'error')
+    }
+  }
+
+  // viewTermPanel は、コンソールのタブに出す、端末モードの状態と切り替えのボタン。
+  private viewTermPanel(): HTMLElement | null {
+    if (!this.connected || !this.hello?.commands?.includes('set_terminal')) return null
+    const t = this.brainTerm
+    const on = !!t?.active
+    const state = !t || t.state === 'off' ? 'オフ' : t.state === 'entering' ? '入っている途中' : t.state === 'leaving' ? '抜けている途中'
+      : `オン（${t.transport === 'command' ? 'コマンド' : 'シリアル'}${t.cols ? ` ${t.cols}×${t.rows}` : ''}）${t.status ? '：' + t.status : ''}`
+    return h('div', { class: on ? 'warn' : 'hint', id: 'terminal-panel' },
+      h('strong', null, '端末モード '), h('span', { id: 'terminal-state' }, state), ' ',
+      h('button', { class: 'small', id: 'terminal-toggle', onclick: () => void this.setTerminal(on ? 'off' : 'on') },
+        on ? '端末モードを抜ける' : '端末モードに入る'),
+      on ? ' 端末モードのあいだ、Brain のログイン画面（このタブの接続先）は止めてあります。抜けると戻ります。'
+        : ' Brain の画面とキーボードで、この PC（または USB でつないだ PC）にログインします。入るとき・抜けるときに USB を付け直すので、数秒、この GUI の接続が切れます。')
+  }
+
   // viewMouseEditor は、マウスの操作の欄。
   private viewMouseEditor(own: ActionSpec): HTMLElement[] {
     return [
@@ -2472,6 +2531,7 @@ export function shortAction(cfg: Config, a: ActionSpec | null): string {
   if (k === 'key') return a.label ? a.label.replace(/\n/g, ' ') : prettyCombo(a.key ?? '')
   if (k === 'mouse') return a.label ? a.label.replace(/\n/g, ' ') : (MOUSE_LABELS[a.mouse!] ?? a.mouse ?? '')
   if (k === 'usb_mode') return a.label ? a.label.replace(/\n/g, ' ') : (USB_LABELS[a.usb_mode!] ?? a.usb_mode ?? '')
+  if (k === 'terminal') return a.label ? a.label.replace(/\n/g, ' ') : (TERM_LABELS[a.terminal!] ?? a.terminal ?? '')
   const t = actionTarget(a)
   const dest = cfg.layers.find((l) => l.name === t)
   return `${LAYER_VERB[k as LayerKind]}→${dest ? layerTitle(dest) : (t ?? '?')}`

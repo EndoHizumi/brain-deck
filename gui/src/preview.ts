@@ -3,7 +3,7 @@
 import { FONT_H, type BitmapFont } from './font'
 import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
-import { LAYER_VERB, MOUSE_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
+import { LAYER_VERB, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
@@ -104,7 +104,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
     return v
   }
-  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'usb_mode') {
+  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'usb_mode' && k !== 'terminal') {
     const t = actionTarget(a)
     const dest = cfg.layers.find((l) => l.name === t)
     const destTitle = dest ? layerTitle(dest) : (t ?? '')
@@ -113,7 +113,8 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     else sub += ':' + destTitle
     return { mapped: true, layer: true, label, sub }
   }
-  const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '') : prettyCombo(a.key ?? '')
+  const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '')
+    : k === 'terminal' ? (TERM_LABELS[a.terminal!] ?? '') : prettyCombo(a.key ?? '')
   if (label === '' || label === keys) return { mapped: true, layer: false, label: keys, sub: '' }
   return { mapped: true, layer: false, label, sub: keys }
 }

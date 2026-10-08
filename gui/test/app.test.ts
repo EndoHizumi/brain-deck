@@ -33,6 +33,8 @@ function setup(opts: { daemon?: FakeDaemon; transport?: () => Transport; confirm
     keepaliveMs: 20,
     sniffMs: 5,
     decodeImage: async () => fakeSource(),
+    // コンソールのタブを開いても xterm.js を作らない（jsdom では動かない）
+    createTerminal: async () => ({ open() {}, write() {}, onData() {}, onBinary() {}, fit: () => ({ rows: 24, cols: 80 }), focus() {}, dispose() {} }),
   })
   const $ = <T extends HTMLElement = HTMLElement>(sel: string) => root.querySelector<T>(sel)!
   const click = (sel: string) => $(sel).click()
@@ -704,5 +706,37 @@ describe('マウスとトラックパッド', () => {
     t.change('#usb_mode', 'mouse')
     expect(t.app.cfg!.layers[0].touch!.cells!['1,0'].usb_mode).toBe('mouse')
     await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+  })
+
+  it('terminal（端末モード）を割り当てられる。コンソールのタブで切り替えられ、端末モードのあいだは Brain のコンソールに接続しない', async () => {
+    const daemon = new FakeDaemon({ ...sampleConfig(), terminal: { font: 'narrow', scrollback: 500 } } as any)
+    const t = await connected(setup({ daemon }))
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'terminal')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ terminal: 'toggle', label: '消しゴム' })
+    t.change('#terminal', 'on')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0'].terminal).toBe('on')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    // 保存しても、GUI で編集しない terminal の項目は残る
+    t.click('#save')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect((daemon.config as any).terminal).toEqual({ font: 'narrow', scrollback: 500 })
+    expect(daemon.config.layers[0].touch!.cells!['1,0'].terminal).toBe('on')
+
+    t.click('#section-console')
+    expect(t.$('#terminal-state').textContent).toBe('オフ')
+    expect(t.$<HTMLButtonElement>('#console-connect').disabled).toBe(false)
+    t.click('#terminal-toggle')
+    await vi.waitFor(() => expect(daemon.terminal).toBe(true))
+    expect(t.cmds()).toContain('set_terminal')
+    await vi.waitFor(() => expect(t.$<HTMLButtonElement>('#console-connect').disabled).toBe(true))
+    expect(t.$('#terminal-toggle').textContent).toBe('端末モードを抜ける')
+    // Brain から知らせが来たら、状態を出し直す
+    daemon.emit(JSON.stringify({ event: 'terminal', ...daemon.termInfo() }))
+    await vi.waitFor(() => expect(t.$('#terminal-state').textContent).toContain('PC のログイン画面'))
+    t.click('#terminal-toggle')
+    await vi.waitFor(() => expect(daemon.terminal).toBe(false))
+    await vi.waitFor(() => expect(t.$<HTMLButtonElement>('#console-connect').disabled).toBe(false))
   })
 })
