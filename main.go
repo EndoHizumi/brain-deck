@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -357,7 +358,9 @@ func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor) {
 		case 0:
 			vlogf("kbd: %s", evString(ev))
 			e.ReleaseKey(ev.Code)
-		} // 2 = オートリピートは無視（PC側でリピートする）
+		case 2: // オートリピート。HID では無視（PC 側でリピートする）。端末モードでは文字を繰り返す
+			e.RepeatKey(ev.Code)
+		}
 	}
 }
 
@@ -667,6 +670,9 @@ func cellView(km *Keymap, a *Action) CellView {
 	if a.Kind == actUSB {
 		keys = usbLabels[a.Spec.UsbMode]
 	}
+	if a.Kind == actTerminal {
+		keys = termLabels[a.Spec.Terminal]
+	}
 	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background}
 	if v.Label == "" || v.Label == keys {
 		v.Label, v.Sub = keys, ""
@@ -790,6 +796,7 @@ func main() {
 
 	if *restore {
 		restoreConsole()
+		restoreTerminal(*gadgetSetup)
 		return
 	}
 	if *replay {
@@ -955,6 +962,9 @@ func main() {
 		}
 	}
 
+	// 前に端末モードのまま終わっていたら、USB の構成の名前と Brain の getty を戻す（/dev/hidg0 を開く前に）
+	restoreTerminal(*gadgetSetup)
+
 	hid := NewHIDWriter(cfg.HIDDevice)
 	hl := detectHID(cfg.HIDDevice)
 	log.Printf("hid: %s", hl.Source)
@@ -968,6 +978,10 @@ func main() {
 	usb := NewUSBMode(s, hid, cfg.HIDDevice, *gadgetSetup)
 	usb.OnChange(pad.Cancel)
 	e.SetUSB(usb)
+	var curCfg atomic.Pointer[Config] // 今の設定（端末モードに入るときに terminal を読む）
+	curCfg.Store(cfg)
+	term := NewTermMode(curCfg.Load, usb, s, *gadgetSetup)
+	e.SetTerm(term)
 	store := OpenStore(*dataDir)
 	clock := NewTimeService(store)
 	if !clock.Synced() {
@@ -1003,6 +1017,7 @@ func main() {
 		s.shutdown(0)
 	}()
 	go s.retryLoop()
+	addAtExit(term.Shutdown) // 端末モードなら抜けてから（画面を戻す前に）
 
 	// 起動直後の状態を揃える（前回異常終了したときの押しっぱなしも解除される）
 	s.releaseAll()
@@ -1027,6 +1042,7 @@ func main() {
 			} else {
 				disp = d
 				addAtExit(d.Close)
+				term.SetDisplay(d)
 				clock.SetOnChange(d.Poke)
 				texts.SetOnChange(d.Poke)
 				todos.SetOnChange(d.Poke)
@@ -1044,12 +1060,14 @@ func main() {
 	// 設定 GUI（USB シリアル）。通信が止まっても、入力の処理は待たない
 	mon := &Monitor{}
 	e.SetOnStatus(mon.LayerChanged)
+	term.OnChange(func() { mon.TerminalChanged(term.Info()) })
 	if *serialPath != "" {
 		ctl := &Controller{
 			store: &configStore{path: cfgPath, cfg: cfg, km: km, apply: func(c *Config, k *Keymap) error {
 				if err := reloader(e)(c, k); err != nil {
 					return err
 				}
+				curCfg.Store(c)
 				images.Preload(preloadOrder(c)) // 新しい設定で使う画像を先に読む
 				return nil
 			}},
@@ -1061,6 +1079,7 @@ func main() {
 			cals:    cals,
 			images:  images,
 			usb:     usb,
+			term:    term,
 			started: time.Now(),
 		}
 		todos.SetOnNotify(mon.TodoChanged)

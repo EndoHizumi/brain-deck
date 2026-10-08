@@ -382,6 +382,12 @@ type Display struct {
 	images  ImageSource // 背景画像。nil なら描かない
 	invalid bool        // 画面全体を描き直す（画像が増えた・減った）。d.mu で守る
 
+	// 端末モード（termmode.go）。term が nil でなければ、格子の代わりに端末を描く。d.mu で守る
+	term      *TermMode
+	termNew   bool          // 端末モードに入った（全体を描く）
+	termR     *termRenderer // 描画側だけが触る
+	termShown bool          // 今、端末を描いている（描画側だけが触る）
+
 	// ウィジェット（描画の goroutine だけが触る）
 	env    func() WidgetEnv // 今の時刻など。nil なら時刻だけ
 	wkeys  []string         // セルごとに、前に描いたウィジェットの中身（widgetKey）
@@ -427,6 +433,29 @@ func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv, images Ima
 	d.drawMu.Unlock()
 	go d.loop()
 	return d, nil
+}
+
+// Size は画面の論理の大きさ。
+func (d *Display) Size() (int, int) {
+	if d == nil {
+		return 800, 480
+	}
+	return d.cv.W, d.cv.H
+}
+
+// SetTerminal は、端末モードの画面に切り替える（nil で元の格子に戻す）。描画は待たない。
+func (d *Display) SetTerminal(m *TermMode) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.term = m
+	d.termNew = m != nil
+	if m == nil {
+		d.invalid = true // 格子を全体から描き直す
+	}
+	d.mu.Unlock()
+	d.poke()
 }
 
 // SetPressed はセルの押下状態を変える。描画は待たない。d が nil でもよい。
@@ -646,6 +675,12 @@ func (d *Display) reclaim() {
 // redraw は、格子が変わっていれば全体を、そうでなければ押下状態が変わったセルだけを描き直す。
 func (d *Display) redraw() bool {
 	d.mu.Lock()
+	if tm := d.term; tm != nil {
+		full := d.termNew
+		d.termNew = false
+		d.mu.Unlock()
+		return d.redrawTerminal(tm, full)
+	}
 	next := d.next
 	d.next = nil
 	if next != nil {
@@ -660,6 +695,8 @@ func (d *Display) redraw() bool {
 	if d.closed {
 		return false
 	}
+	wasTerm := d.termShown // 端末モードから戻った：格子を全体から描き直す
+	d.termShown = false
 	if next != nil {
 		t := time.Now()
 		next.W, next.H = d.cv.W, d.cv.H
@@ -670,7 +707,7 @@ func (d *Display) redraw() bool {
 			d.fb.Blit(d.cv, image.Rect(0, 0, d.cv.pw, d.cv.ph))
 		}
 		vlogf("display: layer %q redraw %v", next.Title, time.Since(t))
-	} else if invalid {
+	} else if invalid || wasTerm {
 		t := time.Now()
 		d.drawAllLocked(d.layout)
 		if d.active {
@@ -703,6 +740,33 @@ func (d *Display) redraw() bool {
 		vlogf("display: cell %d,%d pressed=%v %s redraw %v", col, row, want[i], pressName(d.layout), time.Since(t))
 	}
 	d.redrawWidgets()
+	return true
+}
+
+// redrawTerminal は、端末モードの画面を描き直す。格子の描き直し（d.next など）は、抜けるまで取っておく。
+func (d *Display) redrawTerminal(tm *TermMode, full bool) bool {
+	d.drawMu.Lock()
+	defer d.drawMu.Unlock()
+	if d.closed {
+		return false
+	}
+	g := tm.geometry()
+	if d.termR == nil || d.termR.g != g || !d.termShown {
+		d.termR = &termRenderer{g: g}
+		full = true
+	}
+	d.termShown = true
+	d.wakeAt = time.Time{} // ウィジェットは描かない
+	t := time.Now()
+	rs := d.termR.render(d.cv, full, tm.takeFrame)
+	if d.active {
+		for _, r := range rs {
+			d.fb.Blit(d.cv, d.cv.physRect(r))
+		}
+	}
+	if len(rs) > 0 {
+		vlogf("display: terminal redraw %v (full=%v, %d rects)", time.Since(t), full, len(rs))
+	}
 	return true
 }
 

@@ -62,6 +62,8 @@ const (
 	notifyInput = "input"
 	notifyLayer = "layer"
 	notifyTodo  = "todo"
+	// notifyTerminal は端末モードの変化（termmode.go の TermInfo）
+	notifyTerminal = "terminal"
 )
 
 // ---------- 行の組み立て ----------
@@ -140,7 +142,7 @@ type request struct {
 	Bytes  int64    `json:"bytes,omitempty"`  // image_begin：ファイルの大きさ
 	W      int      `json:"w,omitempty"`      // image_begin：幅
 	H      int      `json:"h,omitempty"`      // image_begin：高さ
-	Mode   string   `json:"mode,omitempty"`   // set_usb_mode：keyboard、mouse、toggle
+	Mode   string   `json:"mode,omitempty"`   // set_usb_mode：keyboard、mouse、toggle。set_terminal：on、off、toggle
 	Upload string   `json:"upload,omitempty"` // image_chunk、image_end、image_abort：image_begin が返した名前
 	Offset *int64   `json:"offset,omitempty"` // image_chunk、get_image：ファイルの中の位置
 	Data   string   `json:"data,omitempty"`   // image_chunk：中身（base64）
@@ -322,6 +324,14 @@ func (m *Monitor) TouchPressed(e *Engine, x, y int32) bool {
 	return sup
 }
 
+// TerminalChanged は、端末モードに入った・抜けた・状態が変わったときに呼ぶ。
+func (m *Monitor) TerminalChanged(in TermInfo) {
+	m.publish(struct {
+		Event string `json:"event"`
+		TermInfo
+	}{notifyTerminal, in})
+}
+
 // LayerChanged はレイヤーが変わったときに呼ぶ。
 func (m *Monitor) LayerChanged(st EngineStatus) {
 	m.publish(struct {
@@ -343,6 +353,7 @@ type Controller struct {
 	cals    *CalendarService
 	images  *ImageStore
 	usb     *USBMode
+	term    *TermMode
 	started time.Time
 }
 
@@ -372,7 +383,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
 				"set_calendar", "get_calendar",
-				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode"},
+				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_terminal"},
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -418,7 +429,15 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 	case "get_status":
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
-			"hid": map[string]bool{"mouse": c.engine.out.mouse.Available(), "switching": c.usb.Switching()}})
+			"hid":      map[string]bool{"mouse": c.engine.out.mouse.Available(), "switching": c.usb.Switching()},
+			"terminal": c.term.Info()})
+	case "set_terminal":
+		on, err := c.term.Request(req.Mode)
+		if err != nil {
+			return errResp(id, errBadRequest, err.Error(), nil)
+		}
+		// シリアルの端末モードでは、入るとき・抜けるときに USB を付け直す（数秒後）。このシリアルも一度切れる
+		return ok(map[string]any{"terminal": on, "info": c.term.Info()})
 	case "set_usb_mode":
 		mouse, changed, err := c.usb.Request(req.Mode)
 		switch {

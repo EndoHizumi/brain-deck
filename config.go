@@ -25,6 +25,7 @@ type Config struct {
 	Touch     *TouchConfig          `yaml:"touch,omitempty" json:"touch,omitempty"`
 	Layers    []LayerConfig         `yaml:"layers,omitempty" json:"layers,omitempty"`
 	Display   *DisplayConfig        `yaml:"display,omitempty" json:"display,omitempty"`
+	Terminal  *TerminalConfig       `yaml:"terminal,omitempty" json:"terminal,omitempty"` // 端末モード（termmode.go）。省略すると既定値
 }
 
 // TouchConfig はタッチパネルそのものの設定（どのレイヤーでも共通）。
@@ -88,8 +89,10 @@ type ActionSpec struct {
 	Mouse string `yaml:"mouse,omitempty" json:"mouse,omitempty"`
 	// UsbMode は USB の形の切り替え（keyboard、mouse、toggle。usbmode.go）。USB を付け直すので、2〜3 秒切れる
 	UsbMode string `yaml:"usb_mode,omitempty" json:"usb_mode,omitempty"`
-	Label   string `yaml:"label,omitempty" json:"label,omitempty"`
-	Span    Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
+	// Terminal は端末モードの切り替え（on、off、toggle。termmode.go）
+	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
+	Label    string `yaml:"label,omitempty" json:"label,omitempty"`
+	Span     Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
 	// Background はセルの背景画像の id（/var/lib/lefthand/images/<id>.565）。タッチのセルだけ
 	Background string `yaml:"background,omitempty" json:"background,omitempty"`
 
@@ -139,7 +142,8 @@ var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 	"page_reset": true, "stale": true, "calendars": true, "background": true, "mouse": true, "usb_mode": true,
-	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
+	"terminal": true,
+	"speed":    true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
 }
 
@@ -154,7 +158,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, usb_mode, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, background, and the trackpad fields)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -163,7 +167,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	if c := a.count(); c > 1 || (c == 0 && a.Widget == "") {
-		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, usb_mode (a widget cell may omit them)", n.Line)
+		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, usb_mode, terminal (a widget cell may omit them)", n.Line)
 	}
 	return nil
 }
@@ -196,7 +200,7 @@ func (a SoftArea) MarshalYAML() (any, error) {
 
 func (a ActionSpec) count() int {
 	n := 0
-	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.UsbMode} {
+	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.UsbMode, a.Terminal} {
 		if s != "" {
 			n++
 		}
@@ -344,18 +348,19 @@ func pointerEscape(s string) string {
 type ActKind uint8
 
 const (
-	actNone    ActKind = iota // 何もしない（下のレイヤーも使わない）
-	actKey                    // キーを送る
-	actHold                   // 押しているあいだレイヤーを重ねる
-	actToggle                 // 押すたびにレイヤーを重ねる・外す
-	actOneshot                // 次の 1 キーだけレイヤーを重ねる
-	actTo                     // base とそのレイヤーだけにする
-	actWidget                 // ウィジェットのセルで、key も layer_* も書いていない（タップはウィジェットに任せる）
-	actMouse                  // マウスのボタンかスクロール
-	actUSB                    // USB の形の切り替え
+	actNone     ActKind = iota // 何もしない（下のレイヤーも使わない）
+	actKey                     // キーを送る
+	actHold                    // 押しているあいだレイヤーを重ねる
+	actToggle                  // 押すたびにレイヤーを重ねる・外す
+	actOneshot                 // 次の 1 キーだけレイヤーを重ねる
+	actTo                      // base とそのレイヤーだけにする
+	actWidget                  // ウィジェットのセルで、key も layer_* も書いていない（タップはウィジェットに任せる）
+	actMouse                   // マウスのボタンかスクロール
+	actUSB                     // USB の形の切り替え
+	actTerminal                // 端末モードの切り替え
 )
 
-var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode"}
+var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal"}
 
 func (k ActKind) String() string { return actNames[k] }
 
@@ -469,6 +474,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	fail := func(path, format string, args ...any) {
 		errs = append(errs, Problem{Path: path, Message: fmt.Sprintf(format, args...)})
 	}
+	cfg.Terminal.validate(fail)
 
 	action := func(path, where string, self int, s ActionSpec, cell bool) *Action {
 		a := &Action{Spec: s, SpanW: 1, SpanH: 1}
@@ -529,6 +535,13 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			case usbKeyboard, usbMouse, usbToggle:
 			default:
 				fail(path, "%s: usb_mode must be %s, %s or %s", where, usbKeyboard, usbMouse, usbToggle)
+			}
+		case s.Terminal != "":
+			a.Kind = actTerminal
+			switch s.Terminal {
+			case "on", "off", "toggle":
+			default:
+				fail(path, "%s: terminal must be on, off or toggle", where)
 			}
 		default:
 			fail(path, "%s: empty assignment", where)

@@ -178,6 +178,7 @@ type Engine struct {
 	touchAt  *widgetTouch // PressTouch から press に、押した位置を渡す
 	pad      *Pad         // トラックパッドの判定。nil ならトラックパッドは動かない
 	usb      *USBMode     // USB の形の切り替え。nil なら usb_mode は何もしない
+	term     *TermMode    // 端末モード。nil なら terminal は何もしない。端末モードのあいだ、入力はここに回す
 	pressing string       // press の途中で、押している入力（レイヤーが変わっても、この入力のマウスのボタンは離さない）
 }
 
@@ -185,6 +186,13 @@ type Engine struct {
 func (e *Engine) SetUSB(u *USBMode) {
 	e.mu.Lock()
 	e.usb = u
+	e.mu.Unlock()
+}
+
+// SetTerm は、端末モードを設定する。
+func (e *Engine) SetTerm(t *TermMode) {
+	e.mu.Lock()
+	e.term = t
 	e.mu.Unlock()
 }
 
@@ -225,15 +233,38 @@ func (e *Engine) View() *View {
 
 func keyID(code evdev.EvCode) string { return fmt.Sprintf("k:%d", code) }
 
-// PressKey は本体キーが押されたときに呼ぶ。
+// PressKey は本体キーが押されたときに呼ぶ。端末モードのあいだは、レイヤーを通さずに端末に回す。
 func (e *Engine) PressKey(code evdev.EvCode) {
+	if e.term.Active() {
+		e.term.KeyEvent(code, 1)
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.press(keyID(code), e.km.lookupKey(e.layers(), code))
 }
 
-// ReleaseKey は本体キーが離されたときに呼ぶ。
-func (e *Engine) ReleaseKey(code evdev.EvCode) { e.Release(keyID(code)) }
+// ReleaseKey は本体キーが離されたときに呼ぶ。端末モードに入る前に押したキーは、押したときの割り当てで離す。
+func (e *Engine) ReleaseKey(code evdev.EvCode) {
+	id := keyID(code)
+	e.mu.Lock()
+	_, mine := e.down[id]
+	e.mu.Unlock()
+	if !mine {
+		if e.term.Active() {
+			e.term.KeyEvent(code, 0)
+		}
+		return
+	}
+	e.Release(id)
+}
+
+// RepeatKey は、本体キーのオートリピート。端末モードのあいだだけ使う（HID は PC がリピートする）。
+func (e *Engine) RepeatKey(code evdev.EvCode) {
+	if e.term.Active() {
+		e.term.KeyEvent(code, 2)
+	}
+}
 
 // TouchHit はタッチの判定結果。
 type TouchHit struct {
@@ -252,6 +283,17 @@ func (e *Engine) PressTouch(x, y int32) TouchHit { return e.PressTouchAt(x, y, t
 func (e *Engine) PressTouchAt(x, y int32, t time.Time) TouchHit {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.term.Active() {
+		// 端末モード：ソフトキーの区画は、割り当てによらず端末モードの働きにする（HOME で抜けるなど）
+		soft, _ := e.km.hitSoft(x, y)
+		g := e.term.geometry()
+		W, H := g.W, g.H
+		if W == 0 {
+			W, H = 800, 480
+		}
+		e.term.Touch(soft, touchPoint(e.km.Touch, x, y, W, H))
+		return TouchHit{Gen: e.view.Gen, Soft: soft, Col: -1, Row: -1, Own: true}
+	}
 	v := e.view
 	h := TouchHit{Gen: v.Gen, Col: -1, Row: -1}
 	var a *Action
@@ -291,6 +333,9 @@ func (e *Engine) Release(id string) {
 	defer e.mu.Unlock()
 	a, ok := e.down[id]
 	if !ok {
+		if id == "t" && e.term.Active() {
+			e.term.TouchUp()
+		}
 		return
 	}
 	delete(e.down, id)
@@ -356,6 +401,12 @@ func (e *Engine) press(id string, a *Action) {
 				log.Printf("usb: %v", err)
 			} else if changed {
 				log.Printf("usb: switching to %s (the USB reconnects; keys pause for a few seconds)", map[bool]string{true: "keyboard + mouse", false: "keyboard only"}[mouse])
+			}
+		case actTerminal:
+			if on, err := e.term.Request(a.Spec.Terminal); err != nil {
+				log.Printf("terminal: %v", err)
+			} else {
+				log.Printf("terminal: %s requested by %s", map[bool]string{true: "on", false: "off"}[on], id)
 			}
 		case actWidget:
 			// ウィジェットに任せる。待たずに返る
