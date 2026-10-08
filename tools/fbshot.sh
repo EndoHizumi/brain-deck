@@ -18,14 +18,18 @@ else
   raw=$(mktemp)
   trap 'rm -f "$raw"' EXIT
   host=${BRAIN:-brain}
-  # 大きさと色の形を Brain から読む（800×480、16 ビットのはず）
-  read -r size bpp < <(ssh "$host" 'echo "$(cat /sys/class/graphics/fb0/virtual_size) $(cat /sys/class/graphics/fb0/bits_per_pixel)"')
+  # 大きさと色の形と画面の中身を、1 回の ssh でまとめて読む（ssh の接続に数秒かかるため）。
+  # 1 行目に「幅,高さ ビット数」、そのあとに生のデータが続く
+  ssh "$host" 'cd /sys/class/graphics/fb0 && s=$(cat virtual_size) && b=$(cat bits_per_pixel) && echo "$s $b" &&
+    w=${s%,*} h=${s#*,} && sudo head -c $((w * h * b / 8)) /dev/fb0' > "$raw"
+  read -r size bpp < <(head -n 1 "$raw")
   W=${size%,*} H=${size#*,}
   if [ "$bpp" != 16 ]; then
     echo "fbshot: 1 ドット $bpp ビットの画面には対応していません（RGB565 だけ）" >&2
     exit 1
   fi
-  ssh "$host" "sudo head -c $((W * H * 2)) /dev/fb0" > "$raw"
+  skip=$(( $(head -n 1 "$raw" | wc -c) ))
+  tail -c +$((skip + 1)) "$raw" > "$raw.data" && mv "$raw.data" "$raw"
 fi
 
 python3 - "$raw" "$out" "$W" "$H" <<'PY'
