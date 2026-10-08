@@ -10,6 +10,7 @@ USB HID のキーボードとマウスとして PC に送る。タッチパネ�
 - **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定を表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
 - **背景画像**：セルごとの背景と、レイヤーごとの壁紙に、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
 - **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、Brain の時刻を合わせたりする。
+- **端末モード**：Brain の画面とキーボードを、USB でつないだ PC のコンソールの端末にする。画面やキーボードのない PC に、Brain からログインして操作できる（PC の OS が起動したあとだけ。BIOS や GRUB は見えない）。PC 側の設定が一度だけ要る。
 - **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI が接続したときに PC の時刻に合わせる。
 - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
 - **PC から見た Brain**：標準の USB キーボードとして見えるので、PC 側に専用のソフトは要らない。同じ USB ケーブルで、設定や保守のためのネットワーク（SSH）とシリアルも使える。
@@ -30,10 +31,11 @@ USB HID のキーボードとマウスとして PC に送る。タッチパネ�
 11. [タッチのキャリブレーション](#タッチのキャリブレーション)
 12. [日常の操作](#日常の操作)
 13. [シリアルコンソール](#シリアルコンソール)
-14. [画面とコンソール](#画面とコンソール)
-15. [困ったとき](#困ったとき)
-16. [開発](#開発)
-17. [フォントとライセンス](#フォントとライセンス)
+14. [端末モード](#端末モード)
+15. [画面とコンソール](#画面とコンソール)
+16. [困ったとき](#困ったとき)
+17. [開発](#開発)
+18. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -123,7 +125,7 @@ USB でつなぐと、PC には次の 4 つが見える。
 | --- | --- | --- | --- | --- |
 | NCM | 0、1 | ネットワークインターフェース（Linux では enx8a158b443a01） | usb0 | SSH |
 | HID | 2 | 「SHARP Brain」のキーボード（ブートキーボード）。マウスをオンにすると「SHARP Brain Keyboard」と「SHARP Brain Mouse」（Linux の /dev/input/by-id/ では `…-if02-event-kbd` と `…-if02-event-mouse`） | /dev/hidg0 | 左手デバイスとしての入力 |
-| CDC-ACM（1 つ目） | 3、4 | シリアルポート（Linux では /dev/ttyACM0、by-id は `…-if03`） | /dev/ttyGS0 | シリアルコンソール（getty のログイン画面）。設定 GUI のコンソールのタブ |
+| CDC-ACM（1 つ目） | 3、4 | シリアルポート（Linux では /dev/ttyACM0、by-id は `…-if03`） | /dev/ttyGS0 | シリアルコンソール（getty のログイン画面）。設定 GUI のコンソールのタブ。[端末モード](#端末モード)では逆向きに使う |
 | CDC-ACM（2 つ目） | 5、6 | シリアルポート（Linux では /dev/ttyACM1、by-id は `…-if05`） | /dev/ttyGS1 | 設定 GUI、brain-deck |
 
 - **HID は 2 つの形を切り替える**：Brain の USB コントローラは、PC へ送るためのエンドポイント（IN）が 7 本しかなく、NCM（2 本）、HID（1 本）、ACM 2 つ（4 本）ですべて使っている。マウスを別の HID にすると足りなくなり、ガジェット全体がつながらなくなる。そこで、1 つの HID を次の 2 つの形で切り替える（[USB の形の切り替え](#usb-の形の切り替えマウスのオンとオフ)）。インターフェイスの番号は、どちらの形でも同じ。
@@ -549,6 +551,7 @@ brain-deck todo done 2                                     # 2 番を完了に�
 brain-deck calendar sync                                   # カレンダー（ICS）の予定を取ってきて送る
 brain-deck images                                          # Brain にある背景画像の一覧
 brain-deck time sync                                       # PC の時刻を Brain に送る
+brain-deck terminal on                                     # 端末モードに入る（off で抜ける。引数なしで今の状態）
 brain-deck status                                          # 版、レイヤー、Brain の時刻
 ```
 
@@ -958,6 +961,187 @@ console-setup.sh は、Brainux 本体のファイルを書き換えない。syst
   - **届かないキー**：Ctrl+W、Ctrl+T、Ctrl+N など、ブラウザが先に使うキーは Brain に届かない。
 - **端末ソフト**：`screen /dev/ttyACM0 115200`、`picocom /dev/ttyACM0`、macOS では `screen /dev/cu.usbmodem01234567894` など。ACM なので速度はどれでもよい。端末の大きさは、同じように `stty rows … cols …` で伝える。使い終わったら閉じる（開いたままだと、GUI のコンソールのタブで開けない）。
 
+## 端末モード
+
+Brain の画面とキーボードを、USB でつないだ PC のコンソールの端末にする。画面やキーボードをつないでいない PC（ヘッドレスの PC）に、Brain からログインして操作できる。
+
+### できること、できないこと
+
+| | |
+| --- | --- |
+| **できる** | PC の OS（Linux）が起動したあと、Brain の画面とキーボードで PC にログインし、シェル、vi、less、top、htop、mc などを使う。色、罫線、日本語の出力も表示する |
+| **できない** | **BIOS や UEFI の設定画面、GRUB、カーネルの起動メッセージ、ディスクの暗号のパスワード（initramfs）は見えない。** BIOS と GRUB は USB のシリアルを話さず、Linux も PC 側の ttyACM をカーネルのコンソールにはできないため。そのあいだも Brain は USB のキーボード（ブートキーボード）なので、PC の画面が見えればキーは打てる |
+| **できない** | 日本語の入力（Brain に IME がない）。表示はできる |
+| **できない** | マウスの操作。端末モードのあいだ、Brain のキーとタッチは PC にキーやマウスとして送らない |
+| **前もって要る** | PC 側の設定を一度だけ（[PC 側の設定](#pc-側の設定一度だけ)）。PC に画面があるうちに行う。Linux（systemd と udev）用。Windows と macOS は試していない |
+
+画面は 100 桁 × 31 行（`terminal.font: narrow` で 200 桁）。下に記号と特殊キーのタッチのキーが 2 段、上に状態の帯が出る。
+
+### 仕組み
+
+ふだん、1 つ目のシリアル（Brain の /dev/ttyGS0、PC の `-if03`）では Brain の getty がログイン画面を出している（[シリアルコンソール](#シリアルコンソール)）。端末モードでは、これを逆向きに使い、Brain から PC の getty にログインする。
+両端の getty が同時に動くと、互いのログイン画面をユーザー名として読み合い、ログインの失敗が続く。そこで、PC の getty は「Brain が端末モードのときだけ」動かす。
+
+1. **入る**：lefthand が、PC にキーとマウスのボタンをすべて離したことを送る → USB を切り離す → Brain の getty を止める → USB の構成の名前を `NCM+HID+ACM+ACM terminal` にしてつなぎ直す → PC の udev がその名前を見て、`-if03` で getty を起動する → lefthand が ttyGS0 を開く。約 4 秒。
+2. **抜ける**：USB を切り離す → lefthand が ttyGS0 を閉じる → 構成の名前を元に戻してつなぎ直す（PC の getty は、デバイスが消えたので止まる。ログインしていたシェルはハングアップで終わる）→ Brain の getty を起動し直す。約 4 秒。
+3. **ふだん**：構成の名前は `NCM+HID+ACM+ACM` なので、PC は何も起動しない。設定 GUI のコンソールのタブは今までどおり使える。
+
+- **切り替えのあいだ**：USB を付け直すので、2〜3 秒、キー入力、SSH、設定 GUI の接続が切れる（[USB の形の切り替え](#usb-の形の切り替えマウスのオンとオフ)と同じ）。
+- **切り離しているあいだに getty を止める理由**：Brain の USB シリアル（u_serial）は、つながったまま最後に閉じられると、PC が読んでいない出力（getty のログイン画面）が送られるのを最大 15 秒待ち、開いたまま付け直すと、その残りを次の接続で PC に送る。切り離しているあいだなら、待たずに捨てる。
+- **lefthand が途中で落ちたとき**：`/run/lefthand-terminal` の印を見て、`lefthand -restore-console`（lefthand.service の ExecStopPost）と次の起動が、構成の名前と Brain の getty を元に戻す。
+- **PC 側は制御線（DCD）を当てにしない**：このカーネルの ACM は、ttyGS0 を開いたときに一度だけ状態を送るので、PC がポートを開く前だと届かない（PC で調べると、Brain の getty が開いていても DCD は 0 だった）。
+
+### PC 側の設定（一度だけ）
+
+PC に画面があるうちに、次の 3 つを入れる（このリポジトリの `contrib/`）。PC で実行する。
+
+```sh
+sudo install -m 0644 contrib/udev/71-brain-terminal.rules /etc/udev/rules.d/
+sudo install -m 0644 contrib/systemd/brain-terminal-getty@.service /etc/systemd/system/
+sudo install -m 0644 contrib/profile.d/brain-terminal.sh /etc/profile.d/
+sudo systemctl daemon-reload
+sudo udevadm control --reload
+```
+
+| ファイル | 役目 |
+| --- | --- |
+| 71-brain-terminal.rules | Brain（1d6b:0104）の構成の名前が `… terminal` のときだけ、インターフェイス 3（`-if03`）の ttyACM で `brain-terminal-getty@ttyACMn.service` を起動する |
+| brain-terminal-getty@.service | systemd の serial-getty@.service と同じ getty。端末の種類を `xterm-256color` にし、`BRAIN_TERMINAL=1` を付ける。デバイスが消えると止まる（BindsTo） |
+| brain-terminal.sh | ログインしたとき（`BRAIN_TERMINAL=1` のときだけ）、Brain に端末の大きさを聞いて `stty rows 31 cols 100` を実行する。シリアルでは大きさが伝わらず、vi や less が 24×80 のまま描くため。ログインが 0.5 秒ほど遅れる。bash と dash で確かめた。zsh や fish がログインシェルなら、同じことを各シェルの設定に書く |
+
+- **ModemManager の規則とは一緒に使う**：[70-brain-modemmanager.rules](#linux-でシリアルを使う権限) は ModemManager に調べさせない印（`ID_MM_DEVICE_IGNORE`）を付けるだけ、71 は getty を起動する印（`SYSTEMD_WANTS`）を付けるだけで、ぶつからない。ModemManager が動く PC では、70 も入れておく（入れないと、端末モードで PC の getty に AT が入力される）。
+- **確かめ方**：Brain を端末モードにして（`brain-deck terminal on`）、PC で `systemctl status 'brain-terminal-getty@*'` が active、`cat /sys/bus/usb/devices/*/configuration` に `NCM+HID+ACM+ACM terminal` が出ればよい。
+- **ログイン**：PC のユーザー名とパスワードでログインする（PC の設定のまま）。パスワードのないユーザーや、root にパスワードがある PC では、USB ケーブルをつなぐだけでログインできる人が増えることに注意する。
+- **元に戻す**：`sudo rm /etc/udev/rules.d/71-brain-terminal.rules /etc/systemd/system/brain-terminal-getty@.service /etc/profile.d/brain-terminal.sh && sudo systemctl daemon-reload && sudo udevadm control --reload`
+
+### 入り方、抜け方
+
+| 入る | 書き方・操作 |
+| --- | --- |
+| キーかセル | `{ terminal: toggle }` か `{ terminal: on }`（[docs/config.md](docs/config.md) の「端末モード」） |
+| 設定 GUI | 「コンソール」タブの「端末モードに入る」 |
+| PC のコマンド | `brain-deck terminal on`（`brain-deck terminal` で今の状態） |
+
+| 抜ける | 操作 |
+| --- | --- |
+| タッチ | 画面右の帯の **HOME** |
+| キーボードだけで | **文字切り替え + 調べる（または 戻る）**（Alt+Esc） |
+| 設定 GUI | 「コンソール」タブの「端末モードを抜ける」 |
+| PC のコマンド | `brain-deck terminal off` |
+
+- **抜けたあと**：入る前のレイヤーと、HID のキー入力に戻る。Brain の getty も起動し直すので、設定 GUI のコンソールのタブが使える（つなぎ直す）。
+- **ログアウト**：抜けると PC のシェルはハングアップで終わる（ログインしたままにはならない）。
+
+### キーの打ち方
+
+端末モードのあいだ、本体キーは PC に HID のキーとしては送らず、lefthand が文字にして端末に送る。文字は US 配列で決めるので、Brain のコンソール（カーネルのキーマップ）で打てなかった `|` なども打てる。
+
+| 本体のキー | 端末に送るもの |
+| --- | --- |
+| 文字キー、スペース | そのまま。シフトで大文字 |
+| 決定 | Enter |
+| 後退 | Backspace（`^?`） |
+| 国語 | Tab（シフトで Shift+Tab） |
+| 調べる、戻る | Esc |
+| ページアップ（《 を横に倒した記号） | Ctrl（押しながら文字。Ctrl+C、Ctrl+D など） |
+| 文字切り替え | Alt（ESC を前に付ける。Alt+B など） |
+| ← ↑ ↓ → | 矢印。Ctrl やシフトと一緒にも使える |
+| 英和/和英、マイ辞書 | PageUp、PageDown。**シフトと一緒なら、端末の履歴を見る** |
+| 履歴/しおり、マーカーテスト | Insert、Delete |
+
+記号は「記号」キーを押しながら打つ。シフトも一緒に押すと、右の欄の記号になる（Brain のカーネルが出すキーコードを US 配列で読む）。
+
+| 記号 + | 記号 | 記号 + シフト + |
+| --- | --- | --- |
+| Q W E R T Y U I O P | 1 2 3 4 5 6 7 8 9 0 | ! @ # $ % ^ & * ( ) |
+| D | `` ` `` | ~ |
+| F | = | + |
+| G | \ | **\|** |
+| H | ; | : |
+| J | ' | " |
+| K | [ | { |
+| L | ] | } |
+| N | , | < |
+| M | . | > |
+| − | / | ? |
+
+`-` は − キー、`_` はシフト + −。記号を押しているあいだは、A、S、Z〜B、スペース、決定、戻る、矢印が届かない（カーネルの制約）。3 つのキーを同時に押すのが難しいときは、下のタッチのキーを使う。
+
+### タッチのキーと、画面右の帯
+
+画面の下の 2 段は、押すと 1 文字（または特殊キー）を送るタッチのキー。帯の ▶ ◀ でページを切り替える（右下にページの名前が出る）。
+
+| ページ | 上の段 | 下の段 |
+| --- | --- | --- |
+| 1：記号 | `\|` `~` `\` `/` `-` `_` `=` `+` `*` `&` `;` `:` | `$` `#` `^` `%` `@` `!` `?` `'` `"` `` ` `` `<` `>` |
+| 2：操作 | Esc Tab `(` `)` `[` `]` `{` `}` Home End PgUp PgDn | ^C ^D ^Z ^L ^R Ctrl Alt ← ↓ ↑ → Del |
+
+- **Ctrl と Alt のキー**：次の 1 キーだけに効く（本体のキーでもタッチのキーでもよい）。押すと緑になり、状態の帯に [Ctrl] と出る。もう一度押すと取り消す。
+- **1 ページ目**は、本体では「記号」とシフトを同時に押す必要がある、シェルでよく使う記号。**2 ページ目**は、括弧と、本体にないか押しにくい操作のキー。
+
+画面右の帯（印刷されたソフトキー）は、端末モードのあいだ次の働きになる（レイヤーの `soft_keys` の割り当ては使わない）。
+
+| 帯 | 働き |
+| --- | --- |
+| HOME | 端末モードを抜ける |
+| ▲ ▼ | 履歴を 1 画面ずつ見る（何か打つと今の画面に戻る） |
+| ▶ ◀ | タッチのキーのページを切り替える |
+| 決定 | Enter |
+| 戻る | Esc |
+| 操作機能 | Ctrl（次の 1 キーだけ） |
+
+### 画面の表示
+
+上の帯に、端末モードであること（「端末モード」の青い札）と、PC との接続の状態を出す。
+
+| 帯の表示 | 意味 |
+| --- | --- |
+| 準備中…、USB を付け直しています… | 入っている途中（黄） |
+| PC の応答を待っています… | ttyGS0 を開いたが、PC からまだ何も届いていない（黄） |
+| PC から応答がありません | 5 秒たっても何も届かない（赤）。PC 側の設定がない、PC が起動していない、PC の getty が止まっている。決定（Enter）を押すと、PC の getty がログイン画面を出し直す |
+| USB がつながっていません | Brain の USB が PC につながっていない（赤） |
+| PC のログイン画面 | カーソルの行が `… login:` か `Password:`（緑） |
+| PC とつながっています | ログインしたあとなど（緑） |
+| 抜けています… | 抜けている途中 |
+
+帯の右には、履歴を見ているときの位置、Ctrl と Alt、端末の大きさ（100×31）、抜け方を出す。
+
+- **端末**：VT100 と xterm の一部（カーソルの移動、消去、スクロールの範囲、行と文字の挿入と削除、色（16 色、256 色、24 ビット）、太字、下線、反転、取り消し線、別画面（vi や less を終えると元の画面に戻る）、DEC の線画の文字、アプリケーションのカーソルキー、端末の大きさや位置の問い合わせ）。知らない制御シーケンスは読み捨てる。PC 側の TERM は `xterm-256color`。
+- **文字**：k8x12 のフォント。半角の英数記号は、見分けやすいよう全角英数の字形（8×12）で描く。全角の文字（漢字、かな）は 2 桁。罫線（─ │ ┌ など）とブロック（█ ▀ ▄ ░ など）は、隣の桁とつながるように描く。フォントにない文字は □。
+- **描き直し**：変わった行だけを描き直す。画面全体が流れたときは、描いた点を行単位でずらし、新しく出た行だけを描く。描画は優先度を下げた別のスレッドで行い、キー入力は描画を待たずに PC へ送る。
+- **履歴**：画面から流れた行を 1000 行（`terminal.scrollback`）まで覚える。別画面（vi など）の中身は残さない。
+
+### ssh で使う（terminal.command）
+
+シリアルの代わりに、Brain の上で ssh などのコマンドを動かして、その画面を端末モードに出すこともできる。
+
+```yaml
+terminal:
+  command: [ssh, -t, me@192.168.7.1]   # PC の sshd に、USB のネットワーク（NCM）で入る
+  user: user                           # Brain のこのユーザーで動かす（root は不可）
+```
+
+| | シリアル（既定） | ssh（`terminal.command`） |
+| --- | --- | --- |
+| PC 側に要るもの | 上の 3 つのファイル | sshd と、Brain のユーザーの鍵（`~/.ssh/authorized_keys`）、PC の usb のインターフェースの固定 IP（192.168.7.1） |
+| PC のネットワークの設定が壊れたとき | 使える | 使えない |
+| getty がぶつかる問題 | 構成の名前で避ける（USB を付け直す） | ない（USB も Brain の getty も触らない。すぐ入れる） |
+| 端末の大きさ | profile.d のスクリプトが合わせる | そのまま伝わる |
+| 同時に開ける数 | 1 つ | いくつでも |
+
+- **勧め**：ヘッドレスの PC の保守には、ネットワークの設定によらず使える**シリアルを主に**する。PC に sshd があり、ネットワークも使えるなら、ssh を足してもよい（設定はどちらか一方。切り替えは設定の `command` を書く・消す）。
+- **ssh の準備**：Brain で `ssh-keygen` を実行し、`~/.ssh/id_ed25519.pub` を PC の `~/.ssh/authorized_keys` に足す。最初に一度、Brain で `ssh me@192.168.7.1 true` を実行して、PC のホスト鍵を覚えさせる（覚えていないと「Host key verification failed」で終わる）。
+- **コマンドが終わったとき**：帯に「コマンドが終わりました」と、画面に終了コードを出す。決定（Enter）でもう一度動かす。
+- **command は何でもよい**：ssh のほかに、たとえば `[bash, -l]` で Brain のシェルにもなる（ログインはしないので、Brain を手にした人が `user` のシェルを使える。勧めない）。
+
+### 確かめた結果（2026-10-08）
+
+- 端末モードに入るのに約 4 秒、抜けるのに約 4 秒（実機）。入るあいだに Brain の getty を止め、抜けたあとに起動し直す（PID が変わる）。PC の構成の名前が `… terminal` になり、抜けると元に戻る。
+- PC から送った日本語、色、ログイン画面が Brain の画面に出る。Brain は端末の大きさ（`ESC[8;31;100t`）、カーソルの位置、端末の種類の問い合わせに答える。
+- lefthand を SIGKILL で止めても、ExecStopPost が構成の名前と Brain の getty を元に戻す。
+- `terminal.command` で、コマンドが `user` の権限で 31×100 の PTY で動き、日本語の出力が出る。
+- ログインの失敗の記録は、Brain と PC のどちらでも増えなかった。
+
 ## 画面とコンソール
 
 Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も使っている。
@@ -1014,6 +1198,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | タップしてから触れて動かしても、ドラッグにならない | 触れ直すまでが `drag_ms`（0.3 秒）より長い。速く触れ直すか、`drag_ms` を長くする（クリックのボタンを離すのが遅れ、クリックのあとすぐ動かすとドラッグになりやすくなる）。本体のキーに `mouse: left` を割り当て、押さえたまま動かしてもよい |
 | 帯をなぞってもスクロールしない、カーソルが動く | 触れ始めが帯の外。帯の ▲▼ の線の上から触れ始める。ずれが大きいなら、`scroll_width` を広げるか、キャリブレーションをやり直す |
 | ガジェットを付け直したら `ssh brain` がつながらない | PC の `journalctl -k` に `cdc_ncm ... failed to get mac address` が出ていないか。Brain で別のガジェット（NCM を含むもの）を作って消すと、このカーネルでは NCM の MAC アドレスの文字列が壊れる。Brain を再起動すると直る |
+| 端末モードで「PC から応答がありません」 | PC 側の設定（[端末モード](#pc-側の設定一度だけ)）。PC で `cat /sys/bus/usb/devices/*/configuration` に `… terminal` が出るか、`systemctl status 'brain-terminal-getty@*'`。決定（Enter）でログイン画面を出し直す |
+| 端末モードで vi や less が 24×80 で描く | PC の `/etc/profile.d/brain-terminal.sh` があるか。ログインシェルが bash か sh か（zsh などは別に書く）。手で `stty rows 31 cols 100` でもよい |
+| 端末モードから抜けられない | 画面右の帯の HOME、文字切り替え + 戻る、`brain-deck terminal off`、設定 GUI のコンソールのタブ。どれもだめなら `ssh brain sudo systemctl restart lefthand.service`（Brain の getty と USB の構成の名前も戻る） |
+| 端末モードのあと、設定 GUI のコンソールで何も出ない | USB を付け直したので、コンソールのタブでつなぎ直す。Enter を押す。`ssh brain systemctl is-active serial-getty@ttyGS0` |
 | 背景画像を保存できない（容量） | `brain-deck images` で合計と SD カードの空きを見る。`brain-deck images prune` で使っていない画像を消す |
 
 ## 開発
@@ -1025,7 +1213,12 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | main.go | 入力の読み取り（touchProc）、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
 | hid.go | HID の形（キーボードだけか、キーボードとマウスか）。レポートディスクリプタと、configfs から形を読み取る処理 |
 | mouse.go | マウスのレポート（ボタン、移動、ホイール）、マウスの割り当て（mouse:） |
-| usbmode.go | USB の形の切り替え（キーボードだけ ⇔ キーボードとマウス。usb_mode、set_usb_mode） |
+| usbmode.go | USB の形の切り替え（キーボードだけ ⇔ キーボードとマウス。usb_mode、set_usb_mode）。端末モードの構成の名前 |
+| term.go | 端末（VT100 / xterm の一部）。制御シーケンスの解釈、画面の文字の格子、履歴、文字の幅 |
+| termkeys.go | 端末モードの本体キーの変換（US 配列、Ctrl、Alt、矢印）と、タッチのキーのページ |
+| termdraw.go | 端末モードの画面（状態の帯、文字の格子、タッチのキー）の描画 |
+| termmode.go | 端末モードの入り方と抜け方（Brain の getty、USB の付け直し、ttyGS0）、入力の振り分け、落ちたあとの後始末 |
+| termpty.go | terminal.command を PTY につないで動かす |
 | trackpad.go | トラックパッドの判定（タップ、ドラッグ、スクロール、ブレ対策）と描画 |
 | record.go | タッチの記録（-record-touch）と再生（-replay-touch） |
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
@@ -1050,7 +1243,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | systemd/ | サービスと drop-in（serial-getty@ttyGS0.service.d/ はシリアルコンソールの getty） |
 | install.sh | Brain 上での配置 |
 | console-setup.sh | シリアルコンソール（ttyGS0 の getty）を有効にする・元に戻す |
-| contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則 |
+| contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則（70）と、端末モードのときだけ getty を起動する規則（71） |
+| contrib/systemd/brain-terminal-getty@.service、contrib/profile.d/brain-terminal.sh | PC 用。端末モードの getty と、端末の大きさを合わせるスクリプト |
 | config.yaml | 設定の例。実機と同じ値 |
 | config/current.yaml | Brain で動いている本番の設定の写し（2026-10-07 にダッシュボードのレイヤーを足して反映。メニューの「ダッシュボード」から入り、HOME で戻る） |
 | config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |

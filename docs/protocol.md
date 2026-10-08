@@ -150,12 +150,23 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
    "stack":[{"layer":"edit","kind":"layer_hold"}],"cols":4,"rows":3},
    "uptime_sec":120,"subscribed":true,"suppressing":true,
    "time":{"now":"2026-10-06T19:04:27.13+09:00","timezone":"Asia/Tokyo","utc_offset_sec":32400,"synced":true,"ntp_synced":false,
-   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true}}}
+   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true},
+   "terminal":{"active":true,"state":"on","transport":"serial","status":"PC のログイン画面","cols":100,"rows":31}}}
 ```
 
 `time` は Brain の時刻の状態（下の `set_time` の結果と同じ形）。
 
 `hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.switching` は、`set_usb_mode` で切り替えている途中か。この項目がなければ、lefthand がマウスに対応する前の版。
+
+`terminal` は端末モードの状態（`termmode.go` の `TermInfo`）。この項目がなければ、端末モードがない版。
+
+| 項目 | 内容 |
+| --- | --- |
+| `active` | 端末モード（入る途中を含む）。true のあいだ、Brain のコンソール（ttyGS0 の getty）は止めてある |
+| `state` | `off`、`entering`（入る途中）、`on`、`leaving`（抜ける途中） |
+| `transport` | `serial`（ttyGS0 で PC の getty にログインする）か `command`（`terminal.command` を PTY で動かす）。`off` のときはない |
+| `status` | Brain の画面の帯に出している状態（「PC のログイン画面」「PC から応答がありません…」など） |
+| `cols`、`rows` | 端末の桁数と行数 |
 
 ### set_usb_mode
 
@@ -169,6 +180,19 @@ USB の形を切り替える（キーボードだけ ⇔ キーボードとマ�
 - **返事のあと**：`switching` が true なら、返事を送ってから 0.3 秒ほどあとに USB を付け直す。このシリアルも切れるので、GUI は接続し直す。2〜3 秒かかる。
 - **何もしないとき**：すでにその形なら `switching` は false。
 - **誤り**：切り替えの途中なら `conflict`、mode が違えば `bad_request`。
+
+### set_terminal
+
+端末モードに入る・抜ける（[README の「端末モード」](../README.md#端末モード)）。`mode` は `on`、`off`、`toggle`。
+
+```json
+→ {"id":8,"cmd":"set_terminal","mode":"on"}
+← {"id":8,"ok":true,"result":{"terminal":true,"info":{"active":true,"state":"entering"}}}
+```
+
+- **返事のあと**：`terminal` は切り替えたあとに入っているか。手順は返事のあとに進む。シリアルの端末モードでは、0.3 秒ほどあとに USB を付け直す（入るときも抜けるときも）。このシリアルも切れるので、GUI は接続し直す。入るのに約 4 秒、抜けるのに約 4 秒（実機）。
+- **途中で頼んだとき**：入る途中で `off` を頼むと、入り終えてから抜ける。
+- **誤り**：mode が違えば `bad_request`。
 
 `mode` は `base`（base だけ）、`latched`（layer_toggle か layer_to で切り替えたまま）、`temp`（layer_hold か layer_oneshot で一時的）。画面の右上の札の色と同じ。
 
@@ -193,11 +217,13 @@ Brain のキーとタッチを、通知で知らせる。GUI の学習モード�
 {"event":"input","type":"touch","x":2191,"y":2222,"col":2,"row":1,"layer":"base","suppressed":true}
 {"event":"input","type":"touch","x":3800,"y":3700,"col":3,"row":0,"soft":"home","layer":"base"}
 {"event":"layer","layer":"edit","label":"編集","mode":"temp","stack":[{"layer":"edit","kind":"layer_hold"}],"cols":4,"rows":3}
+{"event":"terminal","active":true,"state":"on","transport":"serial","status":"PC のログイン画面","cols":100,"rows":31}
 ```
 
 - **key**：押したときだけ（離したときとリピートは知らせない）。「記号」を押しながらのときは、そのコード（KEY_1 など）で届く。
 - **touch**：触れた瞬間の生の座標。`col`、`row` は今の重なりの格子でのセル。`soft` は、ソフトキーの範囲に入っていれば、割り当ての有無によらず、その名前。GUI は、編集中のレイヤーの格子と、割り当ての有無で、セルかソフトキーかを決め直す。
 - **layer**：レイヤーの重なりが変わったとき。購読していれば、学習モードでなくても届く。
+- **terminal**：端末モードに入った・抜けた・帯の状態が変わったとき（`get_status` の `terminal` と同じ形）。シリアルの端末モードでは、切り替えの途中で USB を付け直すので、つなぎ直したあとは `get_status` で読み直す。
 
 ### set_time
 

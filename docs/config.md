@@ -17,6 +17,7 @@ keyboard: brain-kbd-i2c     # 本体キーボード。パスかデバイス名�
 touch: { ... }              # タッチパネルそのものの設定。省略するとタッチと画面を使わない
 layers: [ ... ]             # レイヤー。最初のものが base
 display: { ... }            # 画面表示。省略可
+terminal: { ... }           # 端末モード。省略可（下の「端末モード（terminal）」）
 ```
 
 | 項目 | 型 | 内容 |
@@ -26,6 +27,7 @@ display: { ... }            # 画面表示。省略可
 | touch | オブジェクト | 下を参照 |
 | layers | 配列 | 1 つ以上。下を参照 |
 | display | オブジェクト | enabled（真偽）、device（既定 `/dev/fb0`）、vt（0 で自動）、rotate（0、90、180、270）、press_style（下を参照） |
+| terminal | オブジェクト | 端末モードの設定。下の「端末モード（terminal）」 |
 
 ## touch：タッチパネル
 
@@ -93,8 +95,9 @@ layers:
 | `{ layer_to: edit }` | base と edit だけにする（ほかの重なりは外す）。`layer_to: base` で base だけに戻る |
 | `{ mouse: left }` | マウスの操作。下の「マウスの操作」 |
 | `{ usb_mode: toggle }` | USB の形の切り替え（マウスのオンとオフ）。下の「USB の形の切り替え」 |
+| `{ terminal: toggle }` | 端末モードに入る・抜ける。下の「端末モード（terminal）」 |
 
-- **オブジェクトの形**：`key`、`layer_hold`、`layer_toggle`、`layer_oneshot`、`layer_to`、`mouse`、`usb_mode` のうち、ちょうど 1 つを書く。`label` はどれにも付けられる。ウィジェットのセル（下の「ウィジェット」）では、どれも書かなくてよい。
+- **オブジェクトの形**：`key`、`layer_hold`、`layer_toggle`、`layer_oneshot`、`layer_to`、`mouse`、`usb_mode`、`terminal` のうち、ちょうど 1 つを書く。`label` はどれにも付けられる。ウィジェットのセル（下の「ウィジェット」）では、どれも書かなくてよい。
 - **セルの大きさ**：タッチのセルには `span: [列数, 行数]` を書ける（下の「セルの大きさ」）。
 - **送れるキーの名前**：修飾キー（LCTRL、LSHIFT、LALT、LGUI、RCTRL、RSHIFT、RALT、RGUI）、A〜Z、0〜9、F1〜F12、ENTER、ESC、BACKSPACE、TAB、SPACE、INSERT、DELETE、HOME、END、PAGEUP、PAGEDOWN、UP、DOWN、LEFT、RIGHT、テンキー（KP0〜KP9、KPPLUS、KPMINUS、KPASTERISK、KPSLASH、KPDOT、KPENTER）、MINUS、EQUAL、LEFTBRACE、RIGHTBRACE、BACKSLASH、SEMICOLON、APOSTROPHE、GRAVE、COMMA、DOT、SLASH。
 - **配列によらない記号**：記号は US 配列での位置を送るので、PC が日本語配列だと別の文字になることがある。`+` などはテンキーの名前で送ると配列によらない。例：Ctrl++ は `LCTRL+KPPLUS`。
@@ -137,6 +140,53 @@ KEY_F1: { usb_mode: mouse, label: マウス }    # マウスをオンにする
 - **USB を付け直す**：2〜3 秒、キー入力、SSH、シリアル（設定 GUI）が切れる。押しているキーとマウスのボタンは、先にすべて離す。
 - **セルの表示**：label を省略すると「マウス切替」「マウスオン」「マウスオフ」を出す。
 - **使える場所**：キー、タッチのセル、ソフトキー、ウィジェットのタップ。
+
+### 端末モード（terminal）
+
+Brain の画面とキーボードで、USB でつないだ PC にログインする（[README の「端末モード」](../README.md#端末モード)）。
+
+```yaml
+"3,3": { terminal: toggle, label: 端末 }     # 押すと端末モードに入る
+KEY_INSERT: { terminal: on }                 # 履歴/しおり で入る
+```
+
+| 値 | 動き |
+| --- | --- |
+| `toggle` | 入る（端末モードのあいだは、本体キーとタッチは端末が使うので、ふつうは入るだけに働く） |
+| `on` | 入る（すでに入っていれば何もしない） |
+| `off` | 抜ける |
+
+- **抜け方**：画面右の帯の HOME（`touch.soft_areas` に `home` があるとき）、本体の文字切り替え + 調べる/戻る（Alt+Esc）、設定 GUI のコンソールのタブ、`brain-deck terminal off`。端末モードのあいだ、本体キー、タッチ、ソフトキーは端末が使い、レイヤーの割り当ては働かない。
+- **使える場所**：キー、タッチのセル、ソフトキー、ウィジェットのタップ。
+- **セルの表示**：label を省略すると「端末」（`off` は「端末を出る」）を出す。
+- **押していたキー**：入るときに、PC に送っているキーとマウスのボタンをすべて離す。レイヤーの重なりはそのまま残り、抜けると元に戻る。
+
+設定の `terminal` で、つなぎ方を変えられる。どれも省略できる（書かなければ、ttyGS0 のシリアルで PC の getty にログインする）。
+
+```yaml
+terminal:
+  font: wide            # wide（100 桁、既定）か narrow（200 桁）
+  scrollback: 1000      # 履歴に残す行数（0〜10000）
+  # シリアル（既定）
+  port: /dev/ttyGS0     # 使うシリアル
+  getty: serial-getty@ttyGS0.service   # 端末モードのあいだ止める Brain の getty。none で止めない
+  # コマンド（ssh など）。書くと、シリアルの代わりにこのコマンドを Brain の上で PTY につないで動かす
+  command: [ssh, -t, me@192.168.7.1]
+  user: user            # command を動かすユーザー（必須。root は不可）
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `font` | `wide`：k8x12 の全角英数の字形（8×12）で 1 桁 8 ドット、800 ドットで 100 桁。`narrow`：半角の字形（4×12）で 200 桁。行はどちらも 31 行（下にタッチのキー 2 段） |
+| `scrollback` | 画面から流れた行を覚える数。▲▼ のソフトキーか Shift+英和/マイ辞書（PageUp/PageDown）で見る |
+| `port` | 既定 `/dev/ttyGS0`（PC から見て 1 つ目のシリアル、`-if03`） |
+| `getty` | 端末モードのあいだ止め、抜けたら起動し直す Brain の getty。既定 `serial-getty@ttyGS0.service`。止めていなければ、起動もしない |
+| `command` | シリアルの代わりに動かすコマンドと引数。USB の付け直しも getty の停止もしない。端末の大きさは PTY でそのまま伝わる |
+| `user` | `command` を動かす Brain のユーザー。ログインはしない（パスワードを聞かない）。環境変数は TERM、HOME、USER、LANG（en_US.UTF-8）、PATH、BRAIN_TERMINAL=1 だけ |
+
+- **反映**：端末モードに入るときに読む。設定 GUI で保存したあとも、再起動は要らない（今入っている端末モードは、抜けて入り直すと変わる）。
+- **設定 GUI**：`terminal` の項目は GUI では編集しない（保存しても残る）。ファイルを直接編集する。
+- **検証**：`font` が wide か narrow でない、`scrollback` が範囲外、`port` が `/dev/` で始まらない、`getty` が `.service` で終わらず none でもない、`command` があるのに `user` がない、`user` が root のときは誤り。
 
 ### セルの大きさ（span）
 
@@ -387,7 +437,7 @@ layers:
 - **layer_toggle**：そのレイヤーが layer_toggle か layer_to で重なっていれば外し、なければ重ねる。上のレイヤーで同じキーを書かなければ、透過して base の layer_toggle が働くので、同じキーで戻れる。
 - **layer_oneshot**：layer_* 以外の入力を押したとき（割り当てのないキーを含む）に、押したキーの割り当てを決めてから外れる。
 - **layer_to**：重なりを全部外してから、行き先を重ねる。layer_hold で押しているキーを離しても、もう何も外れない。
-- **オートリピート**：無視する。リピートは PC 側に任せる。
+- **オートリピート**：無視する。リピートは PC 側に任せる。端末モードのあいだだけは、Brain のカーネルのオートリピートで文字を繰り返す。
 
 ## 画面の表示
 
