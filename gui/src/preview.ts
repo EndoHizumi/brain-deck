@@ -6,7 +6,8 @@ import { clockDef, clockLines, type ClockDef } from './clock'
 import { LAYER_VERB, MEDIA_LABELS, MEDIA_OFF_LABEL, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
-import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
+import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calCaption, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
+import { MONTH_MAX_OFFSET, monthFollowDay, monthLayout, monthWidgetOf, type MonthDay, type MonthState, type MonthWidget } from './monthwidget'
 import { unpack565, type Image565 } from './image'
 import { encodeQR } from './qr'
 import {
@@ -43,6 +44,18 @@ const colTodoOff: RGB = [0x40, 0x48, 0x54] // これ以上送れないときの 
 // calwidget.go
 const colCalNow: RGB = [0x1e, 0x4a, 0x7c] // 今の予定の行
 const colCalWarn: RGB = colUnsynced // 最終更新が古い、取得に失敗した、時刻を合わせていない
+// monthwidget.go
+const colMonthSat: RGB = [0x60, 0xa8, 0xff] // 土曜
+const colMonthSun: RGB = [0xff, 0x60, 0x60] // 日曜と祝日
+const colMonthDim: RGB = [0x50, 0x5a, 0x66] // 前後の月の日付
+const colMonthDimSat: RGB = [0x30, 0x50, 0x78]
+const colMonthDimSun: RGB = [0x78, 0x38, 0x3c]
+const colMonthToday: RGB = colText // 今日の塗り
+const colMonthTodayIn: RGB = [0x10, 0x14, 0x1a] // 今日の数字
+const colMonthTodaySa: RGB = [0x10, 0x50, 0xc0]
+const colMonthTodaySu: RGB = [0xd0, 0x20, 0x20]
+const colMonthMore: RGB = colSub // 点に入りきらないカレンダーがある
+const JA_WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 const modeBorder: Record<Mode, RGB> = { base: colBorder, latched: [0x40, 0xc0, 0x70], temp: [0xff, 0x80, 0x20] }
 const modeBadge: Record<Mode, RGB> = { base: [0x3a, 0x48, 0x5c], latched: [0x2e, 0x9e, 0x5b], temp: [0xff, 0x80, 0x20] }
 const modeBadgeText: Record<Mode, RGB> = { base: colText, latched: colText, temp: [0, 0, 0] }
@@ -74,6 +87,7 @@ export interface CellView {
   textId?: string // テキストのウィジェットの id
   todoRows?: number // Todo のウィジェット（0 なら高さで決める）
   cal?: CalWidget // カレンダーのウィジェット
+  month?: MonthWidget // 月の表示のウィジェット
   padScroll?: number // トラックパッドのスクロールの帯の幅（0 なら帯なし）
   background?: string // セルの背景画像の id
   gadget?: Gadget // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ
@@ -117,6 +131,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'text') v.textId = a.id ?? ''
     if (a.widget === 'todo') v.todoRows = typeof a.rows === 'number' ? a.rows : 0
     if (a.widget === 'calendar') v.cal = calWidgetOf(a)
+    if (a.widget === 'month') v.month = monthWidgetOf(a)
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
     if (['battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence'].includes(a.widget)) {
       v.gadget = { kind: a.widget as Gadget['kind'], id: stateId(a), work: pomoDurations(a).work, states: presenceStates(a.states) }
@@ -266,6 +281,8 @@ export interface PreviewParams {
   todoPage?: number // Todo のセルに出すページ（0 から）
   calendar?: CalendarData | null // カレンダーの予定（Brain の get_calendar）
   calendarPage?: number // カレンダーのセルに出すページ（0 から）。省略すると、触っていないときのページ
+  monthOffset?: number // 月の表示に出す月（今月からのずれ。-render-month-offset）
+  monthSelect?: string // 月の表示で選んだ日（YYYY-MM-DD。-render-month-select）。follow のカレンダーにもその日の予定が出る
   images?: (id: string) => Image565 | undefined // 背景画像。ない id は背景なしで描く（Brain と同じ）
   mouseOff?: boolean // USB にマウスがない（キーボードだけの形）。トラックパッドに「マウスはオフ」と出す
   widgets?: WidgetsState // ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（Brain の get_widgets）
@@ -281,6 +298,7 @@ export interface WidgetEnv {
   todoPage: number
   calendar: CalendarData | null
   calendarPage?: number
+  month: MonthState
   mouseOff: boolean
   widgets: WidgetsState
   qr: Record<string, TextEntry>
@@ -306,7 +324,8 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   const fill = (p.pressStyle ?? p.cfg.display?.press_style) === 'fill'
   const px = new Pixels(W, H)
   const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {}, todo: p.todo?.items ?? [],
-    todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage, mouseOff: p.mouseOff ?? false,
+    todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage,
+    month: { offset: Math.max(Math.min(p.monthOffset ?? 0, MONTH_MAX_OFFSET), -MONTH_MAX_OFFSET), sel: p.monthSelect ?? '' }, mouseOff: p.mouseOff ?? false,
     widgets: p.widgets ?? {}, qr: p.qr ?? {}, battery: p.battery ?? null }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
@@ -465,7 +484,8 @@ function drawCellContent(font: BitmapFont, px: Pixels, inner: Rect, v: CellView,
 function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env: WidgetEnv, ink: RGB, subInk: RGB): void {
   const area = { ...inner }
   const aw = area.x1 - area.x0
-  const label = v.todoRows !== undefined ? todoCaption(v.label, env.todo) : v.label
+  const follow = v.cal?.follow ? monthFollowDay(env.month, env.now.getTime()) : null
+  const label = v.todoRows !== undefined ? todoCaption(v.label, env.todo) : v.cal ? calCaption(v.label, follow) : v.label
   if (label) {
     const cap = label.replace(/\n/g, ' ')
     const s = Math.min(fitScale(font, [cap], aw, FONT_H * captionScale), captionScale)
@@ -477,7 +497,11 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
     return
   }
   if (v.cal) {
-    drawCalendar(font, px, area, v.cal, env, subInk)
+    drawCalendar(font, px, area, v.cal, env, subInk, follow)
+    return
+  }
+  if (v.month) {
+    drawMonth(font, px, area, v.month, env)
     return
   }
   if (v.gadget) {
@@ -690,8 +714,8 @@ function drawPageNav(font: BitmapFont, px: Pixels, g: TodoGeom, page: number): v
 }
 
 // drawCalendar は calwidget.go の drawCalendar と同じ。area は見出しの下の範囲。
-function drawCalendar(font: BitmapFont, px: Pixels, area: Rect, w: CalWidget, env: WidgetEnv, subInk: RGB): void {
-  const l = calLayout(area, w, env.calendar, env.now.getTime(), env.synced)
+function drawCalendar(font: BitmapFont, px: Pixels, area: Rect, w: CalWidget, env: WidgetEnv, subInk: RGB, follow: number | null): void {
+  const l = calLayout(area, w, env.calendar, env.now.getTime(), env.synced, follow)
   const aw = area.x1 - area.x0
   const ah = area.y1 - area.y0
   if (l.message) {
@@ -711,6 +735,64 @@ function drawCalendar(font: BitmapFont, px: Pixels, area: Rect, w: CalWidget, en
   if (g.nav) drawPageNav(font, px, g, page)
   const f = todoEllipsis(font, l.footer, Math.trunc(aw / l.footer_scale))
   px.text(font, area.x0, l.footerY, f, l.footer_scale, l.footer_warn ? colCalWarn : colSub, area)
+}
+
+// drawMonth は monthwidget.go の drawMonth と同じ。area は見出しの下の範囲。
+function drawMonth(font: BitmapFont, px: Pixels, area: Rect, w: MonthWidget, env: WidgetEnv): void {
+  const l = monthLayout(font, area, w, env.calendar, env.now.getTime(), env.synced, env.month)
+  const r4 = (r: [number, number, number, number]): Rect => ({ x0: r[0], y0: r[1], x1: r[2], y1: r[3] })
+  const titleH = FONT_H * l.title_scale
+  px.text(font, area.x0 + 2, area.y0, l.title, l.title_scale, l.title_warn ? colCalWarn : colText, area)
+  if (l.status) {
+    const sx = area.x1 - font.textWidth(l.status) - 2
+    px.text(font, Math.max(sx, area.x0), area.y0 + Math.trunc((titleH - FONT_H) / 2), l.status, 1, l.status_warn ? colCalWarn : colSub, area)
+  }
+  const aw = area.x1 - area.x0
+  l.wdays.forEach((wd, i) => {
+    const x0 = area.x0 + Math.trunc((i * aw) / 7)
+    const x1 = area.x0 + Math.trunc(((i + 1) * aw) / 7)
+    const c = wd === 0 ? colMonthSun : wd === 6 ? colMonthSat : colSub
+    drawCentered(font, px, { x0, y0: area.y0, x1, y1: area.y1 }, l.wday_y, JA_WEEKDAYS[wd], 1, c)
+  })
+  for (const d of l.days) drawMonthDay(font, px, d, l.num_scale, l.dot)
+  const nav = r4(l.nav)
+  px.fill({ ...nav, y1: nav.y0 + 1 }, colTodoRule)
+  const arrow = (zone: Rect, s: string, ok: boolean) => {
+    const sc = Math.min(fitScale(font, [s], zone.x1 - zone.x0, zone.y1 - zone.y0 - 4), 3)
+    drawCentered(font, px, zone, zone.y0 + Math.trunc((zone.y1 - zone.y0 - FONT_H * sc) / 2), s, sc, ok ? colText : colTodoOff)
+  }
+  arrow(r4(l.up), '▲', l.offset > -MONTH_MAX_OFFSET)
+  arrow(r4(l.down), '▼', l.offset < MONTH_MAX_OFFSET)
+  const mid = r4(l.mid)
+  const mw = mid.x1 - mid.x0
+  const is = font.textWidth(l.info) * 2 <= mw && FONT_H * 2 <= mid.y1 - mid.y0 - 4 ? 2 : 1
+  const info = todoEllipsis(font, l.info, Math.trunc(mw / is))
+  drawCentered(font, px, mid, mid.y0 + Math.trunc((mid.y1 - mid.y0 - FONT_H * is) / 2), info, is, colSub)
+}
+
+function monthDayInk(d: MonthDay): RGB {
+  if (d.today) return d.red ? colMonthTodaySu : d.sat ? colMonthTodaySa : colMonthTodayIn
+  if (!d.in) return d.red ? colMonthDimSun : d.sat ? colMonthDimSat : colMonthDim
+  return d.red ? colMonthSun : d.sat ? colMonthSat : colText
+}
+
+// drawMonthDay は、日付 1 つを描く（monthwidget.go の drawMonthDay）。
+function drawMonthDay(font: BitmapFont, px: Pixels, d: MonthDay, s: number, dot: number): void {
+  const r: Rect = { x0: d.rect[0], y0: d.rect[1], x1: d.rect[2], y1: d.rect[3] }
+  if (d.today) px.fill(inset(r, 1), colMonthToday)
+  if (d.sel) px.frame(inset(r, 1), 2, colPressed)
+  const num = String(Number(d.day.slice(8)))
+  const y = r.y0 + Math.trunc((r.y1 - r.y0 - (FONT_H * s + 1 + dot)) / 2)
+  drawCentered(font, px, r, y, num, s, monthDayInk(d))
+  if (!d.dots?.length) return
+  const gap = Math.max(Math.trunc(dot / 2), 1)
+  const n = d.dots.length
+  let x = r.x0 + Math.trunc((r.x1 - r.x0 - (n * dot + (n - 1) * gap)) / 2)
+  const dy = y + FONT_H * s + 1
+  for (const c of d.dots) {
+    px.fill(intersect({ x0: x, y0: dy, x1: x + dot, y1: dy + dot }, r), c === 'more' ? colMonthMore : hexColor(c))
+    x += dot + gap
+  }
 }
 
 function hexColor(s: string): RGB {

@@ -555,7 +555,11 @@ type monthLayoutCase struct {
 	Select    string   `json:"select,omitempty"`
 	Layout    monthLay `json:"layout"`
 	Next      string   `json:"next"`
+	Follow    *calLay  `json:"follow,omitempty"`  // follow でこのセルを指すカレンダー（範囲 followArea）
+	Caption   string   `json:"caption,omitempty"` // その見出し（label: 予定）
 }
+
+var followArea = image.Rect(412, 40, 788, 308)
 
 func TestMonthLayoutTable(t *testing.T) {
 	inTokyo(t)
@@ -595,9 +599,16 @@ func TestMonthLayoutTable(t *testing.T) {
 						w.month.set(v.offset, v.sel, n)
 					}
 					env := WidgetEnv{Now: n, TimeSynced: v.synced, Calendar: d}
-					cases = append(cases, monthLayoutCase{Fixture: fx, Now: now + "+09:00", Synced: v.synced, Area: rect4(a), WeekStart: v.ws,
+					c := monthLayoutCase{Fixture: fx, Now: now + "+09:00", Synced: v.synced, Area: rect4(a), WeekStart: v.ws,
 						Calendars: v.cals, Offset: v.offset, Select: v.sel, Layout: monthLayout(a, w, env),
-						Next: monthNext(w, env).Format(time.RFC3339)})
+						Next: monthNext(w, env).Format(time.RFC3339)}
+					if v.sel != "" && a == areas[0] {
+						cw := calWidget(t, `{ widget: calendar }`)
+						cw.follow = w
+						fl := calLayout(followArea, cw, env)
+						c.Follow, c.Caption = &fl, widgetLabel(cw, "予定", env)
+					}
+					cases = append(cases, c)
 				}
 			}
 		}

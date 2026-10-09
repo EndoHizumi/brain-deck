@@ -1,6 +1,7 @@
 // カレンダーのウィジェット（widget: calendar）。calwidget.go の calRows、calFooter、calLayout と同じ結果にする。
 // 予定は Brain の /var/lib/lefthand/calendar.json にあり、PC の brain-deck calendar sync が送る。
 // 時刻と日付は、PC のタイムゾーンで決める（Brain と同じタイムゾーンの PC で使う前提。違えば接続したときに知らせている）。
+// follow で月の表示を指していて、今日でない日を選んでいれば、その日の予定を並べる（calDayRows）。
 
 import { FONT_H } from './font'
 import { UNSYNCED_TEXT } from './clock'
@@ -17,6 +18,7 @@ export const CAL_INFO = 5
 
 export const CAL_NO_DATA = '予定を受け取っていません'
 export const CAL_NONE_TODAY = '今日の予定はありません'
+export const CAL_NONE_DAY = 'この日の予定はありません'
 const CAL_NO_TITLE = '（名前なし）'
 const CAL_FOOTER_BIG = 240
 const CAL_SCALE_WIDTH = 88
@@ -50,9 +52,10 @@ export interface CalWidget {
   rows: number // 0 なら高さで決める
   calendars?: string[]
   staleMs: number // 0 なら古いと出さない
+  follow?: string // 選んだ日を見る月の表示の id
 }
 
-interface Ev {
+export interface CalEv {
   ev: CalEvent
   cal: Calendar
   order: number
@@ -74,7 +77,15 @@ const addDays = (t: number, n: number) => {
   const d = new Date(t)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime()
 }
-const parseDay = (s: string): number => {
+export const dayKey = (t: number) => {
+  const d = new Date(t)
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+export const calDate = (t: number) => {
+  const d = new Date(t)
+  return `${d.getMonth() + 1}/${d.getDate()}(${JA_WEEKDAYS[d.getDay()]})`
+}
+export const parseDay = (s: string): number => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
   return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() : NaN
 }
@@ -111,8 +122,8 @@ export function calShown(w: CalWidget, d: CalendarData | null | undefined): Cale
   return d.calendars.filter((c) => w.calendars!.includes(c.name))
 }
 
-function events(cals: Calendar[]): Ev[] {
-  const out: Ev[] = []
+export function calEvents(cals: Calendar[]): CalEv[] {
+  const out: CalEv[] = []
   cals.forEach((cal, order) => {
     for (const ev of cal.events ?? []) {
       if (ev.start) {
@@ -130,14 +141,14 @@ function events(cals: Calendar[]): Ev[] {
 export function calRows(cals: Calendar[], now: number): CalRow[] {
   const t0 = dayStart(now)
   const t1 = addDays(t0, 1)
-  const today: Ev[] = []
-  const later: Ev[] = []
-  for (const it of events(cals)) {
+  const today: CalEv[] = []
+  const later: CalEv[] = []
+  for (const it of calEvents(cals)) {
     if (it.s < t1 && (it.e > t0 || (it.e === it.s && it.s >= t0))) today.push(it)
     else if (it.s >= t1) later.push(it)
   }
-  const whole = (it: Ev) => it.allDay || (it.s <= t0 && it.e >= t1)
-  const cmp = (a: Ev, b: Ev) => {
+  const whole = (it: CalEv) => it.allDay || (it.s <= t0 && it.e >= t1)
+  const cmp = (a: CalEv, b: CalEv) => {
     const wa = whole(a)
     const wb = whole(b)
     if (wa !== wb) return wa ? -1 : 1
@@ -173,6 +184,34 @@ export function calRows(cals: Calendar[], now: number): CalRow[] {
   return rows
 }
 
+// calDayRows は、今日でない日 day（0 時）の予定の行を作る（calwidget.go の calDayRows）。
+export function calDayRows(cals: Calendar[], day: number, now: number): CalRow[] {
+  const t0 = day
+  const t1 = addDays(day, 1)
+  const past = t1 <= dayStart(now)
+  const items = calEvents(cals).filter((it) => it.s < t1 && (it.e > t0 || (it.e === it.s && it.s >= t0)))
+  const whole = (it: CalEv) => it.allDay || (it.s <= t0 && it.e >= t1)
+  items.sort((a, b) => {
+    const wa = whole(a)
+    const wb = whole(b)
+    if (wa !== wb) return wa ? -1 : 1
+    if (a.s !== b.s) return a.s - b.s
+    if (a.e !== b.e) return a.e - b.e
+    if (a.order !== b.order) return a.order - b.order
+    return cmpStr(a.ev.title, b.ev.title)
+  })
+  const rows: CalRow[] = items.map((it) => {
+    const r: CalRow = { label: '', title: it.ev.title || CAL_NO_TITLE, color: it.cal.color, state: CAL_FUTURE }
+    if (whole(it)) [r.label, r.state] = ['終日', CAL_ALLDAY]
+    else if (it.s < t0) r.label = '〜' + hm(it.e)
+    else r.label = hm(it.s)
+    if (past) r.state = CAL_PAST
+    return r
+  })
+  if (!rows.length) rows.push({ label: '', title: CAL_NONE_DAY, color: '', state: CAL_INFO })
+  return rows
+}
+
 // calFooter は、最終更新の行の文と、橙色で出すかどうか（calwidget.go の calFooter）。
 export function calFooter(w: CalWidget, cals: Calendar[], now: number, synced: boolean): [string, boolean] {
   if (!synced) return [UNSYNCED_TEXT, true]
@@ -204,7 +243,8 @@ export function calFooter(w: CalWidget, cals: Calendar[], now: number, synced: b
 }
 
 // calLayout は、見出しの下の範囲 area の中の配置を決める（calwidget.go の calLayout）。
-export function calLayout(area: Rect, w: CalWidget, d: CalendarData | null | undefined, now: number, synced: boolean): CalLay {
+// followDay は、follow の月の表示で選んだ日（今日でないときだけ。monthFollowDay）。
+export function calLayout(area: Rect, w: CalWidget, d: CalendarData | null | undefined, now: number, synced: boolean, followDay: number | null = null): CalLay {
   const cals = calShown(w, d)
   if (!cals.length) {
     return { rows: null, message: CAL_NO_DATA, auto_page: 0, scale: 1, footer: '', footer_warn: false, footer_scale: 0,
@@ -215,13 +255,13 @@ export function calLayout(area: Rect, w: CalWidget, d: CalendarData | null | und
   const ah = area.y1 - area.y0
   const fs = aw >= CAL_FOOTER_BIG && ah >= CAL_FOOTER_BIG ? 2 : 1
   const body = { ...area, y1: area.y1 - (FONT_H * fs + WIDGET_LINE_GAP) }
-  const rows = calRows(cals, now)
+  const rows = followDay !== null ? calDayRows(cals, followDay, now) : calRows(cals, now)
   const geom = todoGeometry(body, rows.length, w.rows)
   let scale = geom.scale
   while (scale > 1 && CAL_SCALE_WIDTH * scale > aw) scale--
   let first = 0
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i].state !== CAL_PAST && rows[i].state !== CAL_ALLDAY) {
+    if (rows[i].state !== CAL_PAST && rows[i].state !== CAL_ALLDAY && followDay === null) {
       first = i
       break
     }
@@ -231,7 +271,14 @@ export function calLayout(area: Rect, w: CalWidget, d: CalendarData | null | und
 }
 
 // calWidget は、設定のセルから、描くのに要る項目を取り出す。
-export function calWidgetOf(a: { rows?: number; calendars?: string[]; stale?: string }): CalWidget {
+export function calWidgetOf(a: { rows?: number; calendars?: string[]; stale?: string; follow?: string }): CalWidget {
   const st = a.stale ? parseDuration(a.stale) : null
-  return { rows: typeof a.rows === 'number' ? a.rows : 0, calendars: a.calendars, staleMs: st ?? DEFAULT_CAL_STALE_MS }
+  const w: CalWidget = { rows: typeof a.rows === 'number' ? a.rows : 0, calendars: a.calendars, staleMs: st ?? DEFAULT_CAL_STALE_MS }
+  if (a.follow) w.follow = a.follow
+  return w
+}
+
+// calCaption は、カレンダーのセルの見出し。選んだ日の予定を出しているときは、label にその日付を足す（widget.go の widgetLabel）。
+export function calCaption(label: string, followDay: number | null): string {
+  return followDay === null ? label : (label + ' ' + calDate(followDay)).trim()
 }

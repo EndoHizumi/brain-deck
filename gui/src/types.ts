@@ -21,9 +21,11 @@ export interface ActionSpec {
   tz?: string // clock：タイムゾーン（IANA の名前）
   id?: string // text：中身の名前（set_text の name）
   rows?: number // todo、calendar：1 ページの行数。省略すると高さで決める
-  page_reset?: string // todo、calendar：触らなければ最初のページに戻るまでの時間（30s、2m など）。off で戻らない
+  page_reset?: string // todo、calendar、month：触らなければ最初のページ（今月と今日）に戻るまでの時間（30s、2m など）。off で戻らない
   stale?: string // calendar：最終更新がこれより古ければ、古いと出す（3h など）
-  calendars?: string[] // calendar：出すカレンダーの名前。省略するとすべて
+  calendars?: string[] // calendar：出すカレンダーの名前。month：印を付けるカレンダー。省略するとすべて
+  follow?: string // calendar：同じレイヤーの月の表示（その id）で選んだ日の予定を出す
+  week_start?: 'sunday' | 'monday' // month：週の始まり。省略すると日曜
   work?: string // pomodoro：作業の時間（25m など）
   break?: string // pomodoro：休憩の時間（5m など）
   states?: PresenceSpec[] // presence：タップで順に切り替える状態。省略すると在席、集中、会議中、休憩
@@ -43,7 +45,7 @@ export interface ActionSpec {
   long_press?: 'none' | 'right' // 長押しで右クリック
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month'
 
 // 在席ランプの状態 1 つ（gadgetwidget.go の PresenceSpec）
 export interface PresenceSpec {
@@ -343,6 +345,7 @@ export interface CalEvent {
 export interface Calendar {
   name: string
   color: string // #rrggbb
+  holiday?: boolean // 祝日のカレンダー（月の表示で日付を赤くし、予定の印は付けない）
   fetched_at?: string // 予定を取ってきた時刻（PC の時刻）
   error?: string // 最後の取得の失敗（前の予定を残している）
   events: CalEvent[]

@@ -118,6 +118,30 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // 月の表示と、follow のカレンダー。config/month-example.yaml の「月」「月(横)」レイヤー、予定と祝日は fixtures/calendar-month.json
+  // TZ=Asia/Tokyo go run . -render-png ... -render-layer month -render-calendar gui/test/fixtures/calendar-month.json ...（README の「開発」）
+  const monthCfg = parseConfigText(repoFile('config/month-example.yaml').toString('utf8'))
+  const monthLayer = (n: string) => monthCfg.layers.findIndex((l) => l.name === n)
+  const monthCases: { file: string; layer: string; data: string | null; offset?: number; select?: string; synced?: boolean }[] = [
+    { file: 'month.png', layer: 'month', data: 'calendar-month.json' },
+    { file: 'month-select.png', layer: 'month', data: 'calendar-month.json', select: '2026-10-17' },
+    { file: 'month-prev-holiday.png', layer: 'month', data: 'calendar-month.json', offset: -1, select: '2026-09-22' },
+    { file: 'month-wide.png', layer: 'month-wide', data: 'calendar-month.json', select: '2026-10-12' },
+    { file: 'month-unsynced.png', layer: 'month', data: null, synced: false },
+    { file: 'month-out-of-range.png', layer: 'month', data: 'calendar.json', offset: 1 },
+  ]
+  for (const c of monthCases) {
+    it(`月の表示も lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: monthCfg, stack: [0, monthLayer(c.layer)], mode: 'latched', now, synced: c.synced,
+        calendar: c.data ? calJSON(c.data) : null, monthOffset: c.offset, monthSelect: c.select })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   // 背景画像（セルの画像、壁紙、文字の縁取り、押したときの枠）。config/background-example.yaml と config/background-images/
   // TZ=Asia/Tokyo go run . -render-png ... -render-images config/background-images config/background-example.yaml（README の「開発」）
   const bcfg = parseConfigText(repoFile('config/background-example.yaml').toString('utf8'))

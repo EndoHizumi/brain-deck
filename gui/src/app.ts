@@ -24,6 +24,7 @@ import {
 import { TEXT_ID_PATTERN, TEXT_STYLES, textExpired } from './textwidget'
 import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
+import { DEFAULT_MONTH_ID, MONTH_MIN_SPAN } from './monthwidget'
 import {
   DEFAULT_PRESENCE, QR_MAX_BYTES, parseColor, pomoDurations, pomoText, pomodoroView, presenceStates, stateId, stopwatchElapsed, stopwatchText,
 } from './gadgetwidget'
@@ -1030,7 +1031,8 @@ export class App {
     if (!cur) return
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
-    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale', 'work', 'break'] as const) if (a[f] === '') delete a[f]
+    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale', 'work', 'break', 'follow'] as const) if (a[f] === '') delete a[f]
+    if (!a.week_start) delete a.week_start
     if (a.states && !a.states.length) delete a.states
     for (const f of PAD_NUM_FIELDS) if (a[f] === undefined || !Number.isFinite(a[f])) delete a[f]
     if (!a.scroll_direction) delete a.scroll_direction
@@ -1046,7 +1048,7 @@ export class App {
     if (!cur?.widget || cur.widget === w) return
     const a: ActionSpec = { ...cur, widget: w }
     for (const f of CLOCK_FIELDS) if (w !== 'clock') delete a[f]
-    if (!hasStateId(w) || (hasStateId(cur.widget) && (cur.widget === 'text') !== (w === 'text'))) delete a.id
+    if (!hasStateId(w) || (hasStateId(cur.widget) && (cur.widget === 'text') !== (w === 'text')) || (cur.widget === 'month') !== (w === 'month')) delete a.id
     if (w === 'text') a.id = cur.id || this.suggestTextId()
     if (w === 'qr') a.id = a.id || this.suggestQRId()
     if (w !== 'pomodoro') {
@@ -1055,14 +1057,14 @@ export class App {
     }
     if (w !== 'presence') delete a.states
     const paged = w === 'todo' || w === 'calendar'
-    if (!paged) {
-      delete a.rows
-      delete a.page_reset
-    }
+    if (!paged) delete a.rows
+    if (!paged && w !== 'month') delete a.page_reset
     if (w !== 'calendar') {
       delete a.stale
-      delete a.calendars
+      delete a.follow
     }
+    if (w !== 'calendar' && w !== 'month') delete a.calendars
+    if (w !== 'month') delete a.week_start
     if (w !== 'trackpad') for (const f of PAD_FIELDS) delete a[f]
     // Todo、カレンダー、トラックパッドは押した位置で働く（長押しで完了、▲▼ でページ送り、タップでクリック）ので、
     // タップしたときのキーやレイヤーは書けない
@@ -2118,7 +2120,7 @@ export class App {
       wait = unit - (now.getTime() % unit) + 5
     }
     // カレンダーは、予定の始まりと終わりで描き直す（1 分ごとに見直せば十分）
-    if (g.cells.some((c) => c?.action.widget === 'calendar')) wait = Math.min(wait, 60000 - (now.getTime() % 60000) + 5)
+    if (g.cells.some((c) => c?.action.widget === 'calendar' || c?.action.widget === 'month')) wait = Math.min(wait, 60000 - (now.getTime() % 60000) + 5)
     // テキストと QR コードの有効期限が切れたら、薄く描き直す
     for (const c of g.cells) {
       const a = c?.action
@@ -2230,7 +2232,8 @@ export class App {
         onchange: (e: Event) => this.setWidgetKind((e.target as HTMLSelectElement).value as WidgetKind) },
         (Object.keys(WIDGET_LABELS) as WidgetKind[]).map((w) => h('option', { value: w, selected: own.widget === w }, WIDGET_LABELS[w])))),
       own.widget === 'text' ? this.viewTextEditor(own) : own.widget === 'todo' ? this.viewTodoEditor(own)
-        : own.widget === 'calendar' ? this.viewCalendarEditor(own) : own.widget === 'trackpad' ? this.viewPadEditor(own)
+        : own.widget === 'calendar' ? this.viewCalendarEditor(own) : own.widget === 'month' ? this.viewMonthEditor(own)
+        : own.widget === 'trackpad' ? this.viewPadEditor(own)
         : own.widget === 'clock' ? this.viewClockEditor(text, missing) : this.viewGadgetEditor(own),
     )
   }
@@ -2364,22 +2367,75 @@ export class App {
   }
 
   // viewPagerFields は、ページを送るウィジェット（Todo、カレンダー）の、1 ページの行数と、最初のページに戻るまでの時間の欄。
+  // what が空なら（月の表示）、行数の欄を出さない。
   private viewPagerFields(own: ActionSpec, what: string, idp: string): HTMLElement[] {
     const pr = own.page_reset ?? ''
     const prBad = pr !== '' && pr !== 'off' && !(parseDuration(pr) !== null && parseDuration(pr)! >= 5000 && parseDuration(pr)! <= 86400_000)
+    const month = what === ''
+    const back = month ? '今月と今日に戻るまで' : '最初のページに戻るまで'
     return [
-      h('label', { class: 'row', title: `1 ページに並べる${what}の数。空なら、セルの高さに入るだけ並べます（1 行 52 ドット）` }, '1 ページの行数 ',
+      ...(month ? [] : [h('label', { class: 'row', title: `1 ページに並べる${what}の数。空なら、セルの高さに入るだけ並べます（1 行 52 ドット）` }, '1 ページの行数 ',
         h('input', { type: 'number', min: 1, max: TODO_MAX_ROWS, value: own.rows ?? '', placeholder: '自動', 'data-focus': 'rows', id: `${idp}-rows`, class: 'num',
           onchange: (e: Event) => {
             const v = (e.target as HTMLInputElement).value
             this.patchAction({ rows: v === '' ? undefined : Math.min(Math.max(Math.trunc(Number(v)) || 1, 1), TODO_MAX_ROWS) })
-          } })),
-      h('label', { class: 'row', title: 'ページを送ってから、この時間だれも触らなければ最初のページに戻ります（30s、2m など。5 秒〜24 時間）。off で戻りません' },
-        '最初のページに戻るまで ',
+          } }))]),
+      h('label', { class: 'row', title: month
+        ? '月を送るか日付を選んでから、この時間だれも触らなければ今月と今日に戻ります（30s、2m など。5 秒〜24 時間）。off で戻りません'
+        : 'ページを送ってから、この時間だれも触らなければ最初のページに戻ります（30s、2m など。5 秒〜24 時間）。off で戻りません' },
+        back + ' ',
         h('input', { value: pr, placeholder: DEFAULT_PAGE_RESET, 'data-focus': 'page_reset', id: `${idp}-page-reset`, class: 'num',
           onchange: (e: Event) => this.patchAction({ page_reset: (e.target as HTMLInputElement).value.trim() }) })),
-      ...(prBad ? [h('div', { class: 'err' }, '「最初のページに戻るまで」は、30s、2m のような 5 秒から 24 時間の時間か、off です')] : []),
+      ...(prBad ? [h('div', { class: 'err' }, `「${back}」は、30s、2m のような 5 秒から 24 時間の時間か、off です`)] : []),
     ]
+  }
+
+  // monthIdsInLayer は、今のレイヤーの月の表示の id（follow で指せるもの）。
+  monthIdsInLayer(): string[] {
+    const cells = this.cfg?.layers[this.layer]?.touch?.cells ?? {}
+    return [...new Set(Object.values(cells).filter((a) => a.widget === 'month').map((a) => a.id || DEFAULT_MONTH_ID))].sort()
+  }
+
+  // viewMonthEditor は、月の表示のセルの欄。予定と祝日は Brain のデータで、PC の brain-deck calendar sync が送る。
+  private viewMonthEditor(own: ActionSpec): HTMLElement[] {
+    const names = this.calendar?.calendars.filter((c) => !c.holiday).map((c) => c.name) ?? []
+    const hols = this.calendar?.calendars.filter((c) => c.holiday).map((c) => c.name) ?? []
+    const id = own.id ?? ''
+    const [sw, sh] = spanOf(own)
+    const out: HTMLElement[] = [
+      h('label', { class: 'row', title: `英数字と _ . -（32 文字まで）。省略すると「${DEFAULT_MONTH_ID}」。同じレイヤーのカレンダーのセルの「選んだ日を見る」で指します` }, 'id ',
+        h('input', { value: id, 'data-focus': 'id', id: 'month-id', placeholder: `省略すると ${DEFAULT_MONTH_ID}`,
+          onchange: (ev: Event) => this.patchAction({ id: (ev.target as HTMLInputElement).value.trim() }) })),
+      ...(id && !TEXT_ID_PATTERN.test(id) ? [h('div', { class: 'err' }, 'id は、英数字と _ . - の 32 文字までです')] : []),
+      h('label', { class: 'row' }, '週の始まり ',
+        h('select', { 'data-focus': 'week_start', id: 'month-week-start',
+          onchange: (e: Event) => this.patchAction({ week_start: ((e.target as HTMLSelectElement).value || undefined) as ActionSpec['week_start'] }) },
+          h('option', { value: '', selected: !own.week_start }, '日曜（既定）'),
+          h('option', { value: 'monday', selected: own.week_start === 'monday' }, '月曜'))),
+      ...this.viewPagerFields(own, '', 'month'),
+      h('label', { class: 'row', title: '予定の印（点）を付けるカレンダーの名前（brain-deck の calendars.yaml の name）。読点かカンマで区切ります。空ならすべて。祝日の赤は、これによらず出します' },
+        '印を付けるカレンダー ',
+        h('input', { value: (own.calendars ?? []).join('、'), placeholder: names.length ? `すべて（${names.join('、')}）` : 'すべて', 'data-focus': 'calendars', id: 'month-cals',
+          onchange: (e: Event) => this.patchAction({ calendars: (e.target as HTMLInputElement).value.split(/[,、]/).map((x) => x.trim()).filter(Boolean) }) })),
+    ]
+    if (sw < MONTH_MIN_SPAN || sh < MONTH_MIN_SPAN)
+      out.push(h('div', { class: 'warn' }, `月の表示は 2×2 のセル以上を前提にしています（今は ${sw}×${sh}）。日付が小さく、押しにくくなります。上の「大きさ」で広げてください`))
+    const unknown = (own.calendars ?? []).filter((n) => this.calendar && !names.includes(n) && !hols.includes(n))
+    if (unknown.length) out.push(h('div', { class: 'warn' }, `Brain にないカレンダーです：${unknown.join('、')}（brain-deck の calendars.yaml の name と合わせてください）`))
+    if (this.connected && this.hello?.commands?.includes('get_calendar')) {
+      const d = this.calendar
+      out.push(h('p', { class: 'hint cal-now' }, d?.calendars.length
+        ? `今の予定：${d.from ? `${d.from} から ${(d.days ?? 0) + 1} 日分。` : ''}祝日のカレンダー：${hols.length ? hols.join('、') : 'なし（calendars.yaml に holiday: true のカレンダーを足すと、祝日を赤くします）'}`
+        : '今の予定：まだありません（Brain の月の表示には「予定未受信」と出ます）'))
+    }
+    const followers = Object.values(this.cfg?.layers[this.layer]?.touch?.cells ?? {}).filter((a) => a.widget === 'calendar' && a.follow === (id || DEFAULT_MONTH_ID))
+    out.push(h('p', { class: 'hint' },
+      'Brain では、▲ ▼ で前の月と次の月に送り、日付をタップするとその日を選びます（下の帯に日付、祝日の名前、予定の数を出します）。帯の中央をタップすると今月に戻ります。' +
+        '今日は反転、土曜は青、日曜と祝日は赤、予定のある日にはカレンダーの色の点（3 つまで。4 つ以上は 2 つと白い点）を出します。' +
+        (followers.length ? `このレイヤーのカレンダーのセル ${followers.length} 個が、選んだ日の予定を出します。`
+          : '同じレイヤーのカレンダーのセルで「選んだ日を見る」にこの id を選ぶと、選んだ日の予定を出せます。') +
+        '予定は PC で「brain-deck calendar sync」を実行して送ります（先月の初めから来月の終わりまで）。'))
+    return out
   }
 
   // viewCalendarEditor は、カレンダーのセルの欄。予定は設定ではなく Brain のデータで、PC の brain-deck calendar sync が送る。
@@ -2396,6 +2452,15 @@ export class App {
         h('input', { value: (own.calendars ?? []).join('、'), placeholder: names.length ? `すべて（${names.join('、')}）` : 'すべて', 'data-focus': 'calendars', id: 'cal-names',
           onchange: (e: Event) => this.patchAction({ calendars: (e.target as HTMLInputElement).value.split(/[,、]/).map((x) => x.trim()).filter(Boolean) }) })),
     ]
+    const months = this.monthIdsInLayer()
+    if (months.length || own.follow) {
+      out.push(h('label', { class: 'row', title: '同じレイヤーの月の表示で選んだ日の予定を出します（選んでいなければ、今日の予定と次の予定）' }, '選んだ日を見る ',
+        h('select', { 'data-focus': 'follow', id: 'cal-follow', onchange: (e: Event) => this.patchAction({ follow: (e.target as HTMLSelectElement).value }) },
+          h('option', { value: '', selected: !own.follow }, 'しない（今日）'),
+          [...new Set([...months, ...(own.follow ? [own.follow] : [])])].map((m) => h('option', { value: m, selected: own.follow === m }, `月の表示 ${m}`)))))
+      if (own.follow && !months.includes(own.follow))
+        out.push(h('div', { class: 'err' }, `このレイヤーに id が「${own.follow}」の月の表示がありません`))
+    }
     if (staleBad) out.push(h('div', { class: 'err' }, '「古いとみなすまで」は、3h、90m のような 1 分から 720 時間の時間です'))
     const unknown = (own.calendars ?? []).filter((n) => this.calendar && !names.includes(n))
     if (unknown.length) out.push(h('div', { class: 'warn' }, `Brain にないカレンダーです：${unknown.join('、')}（brain-deck の calendars.yaml の name と合わせてください）`))

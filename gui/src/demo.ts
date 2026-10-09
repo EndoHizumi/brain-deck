@@ -157,7 +157,7 @@ export class FakeDaemon {
         return ok({ ...r, rev: this.todo.rev, items: this.todo.items })
       }
       case 'get_calendar':
-        return ok({ ...this.calendar, shown: this.config.layers.some((l) => Object.values(l.touch?.cells ?? {}).some((a) => a.widget === 'calendar')) })
+        return ok({ ...this.calendar, shown: this.config.layers.some((l) => Object.values(l.touch?.cells ?? {}).some((a) => a.widget === 'calendar' || a.widget === 'month')) })
       case 'set_calendar':
         if (!Array.isArray(req.calendars)) return err('bad_request', '"calendars" (an array) is required')
         this.calendar = { rev: this.calendar.rev + 1, received_at: new Date().toISOString(), from: req.from, days: req.days, calendars: req.calendars }
@@ -414,8 +414,8 @@ export function validate(cfg: Config): Problem[] {
     if (!cell && (a.widget || a.span || a.background)) return out.push({ path, message: `${where}: widget, span and background can be used only in touch cells` })
     if (a.background !== undefined && !/^[0-9a-f]{16}$/.test(a.background))
       out.push({ path, message: `${where}: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got "${a.background}"` })
-    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence'].includes(a.widget))
-      out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad, battery, stopwatch, pomodoro, counter, qr, presence)` })
+    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month'].includes(a.widget))
+      out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad, battery, stopwatch, pomodoro, counter, qr, presence, month)` })
     if (isTapWidget(a.widget) && n > 0)
       out.push({ path, message: `${where}: widget: ${a.widget} handles taps itself; remove key, layer_*, mouse, usb_mode and terminal` })
     if ((a.work !== undefined || a.break !== undefined) && a.widget !== 'pomodoro') out.push({ path, message: `${where}: work and break are for widget: pomodoro` })
@@ -426,14 +426,19 @@ export function validate(cfg: Config): Problem[] {
     if (a.states !== undefined && a.widget !== 'presence') out.push({ path, message: `${where}: states is for widget: presence` })
     if (a.widget === 'todo' && n > 0) out.push({ path, message: `${where}: widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*` })
     if (a.widget === 'calendar' && n > 0) out.push({ path, message: `${where}: widget: calendar handles taps itself (▲▼ to turn pages); remove key and layer_*` })
+    if (a.widget === 'month' && n > 0) out.push({ path, message: `${where}: widget: month handles taps itself (▲▼ to change the month, tap a day to select it); remove key and layer_*` })
     const paged = a.widget === 'todo' || a.widget === 'calendar'
     if (a.rows !== undefined && !paged) out.push({ path, message: `${where}: rows is for widget: todo and calendar` })
-    if (a.page_reset !== undefined && !paged) out.push({ path, message: `${where}: page_reset is for widget: todo and calendar` })
-    if ((a.stale !== undefined || a.calendars !== undefined) && a.widget !== 'calendar') out.push({ path, message: `${where}: stale and calendars are for widget: calendar` })
+    if (a.page_reset !== undefined && !paged && a.widget !== 'month') out.push({ path, message: `${where}: page_reset is for widget: todo, calendar and month` })
+    if (a.stale !== undefined && a.widget !== 'calendar') out.push({ path, message: `${where}: stale is for widget: calendar` })
+    if (a.calendars !== undefined && a.widget !== 'calendar' && a.widget !== 'month') out.push({ path, message: `${where}: calendars is for widget: calendar and month` })
+    if (a.follow !== undefined && a.widget !== 'calendar') out.push({ path, message: `${where}: follow is for widget: calendar (the id of a widget: month cell in the same layer)` })
+    if (a.week_start !== undefined && a.widget !== 'month') out.push({ path, message: `${where}: week_start is for widget: month` })
+    if (a.week_start !== undefined && a.week_start !== 'sunday' && a.week_start !== 'monday') out.push({ path, message: `${where}: week_start must be sunday or monday, got "${a.week_start}"` })
     if (a.rows !== undefined && !(Number.isInteger(a.rows) && a.rows >= 1 && a.rows <= 20)) out.push({ path, message: `${where}: rows must be 1..20 (omit it to fit the cell height)` })
     if ((a.widget === 'text' || a.widget === 'qr') && !TEXT_ID_PATTERN.test(a.id ?? ''))
       out.push({ path, message: `${where}: widget: ${a.widget} needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
-    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, stopwatch, pomodoro, counter and presence` })
+    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, stopwatch, pomodoro, counter, presence and month` })
     if (!a.widget && (a.format || a.date_format || a.tz)) out.push({ path, message: `${where}: format, date_format and tz need widget: clock` })
     if (a.tz) {
       try {
@@ -476,6 +481,12 @@ export function validate(cfg: Config): Problem[] {
         else if (p[0] + w > cols || p[1] + h > rows)
           out.push({ path: `/layers/${i}/touch/cells/${k}`, message: `${where}: span ${w}x${h} goes out of the ${cols}x${rows} grid` })
         else action(`/layers/${i}/touch/cells/${k}`, where, a, true)
+      }
+      // follow は、同じレイヤーの月の表示の id を指す
+      const months = Object.values(l.touch.cells ?? {}).filter((a) => a.widget === 'month').map((a) => a.id || 'month')
+      for (const [k, a] of Object.entries(l.touch.cells ?? {})) {
+        if (a.widget === 'calendar' && a.follow && !months.includes(a.follow))
+          out.push({ path: `/layers/${i}/touch/cells/${k}`, message: `layer "${l.name}" touch cell "${k}": follow: no widget: month with id "${a.follow}" in this layer` })
       }
     }
     for (const [n, a] of Object.entries(l.soft_keys ?? {})) {
