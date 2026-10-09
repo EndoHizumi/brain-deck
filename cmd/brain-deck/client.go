@@ -35,8 +35,12 @@ func (e *busyError) Error() string { return "busy: " + e.port }
 
 // brainError は、Brain のデーモンがエラーを返したこと。
 type brainError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	Problems []struct {
+		Path    string `json:"path"`
+		Message string `json:"message"`
+	} `json:"problems"`
 }
 
 func (e *brainError) Error() string { return e.Code + ": " + e.Message }
@@ -57,6 +61,8 @@ type helloResult struct {
 	Version  string   `json:"version"`
 	MaxLine  int      `json:"max_line"`
 	Commands []string `json:"commands"`
+	// UploadKinds は upload_* で送れるものの種類（update、image）。古い lefthand にはない
+	UploadKinds []string `json:"upload_kinds"`
 }
 
 func (h helloResult) has(cmd string) bool {

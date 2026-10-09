@@ -91,6 +91,19 @@ const usage = `使い方：
                                       起動したときの形）、mouse はキーボードとマウス。USB を付け直すので、2〜3 秒切れる
   brain-deck terminal [on|off|toggle] 端末モード（Brain の画面とキーボードで PC にログインする）を見る・切り替える。
                                       シリアルの端末モードでは、入るとき・抜けるときに USB を付け直す
+  brain-deck update <ファイル.update.tar.gz>  lefthand と gadget-setup.sh を組で入れ替える（go run ./tools/mkupdate で作る）。
+                                      Brain が確かめてから入れ替え、つなぎ直して確かめる。失敗したら前の版に戻す。
+                                      要れば USB を付け直す。--dry-run で確かめるだけ
+  brain-deck update --rollback        前の版（.prev）に戻す。もう一度実行すると、戻す前の版になる
+  brain-deck update --status          今の版と、最後の更新の結果
+  brain-deck restart [--usb]          lefthand を再起動する（--usb なら USB も付け直す）
+  brain-deck reboot [--no-wait]       Brain を再起動し、起動するまで待つ（約 1 分。--timeout 4m が既定）
+  brain-deck poweroff [--no-wait]     Brain の電源を切る
+  brain-deck logs [-n 100] [-f]       lefthand と更新の係のログ（journal）。-f で追いかける（Ctrl-C で終わる）
+  brain-deck config get [--prev]      Brain の設定ファイル（/etc/lefthand/config.yaml）を、コメントもそのまま書き出す
+  brain-deck config put <ファイル|-> [--restart] [--dry-run]   設定を検証してから、そのまま書き、すぐ反映する
+                                      （前の版は .prev）。再起動が要る項目を変えるときは --restart
+  brain-deck config check <ファイル>  設定を Brain で検証するだけ
   brain-deck version
 
 共通のオプション：
@@ -101,12 +114,19 @@ const usage = `使い方：
   --id <id>          presence で、在席ランプの id（省略すると presence）
   --config <パス>    calendar sync の設定ファイル（既定 ~/.config/brain-deck/calendars.yaml）
   --fetch-timeout <時間>  calendar sync で予定を取ってくる時間の上限（既定 30s。--timeout とは別）
+  --usb              restart で、USB も付け直す
+  --no-wait          reboot、poweroff で、頼んだら待たずに終わる
+  -n, --lines <数>   logs で、読む行数（既定 100）
+  -f, --follow       logs で、新しいログを待って出し続ける
+  --prev             config get で、前の版（.prev）を読む
+  --restart          config put で、再起動が要る項目を変えてもよい（書いて lefthand を再起動する）
   -q, --quiet        成功したときに何も出さない
   -v, --verbose      通信の内容を標準エラーに出す
 
 終了コード：0 成功、1 予期しないエラー、2 使い方の誤り、3 Brain が見つからない・返事がない、
            4 設定 GUI が接続中（ほかのプログラムがポートを使用中）、5 Brain がエラーを返した、6 ポートを開く権限がない、
-           7 予定の取得に失敗した（calendar sync。取れたカレンダーは送る）
+           7 予定の取得に失敗した（calendar sync。取れたカレンダーは送る）、
+           8 更新・再起動に失敗した（update は前の版に戻した）
 `
 
 type options struct {
@@ -128,7 +148,20 @@ type options struct {
 	fetchTimeout time.Duration
 	quiet        bool
 	verbose      bool
-	args         []string
+	// update、restart、reboot、logs、config
+	status    bool // update --status
+	rollback  bool // update --rollback
+	usb       bool // restart --usb
+	noWait    bool // reboot、poweroff
+	follow    bool // logs -f
+	lines     int  // logs -n
+	prev      bool // config get --prev
+	restartOK bool // config put --restart
+	// exec
+	result string
+	limit  time.Duration
+	args   []string
+	dashAt int // `--` のあとの最初の引数の位置（なければ -1）
 }
 
 type usageError string
@@ -138,11 +171,12 @@ func (e usageError) Error() string { return string(e) }
 // parseArgs は、オプションをどこに書いても受け付ける（`text build "x" --style ok` も `--style ok text build "x"` も）。
 // `--` のあとは、すべてふつうの引数にする（`-` で始まるテキストを渡すとき）。
 func parseArgs(argv []string) (*options, error) {
-	o := &options{timeout: defaultTimeout, port: os.Getenv("BRAIN_DECK_PORT"), fetchTimeout: defaultFetchTimeout}
-	withValue := map[string]bool{"port": true, "timeout": true, "style": true, "ttl": true, "ics": true, "days": true, "config": true, "fetch-timeout": true, "id": true}
+	o := &options{dashAt: -1, timeout: defaultTimeout, port: os.Getenv("BRAIN_DECK_PORT"), fetchTimeout: defaultFetchTimeout}
+	withValue := map[string]bool{"port": true, "timeout": true, "style": true, "ttl": true, "ics": true, "days": true, "config": true, "fetch-timeout": true, "id": true, "n": true, "lines": true, "result": true, "limit": true}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--" {
+			o.dashAt = len(o.args)
 			o.args = append(o.args, argv[i+1:]...)
 			break
 		}
@@ -199,6 +233,32 @@ func parseArgs(argv []string) (*options, error) {
 			o.dryRun = true
 		case "top":
 			o.top = true
+		case "status":
+			o.status = true
+		case "rollback":
+			o.rollback = true
+		case "usb":
+			o.usb = true
+		case "no-wait":
+			o.noWait = true
+		case "f", "follow":
+			o.follow = true
+		case "n", "lines":
+			o.lines, err = strconv.Atoi(val)
+			if err == nil && (o.lines < 1 || o.lines > 2000) {
+				err = errors.New("must be 1..2000")
+			}
+		case "prev":
+			o.prev = true
+		case "restart":
+			o.restartOK = true
+		case "result":
+			o.result = val
+		case "limit":
+			o.limit, err = time.ParseDuration(val)
+			if err == nil && o.limit <= 0 {
+				err = errors.New("must be positive")
+			}
 		case "json":
 			o.json = true
 		case "q", "quiet":
@@ -260,9 +320,20 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "brain-deck: --id は presence で使います"+hint)
 		return exitUsage
 	}
-	if o.args[0] != "calendar" && (len(o.ics) > 0 || o.days != 0 || o.config != "" || (o.dryRun && o.args[0] != "images")) {
-		fmt.Fprintln(stderr, "brain-deck: --ics、--days、--config、--dry-run は calendar sync で使います"+hint)
+	if o.args[0] != "calendar" && (len(o.ics) > 0 || o.days != 0 || o.config != "" || (o.dryRun && o.args[0] != "images" && o.args[0] != "update" && o.args[0] != "config")) {
+		fmt.Fprintln(stderr, "brain-deck: --ics、--days、--config は calendar sync で、--dry-run は calendar sync、images prune、update、config put で使います"+hint)
 		return exitUsage
+	}
+	for _, f := range []struct {
+		on   bool
+		name string
+		cmds string
+	}{{o.status || o.rollback, "--status、--rollback", "update"}, {o.usb, "--usb", "restart"}, {o.noWait, "--no-wait", "reboot poweroff"},
+		{o.follow || o.lines != 0, "-f、-n", "logs"}, {o.prev || o.restartOK, "--prev、--restart", "config"}} {
+		if f.on && !strings.Contains(" "+f.cmds+" ", " "+o.args[0]+" ") {
+			fmt.Fprintf(stderr, "brain-deck: %s は %s で使います%s\n", f.name, f.cmds, hint)
+			return exitUsage
+		}
 	}
 	var cmd func(*Client) (string, error)
 	runningCmd, warnOut = o.args[0], stderr
@@ -280,6 +351,17 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = todoCommand(o, stdin)
 	case "calendar":
 		return runCalendar(o, stdout, stderr)
+	case "update":
+		return runUpdate(o, stdout, stderr)
+	case "restart":
+		return runRestart(o, stdout, stderr)
+	case "reboot", "poweroff":
+		return runPower(o, stdout, stderr)
+	case "logs":
+		return runLogs(o, stdout, stderr)
+	case "config":
+		return runConfig(o, stdin, stdout, stderr)
+
 	case "images":
 		cmd, err = imagesCommand(o)
 	case "time":
@@ -354,6 +436,13 @@ func report(w io.Writer, err error) int {
 		return exitNoBrain
 	case errors.As(err, &br):
 		fmt.Fprintf(w, "brain-deck: Brain がエラーを返しました：%s（%s）\n", br.Message, br.Code)
+		for _, p := range br.Problems {
+			if p.Path != "" {
+				fmt.Fprintf(w, "  %s：%s\n", p.Path, p.Message)
+			} else {
+				fmt.Fprintf(w, "  %s\n", p.Message)
+			}
+		}
 		if (br.Code == "conflict" || br.Code == "not_found") && runningCmd == "todo" {
 			fmt.Fprintln(w, "読んだあとに Brain で項目が変わりました。brain-deck todo list で確かめてから、もう一度実行してください")
 		}

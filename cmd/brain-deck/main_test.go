@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -97,6 +98,17 @@ type fakeBrain struct {
 	images     map[string][]byte // image_end で受け取った画像（id → 中身）
 	upload     []byte            // 受け取っている途中の画像
 	upName     string
+	// handler があれば、先に呼ぶ。ok なら、その結果（fakeErr ならエラー）を返す
+	handler func(req map[string]any) (res any, ok bool)
+	version string // hello の版（空なら test）
+	mu      sync.Mutex
+}
+
+// fakeErr は、handler がエラーを返すときの形。
+type fakeErr struct {
+	Code     string           `json:"code"`
+	Message  string           `json:"message"`
+	Problems []map[string]any `json:"problems,omitempty"`
 }
 
 func newFakeBrain(t *testing.T) *fakeBrain {
@@ -134,15 +146,36 @@ func (f *fakeBrain) serve(commands []string) {
 		if json.Unmarshal(bytes.TrimSpace(line), &req) != nil {
 			continue
 		}
-		f.got <- req
+		select {
+		case f.got <- req:
+		default:
+		}
 		var res any
+		if f.handler != nil {
+			f.mu.Lock()
+			r, ok := f.handler(req)
+			f.mu.Unlock()
+			if ok {
+				out := map[string]any{"id": req["id"], "ok": true, "result": r}
+				if e, isErr := r.(fakeErr); isErr {
+					out = map[string]any{"id": req["id"], "ok": false, "error": e}
+				}
+				b, _ := json.Marshal(out)
+				f.master.Write(append(b, '\n'))
+				continue
+			}
+		}
 		switch req["cmd"] {
 		case "hello":
 			if f.ignore > 0 {
 				f.ignore--
 				continue
 			}
-			res = map[string]any{"protocol": 1, "daemon": "lefthand", "version": "test", "commands": commands}
+			v := f.version
+			if v == "" {
+				v = "test"
+			}
+			res = map[string]any{"protocol": 1, "daemon": "lefthand", "version": v, "commands": commands, "upload_kinds": []string{"update", "image"}}
 		case "get_status":
 			res = map[string]any{"time": map[string]any{"now": time.Now().Format(time.RFC3339Nano), "synced": true},
 				"hid":      map[string]any{"mouse": f.mouse, "switching": false},
