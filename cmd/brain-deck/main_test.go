@@ -634,3 +634,21 @@ func TestQRAndPresenceAgainstFakeBrain(t *testing.T) {
 		t.Errorf("--id with text: exit %d", code)
 	}
 }
+
+func TestUSBHIDDescribe(t *testing.T) {
+	yes, no, susp := true, false, "suspended"
+	for _, c := range []struct {
+		h    usbHID
+		want string
+	}{
+		{usbHID{}, "キーボードだけ（ブートキーボード）"},
+		{usbHID{Media: &no}, "キーボードだけ（ブートキーボード。メディアキーは送れない）"},
+		{usbHID{Mouse: true}, "キーボードとマウス"},
+		{usbHID{Mouse: true, Media: &yes}, "キーボードとマウスとメディアキー"},
+		{usbHID{Mouse: true, Media: &yes, USBState: &susp}, "キーボードとマウスとメディアキー。PC はスリープ中（USB がサスペンド）"},
+	} {
+		if got := c.h.describe(); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.h, got, c.want)
+		}
+	}
+}

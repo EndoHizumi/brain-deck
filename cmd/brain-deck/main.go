@@ -778,17 +778,29 @@ func terminalCommand(o *options) (func(*Client) (string, error), error) {
 
 // usbHID は get_status の hid。
 type usbHID struct {
-	Mouse     bool `json:"mouse"`
-	Switching bool `json:"switching"`
+	Mouse     bool    `json:"mouse"`
+	Media     *bool   `json:"media"` // 古い lefthand にはない
+	Switching bool    `json:"switching"`
+	USBState  *string `json:"usb_state"` // 古い lefthand にはない
 }
 
 func (h usbHID) describe() string {
-	s := "キーボードだけ（ブートキーボード）"
-	if h.Mouse {
+	var s string
+	switch {
+	case h.Mouse && h.Media != nil && *h.Media:
+		s = "キーボードとマウスとメディアキー"
+	case h.Mouse:
 		s = "キーボードとマウス"
+	case h.Media != nil:
+		s = "キーボードだけ（ブートキーボード。メディアキーは送れない）"
+	default:
+		s = "キーボードだけ（ブートキーボード）"
 	}
 	if h.Switching {
 		s += "（切り替え中）"
+	}
+	if h.USBState != nil && *h.USBState == "suspended" {
+		s += "。PC はスリープ中（USB がサスペンド）"
 	}
 	return s
 }
