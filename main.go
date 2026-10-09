@@ -213,6 +213,7 @@ func (s *State) press(id string, c Combo) {
 	defer s.mu.Unlock()
 	s.active[id] = c
 	s.send()
+	hostWaker.Request() // PC がスリープしていれば起こす（wakeup.go）
 }
 
 func (s *State) release(id string) {
@@ -1023,6 +1024,7 @@ func main() {
 	restoreTerminal(*gadgetSetup)
 
 	hid := NewHIDWriter(cfg.HIDDevice)
+	hostWaker = NewWaker() // スリープ中の PC をキーで起こす
 	hl := detectHID(cfg.HIDDevice)
 	log.Printf("hid: %s", hl.Source)
 	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID), media: NewMedia(hid, hl.MediaID)}

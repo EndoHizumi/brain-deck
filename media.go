@@ -100,6 +100,7 @@ func (m *Media) Press(src string, a mediaAction) {
 	m.remove(src)
 	m.held = append(m.held, mediaHeld{src, a.Usage})
 	m.send()
+	hostWaker.Request()
 }
 
 // Release は、入力 src で押したメディアキーを離す。

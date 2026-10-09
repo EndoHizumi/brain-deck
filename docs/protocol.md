@@ -150,7 +150,7 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
    "stack":[{"layer":"edit","kind":"layer_hold"}],"cols":4,"rows":3},
    "uptime_sec":120,"subscribed":true,"suppressing":true,
    "time":{"now":"2026-10-06T19:04:27.13+09:00","timezone":"Asia/Tokyo","utc_offset_sec":32400,"synced":true,"ntp_synced":false,
-   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true,"media":true,"switching":false},
+   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true,"media":true,"switching":false,"usb_state":"configured"},
    "terminal":{"active":true,"state":"on","transport":"serial","status":"PC のログイン画面","cols":100,"rows":31},
    "battery":{"percent":100,"voltage_mv":4172,"plugged":true,"charging":false,"source":"lradc","estimated":true},
    "backlight":{"enabled":true,"state":"dim","level":1,"max":7,"device":"/sys/class/backlight/backlight@0"}}}
@@ -158,7 +158,7 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 
 `time` は Brain の時刻の状態（下の `set_time` の結果と同じ形）。
 
-`hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.media` は、メディアキー（`media:`）が PC に届くか。キーボードとマウスの形で true（ガジェットを作り直す前の古い形では、マウスがあっても false）。この項目がなければ、メディアキーに対応する前の版。`hid.switching` は、`set_usb_mode` で切り替えている途中か。`hid` がなければ、lefthand がマウスに対応する前の版。
+`hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.media` は、メディアキー（`media:`）が PC に届くか。キーボードとマウスの形で true（ガジェットを作り直す前の古い形では、マウスがあっても false）。この項目がなければ、メディアキーに対応する前の版。`hid.switching` は、`set_usb_mode` で切り替えている途中か。`hid.usb_state` は、Brain の USB コントローラの状態（`/sys/class/udc/ci_hdrc.0/state`。`configured` でつながっている、`suspended` は PC がスリープしてバスを止めている）。`hid` がなければ、lefthand がマウスに対応する前の版。
 
 `battery` は電池の状態（`battery.go` の `BatteryInfo`）。読めなければ `null`。この項目がなければ、電池を読まない版。
 

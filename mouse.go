@@ -98,6 +98,7 @@ func (m *Mouse) Press(src string, b byte) {
 	defer m.mu.Unlock()
 	m.held[src] = b
 	m.sendButtons()
+	hostWaker.Request()
 }
 
 // Release は、入力 src で押したボタンを離し、スクロールの繰り返しを止める。
@@ -157,6 +158,7 @@ func (m *Mouse) Move(dx, dy int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.send(dx, dy, 0, 0)
+	hostWaker.Request()
 }
 
 // Wheel はホイールを回す。v は上が正、h は右が正（1 が 1 段）。
@@ -167,6 +169,7 @@ func (m *Mouse) Wheel(v, h int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.send(0, 0, v, h)
+	hostWaker.Request()
 }
 
 // StartScroll は、1 段回し、押しているあいだ繰り返す。Release(src) で止まる。
@@ -178,6 +181,7 @@ func (m *Mouse) StartScroll(src string, v, h int) {
 	defer m.mu.Unlock()
 	m.stopRepeat(src)
 	m.send(0, 0, v, h)
+	hostWaker.Request()
 	var tick func()
 	var t *time.Timer
 	tick = func() {

@@ -36,6 +36,9 @@
 #   HID_MOUSE    0（既定）でキーボードだけ（ブートキーボード）、1 でキーボードとマウス。/etc/lefthand/gadget.env にも書ける
 #   LEFTHAND_SELF=1  lefthand から実行するとき。lefthand.service を止めない（lefthand が /dev/hidg0 を閉じてから呼ぶ）
 #   GADGET_TERMINAL  1 で端末モードの構成の名前にする（lefthand の端末モードだけが渡す。起動したときは 0）
+#   USB_WAKEUP   1（既定）で、構成にリモートウェイクアップの印（bmAttributes の 0x20）を立てる。Brain のキーで、
+#                スリープ中の PC を起こせるようにする（起こすかは PC が決める。lefthand の wakeup.go）。0 で立てない。
+#                /etc/lefthand/gadget.env にも書ける。違っていれば、UDC から切り離して書き換える
 #   GADGET_UNBIND_ONLY=1  UDC から切り離すだけで終わる。lefthand の端末モードが、切り離しているあいだに
 #                    Brain の getty を止める・ttyGS0 を閉じるために使う（そのあと、もう一度このスクリプトで付ける）
 set -e
@@ -44,8 +47,10 @@ GADGET_ENV=${GADGET_ENV:-/etc/lefthand/gadget.env}
 # shellcheck disable=SC1090
 # 環境変数で HID_MOUSE を渡したときは、そちらを使う（lefthand からの切り替え）
 want_mouse=${HID_MOUSE:-}
+want_wakeup=${USB_WAKEUP:-}
 [ -r "$GADGET_ENV" ] && . "$GADGET_ENV"
 HID_MOUSE=${want_mouse:-${HID_MOUSE:-0}}
+USB_WAKEUP=${want_wakeup:-${USB_WAKEUP:-1}}
 
 G=/sys/kernel/config/usb_gadget/${GADGET_NAME:-eth}
 UDC_NAME=ci_hdrc.0
@@ -287,6 +292,19 @@ if [ "$hid_ok" = 1 ]; then
   set_conf_name || echo "構成の名前を変えられませんでした" >&2
 fi
 
+# 構成の bmAttributes。0x80 は「バスから電源を取る」（USB 2.0 で必ず立てる）、0x20 は「リモートウェイクアップできる」。
+# PC は、この印があるときだけ、スリープの前にリモートウェイクアップを許す（SET_FEATURE）。
+# 印は PC がつないだときに読むので、違っていれば UDC から切り離して書き換える
+set_wakeup() {
+  local want=0x80 f="$G/configs/c.1/bmAttributes"
+  [ "$USB_WAKEUP" = 1 ] && want=0xa0
+  [ "$(cat "$f")" = "$want" ] && return 0
+  unbind_udc
+  echo "$want" > "$f"
+  echo "bmAttributes: $want (remote wakeup $([ "$want" = 0xa0 ] && echo on || echo off))"
+}
+set_wakeup || echo "bmAttributes を書けませんでした（スリープ中の PC を起こせません）" >&2
+
 if [ "${SKIP_BIND:-0}" = 1 ]; then
   echo "SKIP_BIND=1: UDC 接続と IP 設定を省略"
   if [ -e "$RESTART_MARK" ]; then
@@ -313,5 +331,5 @@ if [ -e "$RESTART_MARK" ]; then
 fi
 
 ls -l /dev/hidg0 /dev/ttyGS0 /dev/ttyGS1 || echo "warning: /dev/hidg0、/dev/ttyGS0、/dev/ttyGS1 のどれかが見つかりません" >&2
-echo "done: usb0 = $BRAIN_IP, HID = $HID_KIND"
+echo "done: usb0 = $BRAIN_IP, HID = $HID_KIND, remote wakeup = $([ "$USB_WAKEUP" = 1 ] && echo on || echo off)"
 [ "$hid_ok" = 1 ]
