@@ -99,11 +99,12 @@ func (h *helper) run() bool {
 	// USB の付け直し。gadget-setup.sh が変わったときは実行する（違うところがあるときだけ付け直す）
 	if rebind || gadgetChanged {
 		h.phase("rebinding", "")
-		if err := h.gadget(rebind); err != nil {
+		changed, err := h.gadget(rebind)
+		if err != nil {
 			h.undo(done, gadgetChanged)
 			return h.finish(false, "rolled_back", err.Error())
 		}
-		h.st.Rebound = true
+		h.st.Rebound = changed
 	}
 
 	if err := h.startAndWait(stage); err != nil {
@@ -120,24 +121,30 @@ func (h *helper) run() bool {
 }
 
 // gadget は gadget-setup.sh を実行する。force なら、先に UDC から切り離す（必ず付け直す）。
-func (h *helper) gadget(force bool) error {
+// 付け直したか（force か、スクリプトがガジェットを変えたと書いたか）を返す。
+func (h *helper) gadget(force bool) (bool, error) {
 	b := map[bool]string{false: "0", true: "1"}
 	env := []string{"HID_MOUSE=" + b[h.p.HIDMouse], "GADGET_TERMINAL=0", "LEFTHAND_SELF=1"}
 	if force {
 		if out, code, err := h.sys.command(append(env, "GADGET_UNBIND_ONLY=1"), "bash", h.p.Gadget); err != nil || code != 0 {
-			return fmt.Errorf("gadget-setup (unbind): exit %d %v: %s", code, err, strings.TrimSpace(out))
+			return false, fmt.Errorf("gadget-setup (unbind): exit %d %v: %s", code, err, strings.TrimSpace(out))
 		}
 	}
 	out, code, err := h.sys.command(env, "bash", h.p.Gadget)
+	changed := force
 	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 		if l != "" {
 			h.logf("update-apply: gadget-setup: %s", l)
 		}
+		// gadget-setup.sh は、ガジェットを変えたとき（UDC から切り離したとき）にこれらを書く
+		for _, p := range []string{"created:", "added:", "updated:", "configuration:", "bmAttributes:"} {
+			changed = changed || strings.HasPrefix(l, p)
+		}
 	}
 	if err != nil || code != 0 {
-		return fmt.Errorf("gadget-setup.sh failed (exit %d %v): %s", code, err, lastLine(out))
+		return changed, fmt.Errorf("gadget-setup.sh failed (exit %d %v): %s", code, err, lastLine(out))
 	}
-	return nil
+	return changed, nil
 }
 
 // mainPID は、サービスの今の PID（動いていなければ 0）。
@@ -242,7 +249,7 @@ func (h *helper) undo(done []installed, rerun bool) {
 		}
 	}
 	if rerun {
-		if err := h.gadget(false); err != nil {
+		if _, err := h.gadget(false); err != nil {
 			h.logf("update-apply: rerunning the previous gadget-setup.sh: %v", err)
 		}
 	}

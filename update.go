@@ -60,7 +60,7 @@ const (
 
 // テストで短くする
 var (
-	updateReserve        int64 = 32 << 20         // 展開したあとも残しておく SD カードの空き
+	updateReserve        int64 = 16 << 20         // 展開したあとも残しておく空き（ファイルシステムの 10% のほうが小さければ、そちら）
 	updateReadyTimeout         = 45 * time.Second // 新しいデーモンが起動を知らせるまで
 	updateConfirmTimeout       = 90 * time.Second // PC がつなぎ直して update_confirm を送るまで
 	updateLegacyStable         = 10 * time.Second // 起動を知らせない古い版に戻したとき、落ちずに動き続けることを確かめる時間
@@ -273,13 +273,15 @@ func (u *Updater) UploadKind() UploadKind {
 			if err := u.canChange(); err != nil {
 				return err
 			}
-			free, _, err := statfsFree(filepath.Dir(u.Dir))
+			free, size, err := statfsFree(filepath.Dir(u.Dir))
 			if err != nil {
 				return nil // 空きを読めないときは、展開で失敗したら分かる
 			}
-			if need := b.Bytes * 4; free-need < updateReserve {
-				return fmt.Errorf("%w: the SD card has %s free; receiving and unpacking %s would leave less than %s",
-					errImageNoSpace, kib(free), kib(need), kib(updateReserve))
+			// 受け取ったファイルと、展開した lefthand（tar.gz のおよそ 2 倍）が同時に置かれる
+			reserve := min(updateReserve, size/10)
+			if need := b.Bytes * 3; free-need < reserve {
+				return fmt.Errorf("%w: %s has %s free; receiving and unpacking %s would leave less than %s",
+					errImageNoSpace, filepath.Dir(u.Dir), kib(free), kib(need), kib(reserve))
 			}
 			return nil
 		},

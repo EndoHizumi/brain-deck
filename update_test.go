@@ -448,7 +448,7 @@ func TestHelperUpdateSucceeds(t *testing.T) {
 	p := e.stageFor(t, "v2", append(script, []byte("\n# new\n")...))
 	e.confirmWhenAsked(p.Stage)
 	ok, st := e.runHelper(p)
-	if !ok || st.Phase != "done" || !st.OK || !st.Rebound {
+	if !ok || st.Phase != "done" || !st.OK || st.Rebound { // スクリプトは何も変えなかった（偽の出力は done だけ）
 		t.Fatalf("ok=%v state %+v", ok, st)
 	}
 	if readFile(t, e.bin) != "v2" || readFile(t, e.bin+".prev") != "v1" {
