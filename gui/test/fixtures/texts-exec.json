@@ -1,0 +1,5 @@
+{"texts":{
+"build":{"text":"成功 18:14 2.0秒\nok: 42 tests passed","style":"ok","set_at":"2026-10-09T09:14:00Z"},
+"test":{"text":"失敗(2) 18:15 12秒\nFAIL TestUpdate (0…","style":"error","set_at":"2026-10-09T09:15:00Z"},
+"service":{"text":"実行中 18:16\nsystemctl --user r…","style":"normal","set_at":"2026-10-09T09:16:00Z"},
+"deploy":{"text":"時間切れ 18:20 10分\nUploading 87%","style":"error","set_at":"2026-10-09T09:20:00Z"}}}

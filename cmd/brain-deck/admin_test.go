@@ -242,7 +242,7 @@ func TestExecWritesTheTile(t *testing.T) {
 		t.Fatalf("exit %d %q %s", code, out, errs)
 	}
 	f.mu.Lock()
-	if len(texts) != 2 || !strings.HasPrefix(texts[0]["text"].(string), "実行中") || texts[1]["style"] != "ok" ||
+	if len(texts) != 2 || !strings.HasPrefix(texts[0]["text"].(string), "実行中 ") || texts[1]["style"] != "ok" ||
 		!strings.HasSuffix(texts[1]["text"].(string), "\nall 3 passed") || !strings.HasPrefix(texts[1]["text"].(string), "成功 ") {
 		t.Fatalf("texts %v", texts)
 	}
@@ -251,7 +251,7 @@ func TestExecWritesTheTile(t *testing.T) {
 
 	code, _, _ = runCLI(t, "--port", f.slave, "exec", "--result", "build", "--", "sh", "-c", "echo 'error: x' >&2; exit 3")
 	f.mu.Lock()
-	if code != 3 || texts[1]["style"] != "error" || !strings.Contains(texts[1]["text"].(string), "終了コード 3") || !strings.HasSuffix(texts[1]["text"].(string), "error: x") {
+	if code != 3 || texts[1]["style"] != "error" || !strings.Contains(texts[1]["text"].(string), "失敗(3)") || !strings.HasSuffix(texts[1]["text"].(string), "error: x") {
 		t.Fatalf("exit %d %v", code, texts)
 	}
 	texts = nil
@@ -311,5 +311,18 @@ func TestTailLastLine(t *testing.T) {
 	w.Write(bytes.Repeat([]byte("x"), 10000))
 	if len(w.buf) != execTailBytes {
 		t.Fatal(len(w.buf))
+	}
+}
+
+func TestClipWidth(t *testing.T) {
+	for in, want := range map[string]string{
+		"ok: 42 tests passed":          "ok: 42 tests passed",
+		"systemctl --user restart api": "systemctl --user r…",
+		"ビルドに失敗しました（make）": "ビルドに失敗しまし…",
+		"失敗(2) 18:15 12秒":           "失敗(2) 18:15 12秒",
+	} {
+		if got := clip(in, execLineMax); got != want {
+			t.Errorf("clip(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

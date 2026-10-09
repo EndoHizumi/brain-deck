@@ -36,7 +36,7 @@ const (
 	execTextTimeout  = 3 * time.Second
 	execKillGrace    = 5 * time.Second // 時間切れで SIGTERM を送ってから SIGKILL まで
 	execTailBytes    = 4096
-	execLineMax      = 120 // タイルに出す最後の行の長さ（文字）
+	execLineMax      = 19 // タイルに出す行の幅（半角の数。全角は 2）。4×4 の格子の 1×1 のセルでも、縮めずに描ける幅
 )
 
 func runExec(o *options, stdout, stderr io.Writer) int {
@@ -64,7 +64,7 @@ func runExec(o *options, stdout, stderr io.Writer) int {
 
 	name := filepath.Base(argv[0])
 	start := time.Now()
-	tileText(o, stderr, fmt.Sprintf("実行中… %s\n%s", start.Format("15:04"), clip(strings.Join(append([]string{name}, argv[1:]...), " "), execLineMax)), "normal")
+	tileText(o, stderr, fmt.Sprintf("実行中 %s\n%s", start.Format("15:04"), clip(strings.Join(append([]string{name}, argv[1:]...), " "), execLineMax)), "normal")
 
 	tail := &tailWriter{}
 	code, timedOut, runErr := runCommandTee(argv, limit, io.MultiWriter(stdout, tail), io.MultiWriter(stderr, tail))
@@ -73,19 +73,19 @@ func runExec(o *options, stdout, stderr io.Writer) int {
 	style, head := "ok", "成功"
 	switch {
 	case timedOut:
-		style, head = "error", fmt.Sprintf("失敗 時間切れ（%v）", limit)
+		style, head = "error", "時間切れ"
 		fmt.Fprintf(stderr, "brain-deck: %s が %v で終わらなかったので止めました\n", name, limit)
 	case runErr != nil:
-		style, head = "error", "失敗 実行できません"
+		style, head = "error", "実行不可"
 		fmt.Fprintf(stderr, "brain-deck: %v\n", runErr)
 	case code != 0:
-		style, head = "error", fmt.Sprintf("失敗 終了コード %d", code)
+		style, head = "error", fmt.Sprintf("失敗(%d)", code)
 	}
 	last := tail.lastLine()
 	if runErr != nil {
 		last = runErr.Error()
 	}
-	text := fmt.Sprintf("%s %s（%s）", head, time.Now().Format("15:04"), shortDuration(took))
+	text := fmt.Sprintf("%s %s %s", head, time.Now().Format("15:04"), shortDuration(took))
 	if last != "" {
 		text += "\n" + clip(last, execLineMax)
 	}
@@ -258,20 +258,39 @@ func (t *tailWriter) lastLine() string {
 	return ""
 }
 
+// clip は、幅（半角の数。全角は 2）が n を超えたら、… を付けて n に収める。
 func clip(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
+	width := func(r rune) int {
+		if r >= 0x1100 {
+			return 2 // 全角（k8x12 で 8 ドット幅の文字）
+		}
+		return 1
+	}
+	total := 0
+	for _, r := range s {
+		total += width(r)
+	}
+	if total <= n {
 		return s
 	}
-	return string(r[:n-1]) + "…"
+	w := 0
+	for i, r := range s {
+		if w+width(r) > n-1 {
+			return s[:i] + "…"
+		}
+		w += width(r)
+	}
+	return s
 }
 
 func shortDuration(d time.Duration) string {
 	switch {
-	case d < time.Minute:
+	case d < 10*time.Second:
 		return fmt.Sprintf("%.1f秒", d.Seconds())
+	case d < time.Minute:
+		return fmt.Sprintf("%d秒", int(d.Seconds()))
 	case d < time.Hour:
-		return fmt.Sprintf("%d分%02d秒", int(d.Minutes()), int(d.Seconds())%60)
+		return fmt.Sprintf("%d分", int(d.Minutes()))
 	}
 	return fmt.Sprintf("%d時間%02d分", int(d.Hours()), int(d.Minutes())%60)
 }

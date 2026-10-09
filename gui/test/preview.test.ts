@@ -234,6 +234,28 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // コマンドのショートカット（F14〜F18 と Ctrl + F14〜F16 のセル、brain-deck exec の結果のタイル）。config/shortcuts-example.yaml の「コマンド」
+  // TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/commands.png -render-layer commands -render-time 2026-10-09T18:21:00+09:00 config/shortcuts-example.yaml
+  // （commands-results は -render-texts gui/test/fixtures/texts-exec.json -render-pressed "0,0 1,2"）
+  const cmdCfg = parseConfigText(repoFile('config/shortcuts-example.yaml').toString('utf8'))
+  const cmdLayer = cmdCfg.layers.findIndex((l) => l.name === 'commands')
+  const execTexts = JSON.parse(repoFile('gui/test/fixtures/texts-exec.json').toString('utf8')).texts
+  const cmdCases: { file: string; pressed?: string[]; texts?: Record<string, any> }[] = [
+    { file: 'commands.png' },
+    { file: 'commands-results.png', pressed: ['0,0', '1,2'], texts: execTexts },
+  ]
+  for (const c of cmdCases) {
+    it(`コマンドのショートカットも lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: cmdCfg, stack: [0, cmdLayer], mode: 'latched', pressed: new Set(c.pressed),
+        now: new Date('2026-10-09T18:21:00+09:00'), texts: c.texts })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   it('トラックパッドの既定値は Go と同じ（fixtures/pad-defaults.json）', () => {
     expect(JSON.parse(repoFile('gui/test/fixtures/pad-defaults.json').toString('utf8'))).toEqual({ ...PAD_DEFAULTS })
   })
