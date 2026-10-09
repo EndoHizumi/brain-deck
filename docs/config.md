@@ -97,10 +97,11 @@ layers:
 | `{ layer_oneshot: edit }` | 次に押した 1 キーだけ、edit を重ねる。もう一度押すと取り消す |
 | `{ layer_to: edit }` | base と edit だけにする（ほかの重なりは外す）。`layer_to: base` で base だけに戻る |
 | `{ mouse: left }` | マウスの操作。下の「マウスの操作」 |
+| `{ media: play_pause }` | メディアキー（再生、音量など）。下の「メディアキー」 |
 | `{ usb_mode: toggle }` | USB の形の切り替え（マウスのオンとオフ）。下の「USB の形の切り替え」 |
 | `{ terminal: toggle }` | 端末モードに入る・抜ける。下の「端末モード（terminal）」 |
 
-- **オブジェクトの形**：`key`、`layer_hold`、`layer_toggle`、`layer_oneshot`、`layer_to`、`mouse`、`usb_mode`、`terminal` のうち、ちょうど 1 つを書く。`label` はどれにも付けられる。ウィジェットのセル（下の「ウィジェット」）では、どれも書かなくてよい。
+- **オブジェクトの形**：`key`、`layer_hold`、`layer_toggle`、`layer_oneshot`、`layer_to`、`mouse`、`media`、`usb_mode`、`terminal` のうち、ちょうど 1 つを書く。`label` はどれにも付けられる。ウィジェットのセル（下の「ウィジェット」）では、どれも書かなくてよい。
 - **セルの大きさ**：タッチのセルには `span: [列数, 行数]` を書ける（下の「セルの大きさ」）。
 - **送れるキーの名前**：修飾キー（LCTRL、LSHIFT、LALT、LGUI、RCTRL、RSHIFT、RALT、RGUI）、A〜Z、0〜9、F1〜F24（F13〜F24 は PC のキーボードにないキー。ショートカット用）、ENTER、ESC、BACKSPACE、TAB、SPACE、INSERT、DELETE、HOME、END、PAGEUP、PAGEDOWN、UP、DOWN、LEFT、RIGHT、テンキー（KP0〜KP9、KPPLUS、KPMINUS、KPASTERISK、KPSLASH、KPDOT、KPENTER）、MINUS、EQUAL、LEFTBRACE、RIGHTBRACE、BACKSLASH、SEMICOLON、APOSTROPHE、GRAVE、COMMA、DOT、SLASH。
 - **配列によらない記号**：記号は US 配列での位置を送るので、PC が日本語配列だと別の文字になることがある。`+` などはテンキーの名前で送ると配列によらない。例：Ctrl++ は `LCTRL+KPPLUS`。
@@ -125,6 +126,32 @@ KEY_A: { mouse: left }                       # 押しているあいだ左ボタ
 - **離すとき**：キーと同じく、押したときの割り当てで離す。そのうえで、**レイヤーが変わったときは、押しているマウスのボタンをすべて離す**（切り替えを起こした入力そのもののボタンは残す。layer_oneshot のレイヤーで押したボタンを、押したまま使えるようにするため）。設定の再読み込みと、デーモンの終了でも離す。
 - **ボタンの重なり**：複数の入力で同じボタンを押しているときは、すべて離すまで押したまま。
 - **USB**：USB がキーボードだけの形（起動したときの形）のあいだは、何も送らない。下の `usb_mode` でマウスをオンにする。
+
+### メディアキー（media）
+
+```yaml
+"1,0": { media: play_pause, span: [2, 1] }   # 再生と一時停止
+"2,1": { media: volume_up }                  # 音量を上げる
+KEY_F12: { media: mute, label: 消音 }         # 本体のキーにも書ける
+```
+
+| 値 | 動き（HID の Consumer のページの番号） |
+| --- | --- |
+| `play_pause` | 再生/一時停止（0xCD） |
+| `stop` | 停止（0xB7） |
+| `next`、`previous` | 次の曲（0xB5）、前の曲（0xB6） |
+| `fast_forward`、`rewind` | 早送り（0xB3）、巻き戻し（0xB4） |
+| `volume_up`、`volume_down`、`mute` | 音量を上げる（0xE9）、下げる（0xEA）、ミュート（0xE2） |
+| `brightness_up`、`brightness_down` | PC の画面を明るく（0x6F）、暗く（0x70）。Brain の画面ではない |
+| `calculator`、`browser`、`mail` | 電卓（0x192）、ブラウザ（0x196）、メール（0x18A）を開く |
+
+- **USB の形**：メディアキーは、**キーボードとマウスの形（`usb_mode: mouse`）のときだけ送れる**。起動したときのキーボードだけの形（ブートキーボード）は、BIOS や UEFI の画面でも使えるように、標準の形のままにしているため。キーボードだけの形のときに押しても何も送らず、`-v` のログに `media: ... not sent` と出す。画面では、セルの下の小さな文字が「マウスオフでは無効」になり、文字が暗くなる。
+- **起動したときから送れるようにする**：`/etc/lefthand/gadget.env` に `HID_MOUSE=1` と書く（README の「メディアキー」）。
+- **押している長さ**：押しているあいだ押したままにする。音量などを押し続けたときに繰り返すかは、PC の OS による。
+- **同時に押す**：2 つまで同時に送る（3 つ目を押すと、古いものは送らない）。
+- **使える場所**：キー、タッチのセル、ソフトキー、ウィジェットのタップ（`mouse` と同じ）。
+- **セルの表示**：label を省略すると「再生/停止」「音量+」などを大きく出す。label を書けば、それを大きく、名前を下に小さく出す。
+- **離すとき**：キーと同じく、押したときの割り当てで離す。設定の再読み込み、USB の付け直し、デーモンの終了でも離す。
 
 ### USB の形の切り替え（usb_mode）
 
@@ -607,7 +634,7 @@ backlight:
 | span がはみ出す、重なる | 4x3 の格子の `"3,0"` に `span: [2, 1]` |
 | 背景画像の書き方 | id が 16 文字の 16 進でない、本体キーやソフトキーの `background` |
 | ウィジェットの書き方 | 知らない `widget`、知らない `tz`、widget なしの `format`、本体キーやソフトキーの `widget`・`span`、ウィジェットに `key: none`、`todo`、`calendar`、`trackpad` に `key` や `layer_*` や `mouse`、`rows` が 1〜20 の外、`page_reset` や `stale` の時間の誤り、トラックパッドの項目の範囲の外、トラックパッド以外のトラックパッドの項目 |
-| マウスの操作 | 知らない `mouse` の値、知らない `usb_mode` の値 |
+| マウスの操作、メディアキー | 知らない `mouse` の値、知らない `media` の値、知らない `usb_mode` の値 |
 | 新しいウィジェット | `stopwatch`、`pomodoro`、`counter`、`presence` に `key` などのタップの動き、`qr` に `id` がない、`work`・`break` の時間の誤り、`states` の数・名前・色の誤り、名前の重なり |
 | 自動減光 | `dim_after`・`off_after` の時間の誤り、`off_after` が `dim_after` より短い、`level` が 0、`device` が /sys/class/backlight の外（場所は `/backlight`） |
 | 定義していないソフトキー | soft_areas にない名前を soft_keys に書いた |

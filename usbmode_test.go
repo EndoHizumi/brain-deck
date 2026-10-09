@@ -46,7 +46,7 @@ func TestUSBModeSwitch(t *testing.T) {
 	usbSwitchDelay = 0
 	defer func() { usbSwitchDelay = old }()
 	h := &hidRec{}
-	s := &State{hid: h, active: map[string]Combo{}, mouse: NewMouse(h, 0)}
+	s := &State{hid: h, active: map[string]Combo{}, mouse: NewMouse(h, 0), media: NewMedia(h, 0)}
 	g := &fakeGadget{}
 	u := NewUSBMode(s, NewHIDWriter(os.DevNull), "/dev/null", "gadget-setup")
 	u.run, u.detect = g.run, g.detect
@@ -118,7 +118,7 @@ layers:
 		t.Fatal(err)
 	}
 	h := &hidRec{}
-	s := &State{hid: h, active: map[string]Combo{}, kbdID: hidKeyboardID, mouse: NewMouse(h, hidMouseID)}
+	s := &State{hid: h, active: map[string]Combo{}, kbdID: hidKeyboardID, mouse: NewMouse(h, hidMouseID), media: NewMedia(h, hidMediaID)}
 	e := NewEngine(km, s)
 	g := &fakeGadget{mouse: true}
 	u := NewUSBMode(s, NewHIDWriter(os.DevNull), "/dev/null", "gadget-setup")
@@ -158,7 +158,7 @@ func TestUSBModeTerminalName(t *testing.T) {
 	usbSwitchDelay = 0
 	defer func() { usbSwitchDelay = old }()
 	h := &hidRec{}
-	s := &State{hid: h, active: map[string]Combo{}, mouse: NewMouse(h, 0)}
+	s := &State{hid: h, active: map[string]Combo{}, mouse: NewMouse(h, 0), media: NewMedia(h, 0)}
 	g := &fakeGadget{}
 	u := NewUSBMode(s, NewHIDWriter(os.DevNull), "/dev/null", "gadget-setup")
 	u.run, u.detect = g.run, g.detect

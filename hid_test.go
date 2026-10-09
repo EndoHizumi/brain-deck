@@ -88,6 +88,9 @@ func TestComboDescriptorShape(t *testing.T) {
 	if r := sizes[hidMouseID]; r == nil || r.in != 40 {
 		t.Errorf("mouse report: %+v, want 40 bits (buttons, X, Y, wheel, pan)", r)
 	}
+	if r := sizes[hidMediaID]; r == nil || r.in != 16*mediaSlots {
+		t.Errorf("media report: %+v, want %d bits", r, 16*mediaSlots)
+	}
 }
 
 // TestKeyMaxCoversF24 は、キーボードのディスクリプタの上限が、送れるキーの番号をすべて含むか確かめる。
@@ -115,18 +118,19 @@ func TestDetectHID(t *testing.T) {
 	// /dev/null（1:3）を HID のデバイスに見立てる
 	os.WriteFile(filepath.Join(fn, "dev"), []byte("1:3\n"), 0o644)
 	for _, c := range []struct {
-		desc      []byte
-		kbd, mous byte
+		desc             []byte
+		kbd, mous, media byte
 	}{
-		{hidDescCombo, hidKeyboardID, hidMouseID},
-		{hidDescKeyboard, 0, 0},
-		{legacyDesc(hidDescCombo), hidKeyboardID, hidMouseID}, // 前の版（キーの番号の上限 0x65）
-		{legacyDesc(hidDescKeyboard), 0, 0},
-		{[]byte{1, 2, 3}, 0, 0},
+		{hidDescCombo, hidKeyboardID, hidMouseID, hidMediaID},
+		{hidDescKeyboard, 0, 0, 0},
+		// 前の版（キーの番号の上限 0x65。キーボードとマウスの形にメディアキーがない）
+		{legacyDesc(hidDescComboNoMedia), hidKeyboardID, hidMouseID, 0},
+		{legacyDesc(hidDescKeyboard), 0, 0, 0},
+		{[]byte{1, 2, 3}, 0, 0, 0},
 	} {
 		os.WriteFile(filepath.Join(fn, "report_desc"), c.desc, 0o644)
 		l := detectHID("/dev/null")
-		if l.KeyboardID != c.kbd || l.MouseID != c.mous {
+		if l.KeyboardID != c.kbd || l.MouseID != c.mous || l.MediaID != c.media {
 			t.Errorf("% x: got %+v", c.desc[:3], l)
 		}
 	}
@@ -270,7 +274,8 @@ func TestMouseReleaseExceptAndScrollRepeat(t *testing.T) {
 	}
 }
 
-// TestKeyNamesFixture は、gui/test/fixtures/keynames.json（送れるキーの名前）が Go の hidUsage と modBits と同じことを確かめる。
+// TestKeyNamesFixture は、gui/test/fixtures/keynames.json（送れるキーの名前とメディアキー）が Go の hidUsage、modBits、mediaActions と
+// 同じことを確かめる。
 // GUI のテストは、keys.ts の一覧をこのファイルと比べる。名前を足したら LEFTHAND_UPDATE_KEYNAMES=1 go test -run KeyNames で書き直す。
 func TestKeyNamesFixture(t *testing.T) {
 	const path = "gui/test/fixtures/keynames.json"
@@ -283,7 +288,11 @@ func TestKeyNamesFixture(t *testing.T) {
 	}
 	sort.Strings(keys)
 	sort.Strings(mods)
-	want, _ := json.MarshalIndent(map[string][]string{"keys": keys, "modifiers": mods}, "", "  ")
+	media := map[string]string{}
+	for k, a := range mediaActions {
+		media[k] = a.Pretty
+	}
+	want, _ := json.MarshalIndent(map[string]any{"keys": keys, "modifiers": mods, "media": media, "media_order": mediaActionNames, "media_off": mediaOffLabel}, "", "  ")
 	want = append(want, '\n')
 	if os.Getenv("LEFTHAND_UPDATE_KEYNAMES") == "1" {
 		if err := os.WriteFile(path, want, 0o644); err != nil {

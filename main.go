@@ -205,6 +205,7 @@ type State struct {
 	dirty  bool             // 最後の送信が失敗し、現在の状態がPCに届いていない
 	kbdID  byte             // キーボードのレポート ID。0 なら付けない（キーボードだけの形。hid.go）
 	mouse  *Mouse           // nil ならマウスはない
+	media  *Media           // nil ならメディアキーはない
 }
 
 func (s *State) press(id string, c Combo) {
@@ -231,6 +232,7 @@ func (s *State) releaseAll() {
 	s.send()
 	s.mu.Unlock()
 	s.mouse.ReleaseAll()
+	s.media.ReleaseAll()
 }
 
 // retryLoop は送信に失敗した状態を定期的に送り直す。
@@ -243,6 +245,7 @@ func (s *State) retryLoop() {
 		}
 		s.mu.Unlock()
 		s.mouse.retry()
+		s.media.retry()
 	}
 }
 
@@ -687,13 +690,16 @@ func cellView(km *Keymap, a *Action) CellView {
 	if a.Kind == actMouse {
 		keys = a.Mouse.Pretty
 	}
+	if a.Kind == actMedia {
+		keys = a.Media.Pretty
+	}
 	if a.Kind == actUSB {
 		keys = usbLabels[a.Spec.UsbMode]
 	}
 	if a.Kind == actTerminal {
 		keys = termLabels[a.Spec.Terminal]
 	}
-	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background}
+	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background, Media: a.Kind == actMedia}
 	if v.Label == "" || v.Label == keys {
 		v.Label, v.Sub = keys, ""
 	}
@@ -1019,10 +1025,11 @@ func main() {
 	hid := NewHIDWriter(cfg.HIDDevice)
 	hl := detectHID(cfg.HIDDevice)
 	log.Printf("hid: %s", hl.Source)
-	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID)}
+	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID), media: NewMedia(hid, hl.MediaID)}
 	if hl.MouseID == 0 && km.usesMouse() {
 		log.Printf("mouse: the config uses the mouse (mouse: or widget: trackpad), but it is off (boot keyboard); turn it on with usb_mode, brain-deck usb-mode mouse, or HID_MOUSE=1 in /etc/lefthand/gadget.env")
 	}
+	logMediaOff(km, hl)
 	e := NewEngine(km, s)
 	pad := NewPad(s.mouse, true)
 	e.SetPad(pad)
@@ -1114,7 +1121,7 @@ func main() {
 				todos.SetOnChange(d.Poke)
 				cals.SetOnChange(d.Poke)
 				images.SetOnChange(d.Invalidate)
-				usb.OnChange(d.Poke) // トラックパッドの「マウスはオフ」を描き直す
+				usb.OnChange(d.Invalidate) // トラックパッドの「マウスはオフ」と、メディアキーのセルを描き直す
 				images.Preload(preloadOrder(cfg))
 				widgetRT.SetScreen(first.W, first.H, d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る

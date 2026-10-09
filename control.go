@@ -488,7 +488,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 	case "get_status":
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
-			"hid":      map[string]bool{"mouse": c.engine.out.mouse.Available(), "switching": c.usb.Switching()},
+			"hid":      map[string]bool{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching()},
 			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info()})
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)

@@ -1,8 +1,8 @@
 // 設定の操作。透過の解決は layer.go の view / lookupKey と同じ規則にする。
 
-import type { ActionSpec, Config, GridConfig, LayerConfig, MouseAction, TermMode, TouchConfig, UsbMode, WidgetKind } from './types'
+import type { ActionSpec, Config, GridConfig, LayerConfig, MediaAction, MouseAction, TermMode, TouchConfig, UsbMode, WidgetKind } from './types'
 
-export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'usb_mode' | 'terminal' | 'widget'
+export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'media' | 'usb_mode' | 'terminal' | 'widget'
 export const LAYER_KINDS = ['layer_hold', 'layer_toggle', 'layer_oneshot', 'layer_to'] as const
 export type LayerKind = (typeof LAYER_KINDS)[number]
 
@@ -14,6 +14,7 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   layer_oneshot: '次の 1 キーだけ（layer_oneshot）',
   layer_to: 'そのレイヤーへ移る（layer_to）',
   mouse: 'マウス（ボタン、スクロール）',
+  media: 'メディアキー（再生、音量など）',
   usb_mode: 'USB の形の切り替え（マウスのオンとオフ）',
   terminal: '端末モード（Brain で PC にログインする）',
   widget: 'ウィジェット（時計、テキスト、Todo、カレンダー、トラックパッドなど）',
@@ -30,6 +31,27 @@ export const MOUSE_LABELS: Record<MouseAction, string> = {
   scroll_right: 'スクロール→',
 }
 
+// メディアキーと、画面に出す名前（media.go の mediaActions。並びは mediaActionNames）
+export const MEDIA_LABELS: Record<MediaAction, string> = {
+  play_pause: '再生/停止',
+  stop: '停止',
+  next: '次の曲',
+  previous: '前の曲',
+  fast_forward: '早送り',
+  rewind: '巻き戻し',
+  volume_up: '音量+',
+  volume_down: '音量-',
+  mute: 'ミュート',
+  brightness_up: '明るさ+',
+  brightness_down: '明るさ-',
+  calculator: '電卓',
+  browser: 'ブラウザ',
+  mail: 'メール',
+}
+
+// メディアキーを送れない形（ブートキーボード）のときに、セルの下に出す文字（media.go の mediaOffLabel）
+export const MEDIA_OFF_LABEL = 'マウスオフでは無効'
+
 // USB の形の切り替えと、画面に出す名前（usbmode.go の usbLabels）
 export const USB_LABELS: Record<UsbMode, string> = { keyboard: 'マウスオフ', mouse: 'マウスオン', toggle: 'マウス切替' }
 
@@ -37,7 +59,7 @@ export const USB_LABELS: Record<UsbMode, string> = { keyboard: 'マウスオフ'
 export const TERM_LABELS: Record<TermMode, string> = { on: '端末', off: '端末を出る', toggle: '端末' }
 
 // ACTION_FIELDS は、割り当ての種類を決める項目（ちょうど 1 つを書く）。ウィジェットのセルでは省略できる
-export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'usb_mode', 'terminal'] as const
+export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode', 'terminal'] as const
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
 export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド',
@@ -96,6 +118,7 @@ export function actionKind(a: ActionSpec): ActionKind {
   if (a.key !== undefined) return a.key.toLowerCase() === 'none' ? 'none' : 'key'
   for (const k of LAYER_KINDS) if (a[k] !== undefined) return k
   if (a.mouse !== undefined) return 'mouse'
+  if (a.media !== undefined) return 'media'
   if (a.usb_mode !== undefined) return 'usb_mode'
   if (a.terminal !== undefined) return 'terminal'
   if (a.widget !== undefined) return 'widget'
@@ -133,6 +156,7 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   else if (k === 'none') s = 'none'
   else if (k === 'widget') s = ''
   else if (k === 'mouse') s = `mouse: ${a.mouse}`
+  else if (k === 'media') s = `media: ${a.media}`
   else if (k === 'usb_mode') s = `usb_mode: ${a.usb_mode}`
   else if (k === 'terminal') s = `terminal: ${a.terminal}`
   else s = `${k}: ${actionTarget(a)}`

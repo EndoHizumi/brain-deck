@@ -99,7 +99,7 @@ func newTermRig(t *testing.T) *termRig {
 		t.Fatal(err)
 	}
 	r := &termRig{t: t, hid: &hidRec{}}
-	s := &State{hid: r.hid, active: map[string]Combo{}, mouse: NewMouse(r.hid, 0)}
+	s := &State{hid: r.hid, active: map[string]Combo{}, mouse: NewMouse(r.hid, 0), media: NewMedia(r.hid, 0)}
 	r.e = NewEngine(km, s)
 	u := NewUSBMode(s, NewHIDWriter(os.DevNull), "/dev/null", "gadget-setup")
 	u.run = func(ctx context.Context, script string, mouse, terminal bool) error {

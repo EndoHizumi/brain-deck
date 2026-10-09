@@ -26,6 +26,7 @@ type CellView struct {
 	Covered      bool       // 左上以外の、span のセルに覆われた位置。描かない
 	Widget       *WidgetDef // ウィジェットのセル
 	Background   string     // セルの背景画像の id。空ならなし
+	Media        bool       // メディアキーのセル。USB にマウスがない（ブートキーボードの形）ときは、無効と描く
 }
 
 // ImageSource は背景画像を返す（*ImageStore）。ない画像は nil。
@@ -259,6 +260,13 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 		drawWidget(cv, inner, &v, l.Env, textC, subC)
 		cv.halo = nil
 		return cell.Union(redrawBadge(cv, l, cell))
+	}
+	if v.Media && l.Env.MouseOff {
+		// メディアキーを送れない形（ブートキーボード）。押しても何も送らないことを、下の小さな文字で知らせる
+		v.Sub = mediaOffLabel
+		if !(pressed && l.pressFill()) {
+			textC = subC
+		}
 	}
 	subH := 0
 	if v.Sub != "" {

@@ -8,6 +8,7 @@ export interface ActionSpec {
   layer_oneshot?: string
   layer_to?: string
   mouse?: MouseAction // マウスの操作。押しているあいだボタンを押す
+  media?: MediaAction // メディアキー。キーボードとマウスの形（usb_mode: mouse）のときだけ送れる
   usb_mode?: UsbMode // USB の形の切り替え（USB を付け直すので 2〜3 秒切れる）
   terminal?: TermMode // 端末モード（Brain の画面とキーボードで PC にログインする）の切り替え
   label?: string
@@ -75,6 +76,10 @@ export interface TermInfo {
 }
 
 export type MouseAction = 'left' | 'right' | 'middle' | 'scroll_up' | 'scroll_down' | 'scroll_left' | 'scroll_right'
+
+// メディアキー（media.go の mediaActions）
+export type MediaAction = 'play_pause' | 'stop' | 'next' | 'previous' | 'fast_forward' | 'rewind' | 'volume_up' | 'volume_down' | 'mute'
+  | 'brightness_up' | 'brightness_down' | 'calculator' | 'browser' | 'mail'
 
 export interface SoftArea {
   x: [number, number]

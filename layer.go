@@ -352,6 +352,8 @@ func (e *Engine) Release(id string) {
 		a.Widget.touchUp(e.widgets, false)
 	case actMouse:
 		e.out.mouse.Release(id)
+	case actMedia:
+		e.out.media.Release(id)
 	}
 }
 
@@ -396,6 +398,8 @@ func (e *Engine) press(id string, a *Action) {
 			} else {
 				e.out.mouse.StartScroll(id, a.Mouse.V, a.Mouse.H)
 			}
+		case actMedia:
+			e.out.media.Press(id, a.Media)
 		case actUSB:
 			if mouse, changed, err := e.usb.Request(a.Spec.UsbMode); err != nil {
 				log.Printf("usb: %v", err)

@@ -145,6 +145,7 @@ func (u *USBMode) applyHook(mouse bool, unbound func()) error {
 	// 付け直しのあいだは、キーボードとマウスのレポートを書かせない（入力は、終わってから届く）
 	u.s.mu.Lock()
 	u.s.mouse.mu.Lock()
+	u.s.media.mu.Lock()
 	u.hid.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	u.mu.Lock()
@@ -164,6 +165,8 @@ func (u *USBMode) applyHook(mouse bool, unbound func()) error {
 	u.s.mouse.on.Store(l.MouseID != 0)
 	u.s.mouse.held = map[string]byte{}
 	u.s.mouse.dirty = false
+	u.s.media.reset(l.MediaID)
+	u.s.media.mu.Unlock()
 	u.s.active = map[string]Combo{}
 	u.s.dirty = true // 付け直したあとに、何も押していない状態を送る
 	u.s.mouse.mu.Unlock()

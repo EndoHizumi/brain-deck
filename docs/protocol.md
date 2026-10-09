@@ -12,7 +12,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 | acm.usb0 | /dev/ttyGS0 | /dev/ttyACM0 | シリアルコンソール（getty）。設定 GUI のコンソールのタブ |
 | acm.usb1 | /dev/ttyGS1 | /dev/ttyACM1 | 設定 GUI。デーモンが開いて待つ |
 | ncm.usb0 | usb0 | enx8a158b443a01 | SSH（192.168.7.2） |
-| hid.usb0 | /dev/hidg0 | キーボード | 左手デバイスの入力 |
+| hid.usb0 | /dev/hidg0 | キーボード（usb_mode: mouse ではマウスとメディアキーも） | 左手デバイスの入力 |
 
 - **ACM を分けた理由**：コンソールと同じポートを使うと、getty とデーモンが入力を取り合う。GUI 用に別のポートを足せば、どちらも独立して使える。ネットワーク（NCM）経由の HTTP や WebSocket も考えたが、PC 側で固定 IP の設定が要り、https のページ（GitHub Pages）から http の Brain へはつなげない（混在コンテンツ）。WebSerial なら、ケーブルをつなぐだけで、どちらのページからも使える。
 - **ポートの見分け方**：コンソール用のポートでは getty がログイン画面を出しているので、`hello` を書くとユーザー名として入力されてしまう。そのため、コンソール用には何も書かずに設定用を見分ける。
@@ -150,7 +150,7 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
    "stack":[{"layer":"edit","kind":"layer_hold"}],"cols":4,"rows":3},
    "uptime_sec":120,"subscribed":true,"suppressing":true,
    "time":{"now":"2026-10-06T19:04:27.13+09:00","timezone":"Asia/Tokyo","utc_offset_sec":32400,"synced":true,"ntp_synced":false,
-   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true},
+   "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true,"media":true,"switching":false},
    "terminal":{"active":true,"state":"on","transport":"serial","status":"PC のログイン画面","cols":100,"rows":31},
    "battery":{"percent":100,"voltage_mv":4172,"plugged":true,"charging":false,"source":"lradc","estimated":true},
    "backlight":{"enabled":true,"state":"dim","level":1,"max":7,"device":"/sys/class/backlight/backlight@0"}}}
@@ -158,7 +158,7 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 
 `time` は Brain の時刻の状態（下の `set_time` の結果と同じ形）。
 
-`hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.switching` は、`set_usb_mode` で切り替えている途中か。この項目がなければ、lefthand がマウスに対応する前の版。
+`hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.media` は、メディアキー（`media:`）が PC に届くか。キーボードとマウスの形で true（ガジェットを作り直す前の古い形では、マウスがあっても false）。この項目がなければ、メディアキーに対応する前の版。`hid.switching` は、`set_usb_mode` で切り替えている途中か。`hid` がなければ、lefthand がマウスに対応する前の版。
 
 `battery` は電池の状態（`battery.go` の `BatteryInfo`）。読めなければ `null`。この項目がなければ、電池を読まない版。
 

@@ -39,6 +39,7 @@ var hidDescKeyboard = []byte{
 const (
 	hidKeyboardID = 1 // キーボードのレポート ID（キーボードとマウスの形）
 	hidMouseID    = 2 // マウスのレポート ID
+	hidMediaID    = 3 // メディアキー（Consumer Control）のレポート ID（media.go）
 )
 
 // hidDescCombo は、キーボード（レポート ID 1、9 バイト）とマウス（レポート ID 2、6 バイト）の形。
@@ -58,7 +59,14 @@ var hidDescCombo = []byte{
 	0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06, // X、Y、ホイール
 	0x05, 0x0c, 0x0a, 0x38, 0x02, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x01, 0x81, 0x06, // 横のホイール
 	0xc0, 0xc0,
+	// メディアキー（Consumer Control）。Consumer の番号（0〜0x3ff）を 16 ビットで 2 つ（配列）
+	0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x85, hidMediaID,
+	0x15, 0x00, 0x26, 0xff, 0x03, 0x19, 0x00, 0x2a, 0xff, 0x03, 0x75, 0x10, 0x95, mediaSlots, 0x81, 0x00,
+	0xc0,
 }
+
+// hidDescComboNoMedia は、前の版のキーボードとマウスの形（メディアキーがない）。
+var hidDescComboNoMedia = hidDescCombo[:bytes.Index(hidDescCombo, []byte{0xc0, 0xc0, 0x05, 0x0c, 0x09, 0x01})+2]
 
 // legacyDesc は、前の版の gadget-setup.sh が書いたディスクリプタ（キーの番号の上限が 0x65）。
 // デーモンだけを新しくして、ガジェットを作り直していない（Brain を再起動していない）ときも、レポートの形を間違えない。
@@ -71,6 +79,7 @@ func legacyDesc(d []byte) []byte {
 type HIDLayout struct {
 	KeyboardID byte   // 0 ならキーボードのレポートに ID を付けない（キーボードだけの形）
 	MouseID    byte   // 0 ならマウスはない
+	MediaID    byte   // 0 ならメディアキーはない
 	Source     string // どこで決めたか（ログ用）
 }
 
@@ -110,11 +119,11 @@ func detectHID(dev string) HIDLayout {
 func layoutOf(desc []byte, where string) HIDLayout {
 	switch {
 	case bytes.Equal(desc, hidDescCombo):
-		return HIDLayout{KeyboardID: hidKeyboardID, MouseID: hidMouseID, Source: where + ": keyboard + mouse"}
+		return HIDLayout{KeyboardID: hidKeyboardID, MouseID: hidMouseID, MediaID: hidMediaID, Source: where + ": keyboard + mouse + media keys"}
 	case bytes.Equal(desc, hidDescKeyboard):
-		return HIDLayout{Source: where + ": keyboard only (boot keyboard; usb_mode switches the mouse on)"}
-	case bytes.Equal(desc, legacyDesc(hidDescCombo)):
-		return HIDLayout{KeyboardID: hidKeyboardID, MouseID: hidMouseID, Source: where + ": keyboard + mouse (old descriptor: F13-F24 do not reach the PC until the gadget is set up again)"}
+		return HIDLayout{Source: where + ": keyboard only (boot keyboard; usb_mode switches the mouse and the media keys on)"}
+	case bytes.Equal(desc, legacyDesc(hidDescComboNoMedia)):
+		return HIDLayout{KeyboardID: hidKeyboardID, MouseID: hidMouseID, Source: where + ": keyboard + mouse (old descriptor: F13-F24 and the media keys do not work until the gadget is set up again)"}
 	case bytes.Equal(desc, legacyDesc(hidDescKeyboard)):
 		return HIDLayout{Source: where + ": keyboard only (old descriptor: F13-F24 do not reach the PC until the gadget is set up again)"}
 	}

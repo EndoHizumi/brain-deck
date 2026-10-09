@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ALL_KEYS, ComboCapture, MODIFIERS, formatCombo, keyFromCode, parseCombo, prettyCombo } from '../src/keys'
 import { repoFile } from './helpers'
+import { MEDIA_LABELS, MEDIA_OFF_LABEL } from '../src/model'
 
 function capture(events: [string, string][]): string[] {
   const out: string[] = []
@@ -53,5 +54,11 @@ describe('送れるキーの名前', () => {
     const want = JSON.parse(repoFile('gui/test/fixtures/keynames.json').toString('utf8')) as { keys: string[]; modifiers: string[] }
     expect([...ALL_KEYS].sort()).toEqual(want.keys)
     expect([...MODIFIERS].sort()).toEqual(want.modifiers)
+  })
+  it('メディアキーの名前と、画面に出す名前も Go と同じ', () => {
+    const want = JSON.parse(repoFile('gui/test/fixtures/keynames.json').toString('utf8')) as { media: Record<string, string>; media_order: string[]; media_off: string }
+    expect(MEDIA_LABELS).toEqual(want.media)
+    expect(Object.keys(MEDIA_LABELS)).toEqual(want.media_order)
+    expect(MEDIA_OFF_LABEL).toBe(want.media_off)
   })
 })

@@ -8,7 +8,7 @@ import {
 } from './keys'
 import defaultKeymap from './keymap-pwsh2.json'
 import {
-  CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
+  CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MEDIA_LABELS, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
   PAD_NUM_FIELDS, TERM_LABELS, USB_LABELS, WIDGET_FIELDS, ACTION_FIELDS, WIDGET_LABELS, ownsTouch, hasStateId,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
   isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
@@ -33,7 +33,7 @@ import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './por
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetTextResult, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MouseAction, UsbMode, TermInfo, TermMode,
+  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -957,6 +957,9 @@ export class App {
       case 'mouse':
         a = { mouse: cur?.mouse ?? 'left' }
         break
+      case 'media':
+        a = { media: cur?.media ?? 'play_pause' }
+        break
       case 'usb_mode':
         a = { usb_mode: cur?.usb_mode ?? 'toggle' }
         break
@@ -986,6 +989,7 @@ export class App {
     for (const f of [...WIDGET_FIELDS, 'label', 'span', 'background'] as const) if (cur[f] !== undefined) (a as any)[f] = cur[f]
     if (kind === 'key') a.key = cur.key && cur.key.toLowerCase() !== 'none' ? cur.key : ''
     else if (kind === 'mouse') a.mouse = cur.mouse ?? 'left'
+    else if (kind === 'media') a.media = cur.media ?? 'play_pause'
     else if (kind === 'usb_mode') a.usb_mode = cur.usb_mode ?? 'toggle'
     else if (kind === 'terminal') a.terminal = cur.terminal ?? 'toggle'
     else if (LAYER_KINDS.includes(kind as LayerKind)) {
@@ -2182,6 +2186,7 @@ export class App {
     const act = tap ?? kind
     if (own && act === 'key') body.push(this.viewComboEditor(own))
     if (own && act === 'mouse') body.push(...this.viewMouseEditor(own))
+    if (own && act === 'media') body.push(...this.viewMediaEditor(own))
     if (own && act === 'usb_mode') body.push(...this.viewUsbModeEditor(own))
     if (own && act === 'terminal') body.push(...this.viewTermEditor(own))
     if (own && LAYER_KINDS.includes(act as LayerKind)) {
@@ -2424,11 +2429,12 @@ export class App {
   }
 
   // mouseWarning は、Brain の USB にマウスがないとき（ブートキーボードの形）の注意と、切り替えるボタン。
-  private mouseWarning(): HTMLElement | null {
+  // what は、届かないもの（マウス、メディアキー）。
+  private mouseWarning(what = 'マウス'): HTMLElement | null {
     if (!this.connected || this.brainMouse !== false) return null
     const can = !!this.hello?.commands?.includes('set_usb_mode')
     return h('div', { class: 'warn' },
-      'Brain の USB は今、キーボードだけ（ブートキーボード）の形で、マウスは PC に届きません。',
+      `Brain の USB は今、キーボードだけ（ブートキーボード）の形で、${what}は PC に届きません。`,
       can ? h('button', { class: 'small', id: 'usb-mouse-on', onclick: () => void this.setUsbMode('mouse') }, 'マウスをオンにする') : null,
       can ? ' USB を付け直すので、2〜3 秒、キー入力と SSH が切れ、この GUI の接続も切れます（つなぎ直してください）。'
         : ' Brain の lefthand を新しくしてください（README の「マウスとトラックパッド」）。')
@@ -2508,6 +2514,19 @@ export class App {
       h('p', { class: 'hint' }, 'ボタンは押しているあいだ押したままになります（ドラッグにも使えます）。スクロールは 1 段送り、押し続けると繰り返します。' +
         'レイヤーが変わると、押しているボタンは離します。'),
       ...[this.mouseWarning()].filter((x): x is HTMLElement => !!x),
+    ]
+  }
+
+  // viewMediaEditor は、メディアキーの欄。
+  private viewMediaEditor(own: ActionSpec): HTMLElement[] {
+    return [
+      h('label', { class: 'row' }, 'メディアキー ', h('select', { 'data-focus': 'media', id: 'media',
+        onchange: (e: Event) => this.patchAction({ media: (e.target as HTMLSelectElement).value as MediaAction }) },
+        (Object.keys(MEDIA_LABELS) as MediaAction[]).map((m) => h('option', { value: m, selected: own.media === m }, `${MEDIA_LABELS[m]}（${m}）`)))),
+      h('p', { class: 'hint' }, 'メディアキーは、Brain の USB がキーボードとマウスの形（usb_mode: mouse）のときだけ送れます。' +
+        '起動したときのキーボードだけの形（ブートキーボード。BIOS でも使える形）では、押しても何も送らず、セルの下に「マウスオフでは無効」と出ます。' +
+        '押しているあいだ押したままになります（音量などの繰り返しは PC 側の動きによります）。'),
+      ...[this.mouseWarning('メディアキー')].filter((x): x is HTMLElement => !!x),
     ]
   }
 
@@ -2668,6 +2687,7 @@ export function shortAction(cfg: Config, a: ActionSpec | null): string {
   if (k === 'none') return '✕'
   if (k === 'key') return a.label ? a.label.replace(/\n/g, ' ') : prettyCombo(a.key ?? '')
   if (k === 'mouse') return a.label ? a.label.replace(/\n/g, ' ') : (MOUSE_LABELS[a.mouse!] ?? a.mouse ?? '')
+  if (k === 'media') return a.label ? a.label.replace(/\n/g, ' ') : (MEDIA_LABELS[a.media!] ?? a.media ?? '')
   if (k === 'usb_mode') return a.label ? a.label.replace(/\n/g, ' ') : (USB_LABELS[a.usb_mode!] ?? a.usb_mode ?? '')
   if (k === 'terminal') return a.label ? a.label.replace(/\n/g, ' ') : (TERM_LABELS[a.terminal!] ?? a.terminal ?? '')
   const t = actionTarget(a)

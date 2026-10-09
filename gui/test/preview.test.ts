@@ -212,6 +212,28 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // メディアキーと F13〜F24 のセル。config/media-example.yaml の「メディア」と「F13〜F24」のレイヤー
+  // go run . -render-png gui/test/fixtures/media.png -render-layer media config/media-example.yaml
+  // （media-off は -render-mouse-off、media-off-pressed-fill は -render-mouse-off -render-pressed "1,0 0,1" -render-press-style fill）
+  const mcfg = parseConfigText(repoFile('config/media-example.yaml').toString('utf8'))
+  const mcases: { file: string; layer: string; pressed?: string[]; pressStyle?: PressStyle; mouseOff?: boolean }[] = [
+    { file: 'media.png', layer: 'media' },
+    { file: 'media-off.png', layer: 'media', mouseOff: true },
+    { file: 'media-off-pressed-fill.png', layer: 'media', mouseOff: true, pressed: ['1,0', '0,1'], pressStyle: 'fill' },
+    { file: 'fkeys.png', layer: 'fkeys' },
+  ]
+  for (const c of mcases) {
+    it(`メディアキーと F13〜F24 も lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const layer = mcfg.layers.findIndex((l) => l.name === c.layer)
+      const { pixels } = renderPreview(font, { cfg: mcfg, stack: [0, layer], mode: 'latched', pressed: new Set(c.pressed), pressStyle: c.pressStyle, mouseOff: c.mouseOff })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   it('トラックパッドの既定値は Go と同じ（fixtures/pad-defaults.json）', () => {
     expect(JSON.parse(repoFile('gui/test/fixtures/pad-defaults.json').toString('utf8'))).toEqual({ ...PAD_DEFAULTS })
   })

@@ -88,6 +88,8 @@ type ActionSpec struct {
 	LayerTo      string `yaml:"layer_to,omitempty" json:"layer_to,omitempty"`
 	// Mouse はマウスの操作（left、right、middle、scroll_up など。mouse.go）。押しているあいだボタンを押す
 	Mouse string `yaml:"mouse,omitempty" json:"mouse,omitempty"`
+	// Media はメディアキー（play_pause、volume_up など。media.go）。キーボードとマウスの形（usb_mode: mouse）のときだけ送れる
+	Media string `yaml:"media,omitempty" json:"media,omitempty"`
 	// UsbMode は USB の形の切り替え（keyboard、mouse、toggle。usbmode.go）。USB を付け直すので、2〜3 秒切れる
 	UsbMode string `yaml:"usb_mode,omitempty" json:"usb_mode,omitempty"`
 	// Terminal は端末モードの切り替え（on、off、toggle。termmode.go）
@@ -146,7 +148,7 @@ func (s Span) MarshalYAML() (any, error) {
 var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
-	"page_reset": true, "stale": true, "calendars": true, "background": true, "mouse": true, "usb_mode": true,
+	"page_reset": true, "stale": true, "calendars": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
 	"terminal": true, "work": true, "break": true, "states": true,
 	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
@@ -163,7 +165,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, work, break, states, background, and the trackpad fields)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, work, break, states, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -172,7 +174,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	if c := a.count(); c > 1 || (c == 0 && a.Widget == "") {
-		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, usb_mode, terminal (a widget cell may omit them)", n.Line)
+		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal (a widget cell may omit them)", n.Line)
 	}
 	return nil
 }
@@ -205,7 +207,7 @@ func (a SoftArea) MarshalYAML() (any, error) {
 
 func (a ActionSpec) count() int {
 	n := 0
-	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.UsbMode, a.Terminal} {
+	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.Media, a.UsbMode, a.Terminal} {
 		if s != "" {
 			n++
 		}
@@ -363,9 +365,10 @@ const (
 	actMouse                   // マウスのボタンかスクロール
 	actUSB                     // USB の形の切り替え
 	actTerminal                // 端末モードの切り替え
+	actMedia                   // メディアキー
 )
 
-var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal"}
+var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal", "media"}
 
 func (k ActKind) String() string { return actNames[k] }
 
@@ -376,6 +379,7 @@ type Action struct {
 	Kind         ActKind
 	Combo        Combo       // actKey のとき
 	Mouse        mouseAction // actMouse のとき
+	Media        mediaAction // actMedia のとき
 	Layer        int         // layer_* の行き先
 	Spec         ActionSpec
 	SpanW, SpanH int        // セルの大きさ（タッチのセル）。1 以上
@@ -535,6 +539,13 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 				fail(path, "%s: %v", where, err)
 			}
 			a.Mouse = m
+		case s.Media != "":
+			a.Kind = actMedia
+			m, err := parseMedia(s.Media)
+			if err != nil {
+				fail(path, "%s: %v", where, err)
+			}
+			a.Media = m
 		case s.UsbMode != "":
 			a.Kind = actUSB
 			switch s.UsbMode {
@@ -811,6 +822,18 @@ func (a ActionSpec) hasPadFields() bool {
 	return a.Speed != nil || a.Accel != nil || a.ScrollWidth != nil || a.ScrollDirection != "" || a.ScrollStep != nil ||
 		a.SettleMS != nil || a.Smooth != nil || a.Deadzone != nil || a.MinPressure != nil || a.TapMS != nil ||
 		a.TapMove != nil || a.DragMS != nil || a.LongPress != ""
+}
+
+// usesMedia は、設定のどこかでメディアキーを使うか。
+func (km *Keymap) usesMedia() bool {
+	for _, l := range km.Layers {
+		for _, a := range km.allActions(l) {
+			if a.Kind == actMedia {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // usesMouse は、設定のどこかでマウスを使うか（mouse: か widget: trackpad）。

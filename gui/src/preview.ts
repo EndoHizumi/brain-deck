@@ -3,7 +3,7 @@
 import { FONT_H, type BitmapFont } from './font'
 import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
-import { LAYER_VERB, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
+import { LAYER_VERB, MEDIA_LABELS, MEDIA_OFF_LABEL, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
@@ -77,6 +77,7 @@ export interface CellView {
   padScroll?: number // トラックパッドのスクロールの帯の幅（0 なら帯なし）
   background?: string // セルの背景画像の id
   gadget?: Gadget // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ
+  media?: boolean // メディアキーのセル。USB にマウスがない（ブートキーボードの形）ときは、無効と描く
 }
 
 // Gadget は、新しいウィジェットの描き方に要る設定（gadgetwidget.go）。
@@ -122,7 +123,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     }
     return v
   }
-  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'usb_mode' && k !== 'terminal') {
+  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'media' && k !== 'usb_mode' && k !== 'terminal') {
     const t = actionTarget(a)
     const dest = cfg.layers.find((l) => l.name === t)
     const destTitle = dest ? layerTitle(dest) : (t ?? '')
@@ -131,10 +132,11 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     else sub += ':' + destTitle
     return { mapped: true, layer: true, label, sub }
   }
-  const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '')
-    : k === 'terminal' ? (TERM_LABELS[a.terminal!] ?? '') : prettyCombo(a.key ?? '')
-  if (label === '' || label === keys) return { mapped: true, layer: false, label: keys, sub: '' }
-  return { mapped: true, layer: false, label, sub: keys }
+  const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : k === 'media' ? (MEDIA_LABELS[a.media!] ?? '')
+    : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '') : k === 'terminal' ? (TERM_LABELS[a.terminal!] ?? '') : prettyCombo(a.key ?? '')
+  const v: CellView = label === '' || label === keys ? { mapped: true, layer: false, label: keys, sub: '' } : { mapped: true, layer: false, label, sub: keys }
+  if (k === 'media') v.media = true
+  return v
 }
 
 // Placed は、画面に置いた画像（display.go の placed）。
@@ -370,6 +372,11 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
     // display.go の drawRing と同じ。帯はラベルの余白（textMargin）より細い
     px.frame(box, pressEdgeW, colPressEdge)
     px.frame(inset(box, pressEdgeW), pressGlowW, colPressed)
+  }
+  if (v.media && env.mouseOff) {
+    // メディアキーを送れない形（ブートキーボード）。display.go の drawCell と同じ
+    v = { ...v, sub: MEDIA_OFF_LABEL }
+    if (!(pressed && pressFill)) textC = subC
   }
   const inner = inset(box, textMargin)
   px.halo = hasImg
