@@ -213,7 +213,7 @@ PC に送れるキーの名前は次のとおり。
 | --- | --- |
 | 修飾キー | LCTRL、LSHIFT、LALT、LGUI、RCTRL、RSHIFT、RALT、RGUI |
 | 文字 | A〜Z、0〜9 |
-| ファンクション | F1〜F12 |
+| ファンクション | F1〜F12、F13〜F24（PC のキーボードにないキー。OS のショートカットにコマンドを割り当てて使う。[F13〜F24](#f13f24)） |
 | 編集 | ENTER、ESC、BACKSPACE、TAB、SPACE、INSERT、DELETE、HOME、END、PAGEUP、PAGEDOWN |
 | 矢印 | UP、DOWN、LEFT、RIGHT |
 | テンキー | KP0〜KP9、KPPLUS（+）、KPMINUS（-）、KPASTERISK（*）、KPSLASH（/）、KPDOT（.）、KPENTER |

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ComboCapture, formatCombo, keyFromCode, parseCombo, prettyCombo } from '../src/keys'
+import { ALL_KEYS, ComboCapture, MODIFIERS, formatCombo, keyFromCode, parseCombo, prettyCombo } from '../src/keys'
+import { repoFile } from './helpers'
 
 function capture(events: [string, string][]): string[] {
   const out: string[] = []
@@ -22,7 +23,9 @@ describe('PC のキーボードからの取り込み', () => {
     expect(keyFromCode('Numpad7')).toBe('KP7')
     expect(keyFromCode('BracketLeft')).toBe('LEFTBRACE')
     expect(keyFromCode('F12')).toBe('F12')
-    expect(keyFromCode('F13')).toBeNull()
+    expect(keyFromCode('F13')).toBe('F13')
+    expect(keyFromCode('F24')).toBe('F24')
+    expect(keyFromCode('F25')).toBeNull()
     expect(keyFromCode('IntlYen')).toBeNull() // 送れないキー
   })
   it('送れないキーは知らせる', () => {
@@ -41,5 +44,14 @@ describe('ショートカットの組み立て', () => {
   it('画面の表示は main.go の prettyCombo と同じ', () => {
     expect(prettyCombo('LCTRL+KPPLUS')).toBe('Ctrl++')
     expect(prettyCombo('LCTRL+LSHIFT+Z')).toBe('Ctrl+Shift+Z')
+  })
+})
+
+describe('送れるキーの名前', () => {
+  // fixtures/keynames.json は Go の hidUsage と modBits から作る（hid_test.go の TestKeyNamesFixture）
+  it('Go と同じ', () => {
+    const want = JSON.parse(repoFile('gui/test/fixtures/keynames.json').toString('utf8')) as { keys: string[]; modifiers: string[] }
+    expect([...ALL_KEYS].sort()).toEqual(want.keys)
+    expect([...MODIFIERS].sort()).toEqual(want.modifiers)
   })
 })

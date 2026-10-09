@@ -10,6 +10,8 @@ export const KEY_GROUPS: { title: string; keys: string[] }[] = [
   { title: '文字', keys: range(26, (i) => String.fromCharCode(65 + i)) },
   { title: '数字', keys: [...range(9, (i) => String(i + 1)), '0'] },
   { title: 'ファンクション', keys: range(12, (i) => `F${i + 1}`) },
+  // F13〜F24 は PC のキーボードにないので、OS のショートカットにコマンドを割り当てて使う
+  { title: 'F13〜F24（ショートカット用）', keys: range(12, (i) => `F${i + 13}`) },
   {
     title: '編集',
     keys: ['ENTER', 'ESC', 'BACKSPACE', 'TAB', 'SPACE', 'INSERT', 'DELETE', 'HOME', 'END', 'PAGEUP', 'PAGEDOWN'],
@@ -111,7 +113,7 @@ export function keyFromCode(code: string): string | null {
   if ((m = code.match(/^Key([A-Z])$/))) return m[1]
   if ((m = code.match(/^Digit(\d)$/))) return m[1]
   if ((m = code.match(/^Numpad(\d)$/))) return `KP${m[1]}`
-  if ((m = code.match(/^F(\d{1,2})$/)) && +m[1] >= 1 && +m[1] <= 12) return `F${m[1]}`
+  if ((m = code.match(/^F(\d{1,2})$/)) && +m[1] >= 1 && +m[1] <= 24) return `F${m[1]}`
   return CODE_MAP[code] ?? null
 }
 

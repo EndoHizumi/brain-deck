@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -88,6 +90,21 @@ func TestComboDescriptorShape(t *testing.T) {
 	}
 }
 
+// TestKeyMaxCoversF24 は、キーボードのディスクリプタの上限が、送れるキーの番号をすべて含むか確かめる。
+func TestKeyMaxCoversF24(t *testing.T) {
+	for name, u := range hidUsage {
+		if u > hidKeyMax {
+			t.Errorf("%s (0x%02x) is above the descriptor's maximum 0x%02x", name, u, hidKeyMax)
+		}
+	}
+	if hidUsage["F13"] != 0x68 || hidUsage["F24"] != 0x73 {
+		t.Errorf("F13=0x%02x F24=0x%02x", hidUsage["F13"], hidUsage["F24"])
+	}
+	if !bytes.Contains(legacyDesc(hidDescKeyboard), []byte{0x25, 0x65}) || bytes.Equal(legacyDesc(hidDescKeyboard), hidDescKeyboard) {
+		t.Error("legacyDesc did not restore the old maximum")
+	}
+}
+
 func TestDetectHID(t *testing.T) {
 	root := t.TempDir()
 	old := configfsGadgets
@@ -103,6 +120,8 @@ func TestDetectHID(t *testing.T) {
 	}{
 		{hidDescCombo, hidKeyboardID, hidMouseID},
 		{hidDescKeyboard, 0, 0},
+		{legacyDesc(hidDescCombo), hidKeyboardID, hidMouseID}, // 前の版（キーの番号の上限 0x65）
+		{legacyDesc(hidDescKeyboard), 0, 0},
 		{[]byte{1, 2, 3}, 0, 0},
 	} {
 		os.WriteFile(filepath.Join(fn, "report_desc"), c.desc, 0o644)
@@ -248,5 +267,34 @@ func TestMouseReleaseExceptAndScrollRepeat(t *testing.T) {
 	m.ReleaseAll()
 	if m.Held() != 0 {
 		t.Fatal("ReleaseAll left buttons")
+	}
+}
+
+// TestKeyNamesFixture は、gui/test/fixtures/keynames.json（送れるキーの名前）が Go の hidUsage と modBits と同じことを確かめる。
+// GUI のテストは、keys.ts の一覧をこのファイルと比べる。名前を足したら LEFTHAND_UPDATE_KEYNAMES=1 go test -run KeyNames で書き直す。
+func TestKeyNamesFixture(t *testing.T) {
+	const path = "gui/test/fixtures/keynames.json"
+	var keys, mods []string
+	for k := range hidUsage {
+		keys = append(keys, k)
+	}
+	for k := range modBits {
+		mods = append(mods, k)
+	}
+	sort.Strings(keys)
+	sort.Strings(mods)
+	want, _ := json.MarshalIndent(map[string][]string{"keys": keys, "modifiers": mods}, "", "  ")
+	want = append(want, '\n')
+	if os.Getenv("LEFTHAND_UPDATE_KEYNAMES") == "1" {
+		if err := os.WriteFile(path, want, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s is stale (LEFTHAND_UPDATE_KEYNAMES=1 go test -run KeyNames)", path)
 	}
 }

@@ -102,7 +102,7 @@ layers:
 
 - **オブジェクトの形**：`key`、`layer_hold`、`layer_toggle`、`layer_oneshot`、`layer_to`、`mouse`、`usb_mode`、`terminal` のうち、ちょうど 1 つを書く。`label` はどれにも付けられる。ウィジェットのセル（下の「ウィジェット」）では、どれも書かなくてよい。
 - **セルの大きさ**：タッチのセルには `span: [列数, 行数]` を書ける（下の「セルの大きさ」）。
-- **送れるキーの名前**：修飾キー（LCTRL、LSHIFT、LALT、LGUI、RCTRL、RSHIFT、RALT、RGUI）、A〜Z、0〜9、F1〜F12、ENTER、ESC、BACKSPACE、TAB、SPACE、INSERT、DELETE、HOME、END、PAGEUP、PAGEDOWN、UP、DOWN、LEFT、RIGHT、テンキー（KP0〜KP9、KPPLUS、KPMINUS、KPASTERISK、KPSLASH、KPDOT、KPENTER）、MINUS、EQUAL、LEFTBRACE、RIGHTBRACE、BACKSLASH、SEMICOLON、APOSTROPHE、GRAVE、COMMA、DOT、SLASH。
+- **送れるキーの名前**：修飾キー（LCTRL、LSHIFT、LALT、LGUI、RCTRL、RSHIFT、RALT、RGUI）、A〜Z、0〜9、F1〜F24（F13〜F24 は PC のキーボードにないキー。ショートカット用）、ENTER、ESC、BACKSPACE、TAB、SPACE、INSERT、DELETE、HOME、END、PAGEUP、PAGEDOWN、UP、DOWN、LEFT、RIGHT、テンキー（KP0〜KP9、KPPLUS、KPMINUS、KPASTERISK、KPSLASH、KPDOT、KPENTER）、MINUS、EQUAL、LEFTBRACE、RIGHTBRACE、BACKSLASH、SEMICOLON、APOSTROPHE、GRAVE、COMMA、DOT、SLASH。
 - **配列によらない記号**：記号は US 配列での位置を送るので、PC が日本語配列だと別の文字になることがある。`+` などはテンキーの名前で送ると配列によらない。例：Ctrl++ は `LCTRL+KPPLUS`。
 - **レイヤーのセルの表示**：layer_* のセルは紫で描く。label を省略すると、行き先のレイヤーの label を大きく、切り替えの種類（押す間、切替、1回、移動）を下に小さく出す。
 

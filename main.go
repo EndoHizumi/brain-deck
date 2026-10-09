@@ -87,6 +87,10 @@ func init() {
 	for i := 1; i <= 12; i++ {
 		hidUsage[fmt.Sprintf("F%d", i)] = byte(0x3a + i - 1)
 	}
+	// F13〜F24。PC の OS のショートカットに、コマンドを割り当てて使う（キーボードにないので、ほかと重ならない）
+	for i := 13; i <= 24; i++ {
+		hidUsage[fmt.Sprintf("F%d", i)] = byte(0x68 + i - 13)
+	}
 }
 
 func parseCombo(s string) (Combo, error) {
