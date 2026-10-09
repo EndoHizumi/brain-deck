@@ -133,6 +133,13 @@ func TestDimmer(t *testing.T) {
 	fb.waitLevel(1)
 	d.Key() // wake_on_key（既定）
 	fb.waitLevel(5)
+	// 状態のファイルは、明るさを書いたあとに消すので、少し待つ
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(backlightStateFile); err != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if _, err := os.Stat(backlightStateFile); err == nil {
 		t.Error("the state file must be removed when bright")
 	}
