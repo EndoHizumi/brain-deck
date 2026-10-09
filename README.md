@@ -7,7 +7,7 @@ USB HID のキーボードとマウスとして PC に送る。タッチパネ�
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
 - **トラックパッド**：タッチパネルのセルを、マウスのトラックパッドにできる（`widget: trackpad`）。指でカーソルを動かし、タップでクリック、右端の帯でスクロール。キーやセルにマウスのボタンも割り当てられる（`mouse: left`）。Android のスマホでもそのまま使える。起動したときはブートキーボード（BIOS でも使える）で、マウスを使うときだけ USB の形を切り替える（`usb_mode`）。
-- **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定、電池の残り、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定、月の表示（卓上カレンダー。祝日を赤く、予定のある日に点）、電池の残り、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
 - **自動減光**：しばらく触らなければ画面を暗くし、さらに時間がたったら消す（`backlight`）。暗いときのタッチは明るくするだけで、セルは押さない。本体キーは暗いときもそのまま PC に送る。
 - **背景画像**：セルごとの背景と、レイヤーごとの壁紙に、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
 - **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、URL を QR コードにして出したり（`brain-deck qr share "https://..."`）、在席ランプを変えたり（`brain-deck presence 会議中`）、Brain の時刻を合わせたりする。
@@ -262,7 +262,7 @@ touch:
 
 ### ウィジェットとセルの大きさ
 
-タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）。
+タッチのセルには、キーの代わりにウィジェットを置ける。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）、月の表示（`month`）など。
 また、どのセルも `span: [列数, 行数]` で、右と下のセルにまたがる大きさにできる。
 
 ```yaml
@@ -274,6 +274,8 @@ cells:
   "2,1": { widget: text, id: build, label: "ビルド" }             # テキスト。中身は PC から brain-deck で書き換える
   "0,0": { widget: todo, span: [2, 3], label: Todo }              # Todo の一覧（別のレイヤーの例）
   "0,0": { widget: calendar, span: [2, 3], label: 予定 }          # 今日の予定と次の予定（別のレイヤーの例）
+  "0,0": { widget: month, id: cal, span: [2, 2] }                 # 月の表示（別のレイヤーの例）
+  "2,0": { widget: calendar, follow: cal, span: [2, 2] }          # 月の表示で選んだ日の予定を出す
 ```
 
 - **書式**：`format`（時刻、既定 `15:04`）と `date_format`（日付、既定 `1月2日({wday})`、`none` で出さない）は Go の書き方。`{wday}` は日本語の曜日。詳しくは [docs/config.md](docs/config.md) の「ウィジェット」。
@@ -283,6 +285,7 @@ cells:
 - **テキスト**：中身は設定ファイルではなく Brain のデータ（`/var/lib/lefthand/text.json`）で、PC の [brain-deck](#brain-deckpc-のコマンド) から書き換える。色は通常・成功・失敗・警告の 4 種類。有効期限を過ぎると、消さずに薄く表示する。一度も書いていない id は「未設定」と出る。長い文は折り返し、入りきらなければ「…」で切る。
 - **Todo**：項目は Brain のデータ（`/var/lib/lefthand/todo.json`）で、設定 GUI の「Todo」タブか [brain-deck todo](#todo) で書き換える。未完了の下に、完了した項目を薄く（取り消し線で）並べる。Brain では、**項目を 0.5 秒押し続けると完了を切り替える**（押しているあいだ、その行が黄色になる）。入りきらないときは、セルの下の帯の **▲ ▼ をタップしてページを送る**（画面右の帯の ▲▼ はレイヤーの切り替えに使っているため、別にした）。`rows: 3` で 1 ページの行数を決められる。見出しには残りの件数を出す（「Todo 残り 3」）。ページを送ったあと 1 分触らなければ、1 ページ目に戻る（`page_reset: 30s` で変えられる。`off` で戻らない）。Todo のセルには `key` や `layer_*` は書けない。
 - **カレンダー**：予定は Brain のデータ（`/var/lib/lefthand/calendar.json`）で、PC の [brain-deck calendar sync](#カレンダー) が ICS の URL から取ってきて送る。今日の予定（終日、時刻の順）と、今日より先の次の予定を 1 つ出す。**今の予定は行を青く塗り**、終わった予定は薄く出す。左の色の帯はカレンダーの色。いちばん下に**最終更新の時刻**を小さく出し、3 時間より古い（`stale: 3h` で変えられる）、取得に失敗した、Brain の時刻を合わせていない、のどれかなら橙色にする。入りきらないときは Todo と同じく下の ▲▼ でページを送り、触っていないときは「今かこれからの予定」があるページを出す。`calendars: [仕事]` で出すカレンダーを選べる。
+- **月の表示**：年と月、曜日、7 列の日付を並べる卓上カレンダー（2×2 のセル以上）。前後の月の日付は薄く、**今日は反転**、土曜は青、**日曜と祝日は赤**。予定のある日には、数字の下にカレンダーの色の点を出す（1 日 3 つまで。4 つ以上は 2 色と灰色の点）。下の帯の **▲▼ で前後の月**に送り、**日付をタップするとその日を選ぶ**（帯に日付、祝日の名前、予定の数が出る。帯の中央で今月に戻る。1 分触らなければ今月と今日に戻る）。同じレイヤーのカレンダーのセルに `follow: <月の表示の id>` を書くと、選んだ日の予定を出す。週の始まりは `week_start: monday` で月曜に。祝日は、calendars.yaml のカレンダーに `holiday: true` を書いて送る（[カレンダー](#カレンダー)）。例は [config/month-example.yaml](config/month-example.yaml)、書き方は [docs/config.md](docs/config.md) の「月の表示（month）」。
 - **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」と「Todo」のレイヤーを足したもの。
 
 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプもある。
@@ -360,7 +363,7 @@ layers:
 | clock.json | 最後に時刻を合わせた記録（起動ごとの ID、時刻、ずれ、送った側） |
 | text.json | テキストのタイルの中身（id ごとに、テキスト、色、書いた時刻、有効期限、送った側）。64 個まで覚え、超えたら古いものから捨てる |
 | todo.json | Todo の項目（ID、文、完了、更新番号、時刻、変えた側）。数の上限はない |
-| calendar.json | カレンダーの予定（カレンダーごとに、名前、色、取ってきた時刻、取得の失敗、予定）。展開したあとの予定で、1000 件まで |
+| calendar.json | カレンダーの予定（カレンダーごとに、名前、色、祝日か、取ってきた時刻、取得の失敗、予定）と、送られた範囲。展開したあとの予定で、1000 件まで（約 250 KB） |
 | qr.json | QR コードのウィジェットの中身（text.json と同じ形）。64 個まで |
 | widgets.json | ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（種類と id ごと。種類ごとに 64 個まで）と、書いたときの起動の ID、終了した時刻 |
 | images/&lt;id&gt;.565 | 背景画像。8 バイトのヘッダ（`LHI1`、幅、高さ）と RGB565 の画素。id はファイルの SHA-256 の先頭 16 文字 |
@@ -906,7 +909,7 @@ $ brain-deck todo
 
 ### カレンダー
 
-ICS（iCalendar）の URL から予定を取ってきて、Brain のカレンダーのセル（`widget: calendar`）に送る。Brain はインターネットに出ない。取ってくるのも、繰り返しの予定とタイムゾーンを解くのも PC で行い、Brain には「今日から 7 日先まで」の予定だけを送る。
+ICS（iCalendar）の URL から予定を取ってきて、Brain のカレンダーのセル（`widget: calendar`）と月の表示（`widget: month`）に送る。Brain はインターネットに出ない。取ってくるのも、繰り返しの予定とタイムゾーンを解くのも PC で行い、Brain には「先月の初めから来月の終わりまで」の予定だけを送る。
 
 ```sh
 brain-deck calendar sync                   # ~/.config/brain-deck/calendars.yaml のカレンダーを送る
@@ -918,14 +921,16 @@ brain-deck calendar clear                  # Brain の予定を消す
 
 ```
 $ brain-deck calendar sync
-10/7〜10/14 の予定を送りました（仕事：12 件、家：3 件）
-Brain の時刻を合わせました（719ms 遅れていた。今 2026-10-07 10:37:43）
+9/1〜11/30 の予定を送りました（仕事：31 件、家：18 件、祝日：6 件）
+Brain の時刻を合わせました（719ms 遅れていた。今 2026-10-09 23:16:06）
 ```
 
 **設定ファイル**（`~/.config/brain-deck/calendars.yaml`。`$XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/brain-deck/`。macOS も同じ場所）
 
 ```yaml
-days: 7                       # 今日から何日先までを送るか（1〜31。既定 7）
+past_months: 1                # 何か月前の 1 日からを送るか（0〜3。既定 1：先月の初めから）
+future_months: 1              # 何か月後の末日までを送るか（0〜3。既定 1：来月の終わりまで）
+days: 7                       # 少なくとも今日から何日先までを送るか（1〜31。既定 7。月末の近くで来月を越えるときに効く）
 calendars:
   - name: 仕事                # Brain の画面と、セルの calendars: で使う名前（32 文字まで）
     url: https://calendar.google.com/calendar/ical/xxxx/private-xxxx/basic.ics
@@ -933,16 +938,28 @@ calendars:
   - name: 家
     url: webcal://p00-caldav.icloud.com/published/2/xxxx
     color: green
+  - name: 祝日                # 祝日のカレンダー（Google の「日本の祝日」。公開のカレンダーなので、この URL のまま使える）
+    url: https://calendar.google.com/calendar/ical/ja.japanese%23holiday%40group.v.calendar.google.com/public/basic.ics
+    color: red
+    holiday: true             # 月の表示で日付を赤くする。点は付けない
 ```
+
+**祝日のカレンダー**：上の「祝日」の 4 行を、今の calendars.yaml の `calendars:` の下に足して、`brain-deck calendar sync` を実行する。
+
+- `holiday: true` のカレンダーは、月の表示で日付を赤くするのに使い、予定の印（点）は付けない。祝日の名前は、月の表示で日付をタップしたときに出る。カレンダーのセル（今日の予定と次の予定）には、ふつうの終日の予定として出る（出したくなければ、そのセルの `calendars:` で外す）。
+- Google の「日本の祝日」には、祝日のほかに、祝日でない行事（七五三、ひな祭り、母の日、クリスマス、大晦日、銀行休業日など。ICS の説明が「祭日」）も入っている。これらを赤くしないよう、`holiday: true` のカレンダーでは「祭日」を送らない。送りたいときは `observances: true` を書く（行事も赤くなる）。
+- 祝日のカレンダーは、ほかのカレンダーと同じく、取得に失敗すれば前の予定を残す。
 
 - **URL は秘密の情報**：ICS の非公開 URL を知っていれば、だれでも予定を読める。このファイルはリポジトリに入れず、`chmod 600` にする（ほかのユーザーが読めると注意を出す）。brain-deck は、エラーにも `-v` のログにも、Brain に送るデータにも URL を出さない（ホスト名だけ）。
 - **URL の調べ方**：Google カレンダーは「設定と共有」→ カレンダーを選ぶ →「iCal 形式の非公開 URL」。iCloud は、カレンダーの「共有」→「公開カレンダー」の URL（`webcal://`）。Outlook（Microsoft 365）は「設定」→「予定表」→「共有の予定表」→「予定表を公開する」の ICS のリンク。ファイル（`/home/me/cal.ics`、`file://…`）も読める。
 - **時刻**：PC の時刻を正とする。予定を送る前に、Brain の時刻を PC に合わせる（`--no-time-sync` で合わせない）。「今日」と時刻の表示は、Brain のタイムゾーン（PC と同じ Asia/Tokyo を想定）で決める。
-- **範囲**：今日の 0 時から `days` 日先の終わりまで（既定 7 で、今日を含めて 8 日分）。範囲の前から続いている予定も送る。
+- **範囲**：`past_months` か月前の 1 日の 0 時から、`future_months` か月後の末日の終わりまで（既定は先月の初めから来月の終わりまで。10/9 なら 9/1〜11/30 の 91 日分）。今日から `days` 日先がそれより先なら、そこまで広げる。範囲の前から続いている予定も送る。`--ics` で URL を直接書いたときも、同じ既定の範囲。
 - **繰り返し**：RRULE（毎日、毎週、毎月、毎年、間隔、回数、終わりの日、BYDAY など）、EXDATE（除いた回）、RDATE、RECURRENCE-ID（1 回だけ時刻や名前を変えた回）、STATUS:CANCELLED（中止した予定や回）に対応する。繰り返しは、その予定のタイムゾーンの壁時計の時刻で数えるので、夏時間をまたいでも 10:00 の予定は 10:00 のまま。
 - **終日の予定**：日付だけで送り、Brain の日付で今日かどうかを決める。何日も続く予定は、毎日「終日」に出る。
 - **タイムゾーン**：TZID の IANA の名前（Google、iCloud）、Windows の名前（Outlook の「Tokyo Standard Time」など、よく使うもの）、ファイルの中の VTIMEZONE の順に解決する。TZID のない時刻は、カレンダーの X-WR-TIMEZONE か、PC のタイムゾーンとみなす。知らない名前は PC のタイムゾーンとみなし、注意を出す。
-- **送るもの**：予定の名前、場所、始まりと終わりだけ。説明、参加者、通知は送らない。予定は合わせて 1000 件まで（超えたら先の予定を送らず、注意を出す）。
+- **送るもの**：予定の名前、場所、始まりと終わりだけ。説明、参加者、通知は送らない。
+- **上限**：予定は合わせて 1000 件、送る JSON は 200 KiB まで（Brain が 1 回に受け取れるのは 256 KiB）。超えたら、今日から遠い予定から外して送り、外した数を「注意」に出す（終了コードは 0 のまま）。祝日のカレンダーの予定は先に残す。`-v` で、送る件数と大きさを出す（「送る予定 1000 件、148.5 KiB」）。超えるときは `past_months`、`future_months` を減らす。
+- **Brain での保存の時間**：SD カードへの保存は、返事のあとに Brain が別に行う（brain-deck は待たない）。実機で、予定 60 件ほどは 0.1〜0.2 秒、1000 件は 1.0〜7.1 秒だった。
 - **取得に失敗したとき**：ほかのカレンダーは送り、失敗したカレンダーは Brain に前の予定を残す。Brain の画面では、最終更新の行が橙色になり「失敗 1」と出る。終了コードは 7。
 - **時間**：予定の取得は、ポートを開く前に行う（取得に時間がかかっても、そのあいだ設定 GUI を締め出さない）。Brain とのやりとりは 0.1 秒ほど（実機）。
 
@@ -1728,6 +1745,14 @@ TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar.png -render-layer 
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-page2.png -render-layer calendar -render-calendar-page 2 -render-time $T -render-calendar $K $C
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-stale.png -render-layer calendar -render-time $T -render-calendar gui/test/fixtures/calendar-stale.json $C
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calendar-none.png -render-layer calendar -render-time $T -render-unsynced $C
+# 月の表示。予定と祝日は gui/test/fixtures/calendar-month.json（9/1〜11/30、4 つのカレンダーと祝日）
+M=gui/test/fixtures/calendar-month.json; N=config/month-example.yaml
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/month.png -render-layer month -render-time $T -render-calendar $M $N
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/month-select.png -render-layer month -render-time $T -render-calendar $M -render-month-select 2026-10-17 $N
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/month-prev-holiday.png -render-layer month -render-time $T -render-calendar $M -render-month-offset -1 -render-month-select 2026-09-22 $N
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/month-wide.png -render-layer month-wide -render-time $T -render-calendar $M -render-month-select 2026-10-12 $N
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/month-unsynced.png -render-layer month -render-time $T -render-unsynced $N
+TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/month-out-of-range.png -render-layer month -render-time $T -render-calendar $K -render-month-offset 1 $N
 # 背景画像。画像は config/background-images（-render-images）
 B=config/background-example.yaml; I=config/background-images
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-base-pressed.png -render-pressed "0,0 3,2" -render-images $I $B
@@ -1742,6 +1767,7 @@ TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-dashboard.png -render-la
 テキストの折り返し（`gui/src/textwidget.ts`）も同じく、Go の結果の表（`gui/test/fixtures/textlayout.json`）と比べる。折り返し方を変えたら `LEFTHAND_UPDATE_TEXTLAYOUT=1 go test -run TextLayoutTable` で書き直す。
 Todo の配置と「…」での省略（`gui/src/todowidget.ts`）も、Go の表（`gui/test/fixtures/todolayout.json`）と比べる。変えたら `LEFTHAND_UPDATE_TODOLAYOUT=1 go test -run TodoLayoutTable`。
 カレンダーの行、ページ、最終更新（`gui/src/calwidget.ts`）も、Go の表（`gui/test/fixtures/callayout.json`。3 つの予定 × 6 つの時刻 × 4 つの大きさ × 5 つの設定）と比べる。変えたら `LEFTHAND_UPDATE_CALLAYOUT=1 go test -run CalLayoutTable`。
+月の表示の日付、色、印、配置と、`follow` のカレンダーに出す選んだ日の予定（`gui/src/monthwidget.ts`）も、Go の表（`gui/test/fixtures/monthlayout.json`）と比べる。変えたら `LEFTHAND_UPDATE_MONTHLAYOUT=1 go test -run MonthLayoutTable`。実機では `sudo LEFTHAND_HW_TEST=1 timeout 90 ./lefthand.test -test.run HWMonth -test.v`（本番を止めてから。下の試験のユニットと同じく `Conflicts=` と `After=lefthand.service` を付ける）。
 
 brain-deck のテストは、PTY を Brain の代わりにして、ポートの排他、開き直し、終了コードを確かめる（Linux だけ）。カレンダーは、Google と Outlook の形の ICS（繰り返し、例外、中止、夏時間、Windows の名前、VTIMEZONE）の展開と、ローカルの HTTP サーバーからの `calendar sync`（URL が漏れないこと、取得の失敗、終了コード 7）を確かめる。macOS 向けは `GOOS=darwin go vet ./cmd/brain-deck` でビルドできることだけを確かめている。
 
@@ -1835,6 +1861,7 @@ ssh brain 'sudo systemctl stop lefthand.service && sudo systemd-run --collect --
 cat <<'EOF' | sudo tee /run/systemd/system/lefthand-hwtest.service
 [Unit]
 Conflicts=lefthand.service
+After=lefthand.service
 [Service]
 ExecStart=/tmp/lhu/bin/lefthand -data-dir /tmp/lhu/data -update-bin /tmp/lhu/bin/lefthand -update-gadget /tmp/lhu/sbin/gadget-setup -gadget-setup /tmp/lhu/sbin/gadget-setup -ready-file /tmp/lhu/ready /tmp/lhu/config.yaml
 ExecStopPost=-/tmp/lhu/bin/lefthand -restore-console
@@ -1881,6 +1908,8 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-todo-page 2                 Todo のセルに出すページ（1 から）
          -render-calendar calendar.json      カレンダーのセルの予定（calendar.json と同じ形）
          -render-calendar-page 2             カレンダーのセルに出すページ（1 から。省略すると触っていないときのページ）
+         -render-month-offset -1             月の表示に出す月（今月からのずれ。-1 で先月）
+         -render-month-select 2026-10-17     月の表示で選んだ日。follow のカレンダーにもその日の予定が出る
          -render-images dir                  背景画像を探すディレクトリ（-check でも使う。省略すると -data-dir の images）
 lefthand -record-touch out.touch [config.yaml]  タッチの生のイベントを記録して終わる（lefthand.service を止めてから）
          -record-gesture name                見出しに書く動きの名前（slow、tap など）

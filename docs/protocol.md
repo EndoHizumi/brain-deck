@@ -360,7 +360,7 @@ Todo のセル（`{ widget: todo }`）の項目を読み書きする。項目は
 
 ### set_calendar
 
-カレンダーのセル（`{ widget: calendar }`）の予定を、まとめて差し替える。PC の `brain-deck calendar sync` が、ICS の URL から取ってきて送る。
+カレンダーのセル（`{ widget: calendar }`）と月の表示（`{ widget: month }`）の予定を、まとめて差し替える。PC の `brain-deck calendar sync` が、ICS の URL から取ってきて送る。
 
 ```json
 → {"id":30,"cmd":"set_calendar","from":"2026-10-06","days":7,"source":"brain-deck","calendars":[
@@ -378,14 +378,15 @@ Todo のセル（`{ widget: todo }`）の項目を読み書きする。項目は
 | `calendars` | 必須。カレンダーの配列（16 個まで）。送らなかったカレンダーは Brain から消える |
 | `name` | 1〜32 文字。ほかと重ならない。セルの `calendars` で選ぶときの名前 |
 | `color` | `#rrggbb`。省略すると、順に決まった色 |
+| `holiday` | `true` なら祝日のカレンダー。月の表示では、その予定のある日を赤くし（名前は日付を選んだときに出す）、予定の印（点）は付けない。カレンダーのセルには、ほかの予定と同じく出る。前の版の lefthand は読み飛ばす |
 | `fetched_at` | 予定を取ってきた時刻（PC の時刻）。画面の「更新」に出る |
 | `error` | 取得に失敗したときの説明（200 文字まで）。`events` が空なら、Brain は前に受け取った予定と `fetched_at` を残す（結果の `kept`） |
 | `events` | 予定。時刻の決まった予定は `start` と `end`（RFC 3339）、終日の予定は `day` と `end_day`（YYYY-MM-DD。`end_day` の日は含まない。省略すると 1 日）。`title` と `location` は 200 文字まで（超えたら切る）。改行は空白にする |
-| `from`、`days` | 送った範囲（記録用） |
+| `from`、`days` | 送った範囲。`from` の日から `days` 日先まで（`days`+1 日分）。月の表示は、この外の日を「範囲外」と出す。`days` は 0〜366。brain-deck は、先月の 1 日から来月の末日までを送る |
 
 - **展開済み**：繰り返し（RRULE）、例外、タイムゾーンは PC で解いてから送る。Brain は受け取った予定をそのまま出す。
-- **数**：すべてのカレンダーの予定を合わせて 1000 件まで。1 行の上限（256 KiB）にも収まる。
-- **保存**：`/var/lib/lefthand/calendar.json` に書く。返事は書き込みを待たない。
+- **数**：すべてのカレンダーの予定を合わせて 1000 件まで。1 行の上限（256 KiB）にも収まるように、brain-deck は送る JSON を 200 KiB までにする（超えたら、今日から遠い予定から外す。祝日のカレンダーの予定は先に残す）。実機で、名前の長めな 1000 件の要求は 189 KB だった。
+- **保存**：`/var/lib/lefthand/calendar.json` に書く。返事は書き込みを待たない。実機の SD カードで、予定 60 件ほどは 0.1〜0.2 秒、1000 件（246 KB）は 1.0〜7.1 秒かかった（ばらつきが大きい）。1 秒以上かかったときは、`-v` でなくてもログに出す。
 - **誤り**：`name` の重なり、`color` の形、`start` と `day` の両方、`end` が `start` より前、制御文字などは `bad_request`。何も変えない。
 - **消すとき**：`calendars` を空の配列にして送る（`brain-deck calendar clear`）。
 
