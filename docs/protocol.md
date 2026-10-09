@@ -60,6 +60,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
 - `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱い、`get_qr`・`get_widgets` があるときだけ QR コードとストップウォッチなどの状態を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
+- `upload_kinds` は、`upload_begin` で受け取れる種類（`update`、`image`）。この項目がなければ、`upload_*` がない版。
 
 ### get_config
 
@@ -517,6 +518,127 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 
 **消す**：`{"cmd":"prune_images","keep":["<id>",...],"dry_run":false}` → `{"removed":[id...],"freed_bytes":n,"dry_run":false}`。今の設定と `keep` のどちらでも使っていない画像を消す。GUI は、編集中の設定で使っている id を `keep` に入れる。`dry_run` なら消さずに、消すものを返す。
 
+## 分割して送る（upload_begin、upload_chunk、upload_end、upload_abort）
+
+1 行の上限（256 KiB）より大きなファイルを、種類（`kind`）を選んで送る共通の形。受け取りの手順は背景画像の `image_*` と同じ（実装も共通。`transfer.go`）。
+
+```json
+→ {"id":70,"cmd":"upload_begin","kind":"update","sha256":"…（64 文字）","bytes":4555264,"name":"lefthand-hwtest-b.update.tar.gz","source":"brain-deck"}
+← {"id":70,"ok":true,"result":{"upload":"5d1c0e2a9b33","chunk_bytes":98304}}
+→ {"id":71,"cmd":"upload_chunk","upload":"5d1c0e2a9b33","offset":0,"data":"H4sIAAAA…"}
+← {"id":71,"ok":true,"result":{"received":98304}}
+   …
+→ {"id":118,"cmd":"upload_end","upload":"5d1c0e2a9b33"}
+← {"id":118,"ok":true,"result":{…種類ごとの結果…}}
+```
+
+| kind | 上限 | upload_end の結果 |
+| --- | --- | --- |
+| `update` | 24 MiB | 確かめ終えた更新（下の `update_*`） |
+| `image` | 768,008 バイト | `{"id":"<画像の id>"}`。`image_begin` と違い、幅と高さは受け取ったファイルのヘッダから読む。合計の上限と SD カードの空きは同じ |
+
+- **順番**：`offset` は、それまでに受け取った大きさと同じでなければ `bad_request`（受け取りは続く）。言った大きさを超えたら捨てる。
+- **確かめ**：`upload_end` で大きさと SHA-256 を確かめる。違えば `hash_mismatch` で、一時ファイルを消す。
+- **やめる**：`upload_abort`、別の `upload_begin`、接続の終わり、60 秒 `upload_chunk` が来ない、デーモンの再起動。受け取りは同時に 1 つだけ（`image_*` とは別に数える）。
+- **断る**：知らない `kind`、上限を超える `bytes` は `bad_request`。空きが足りなければ `no_space`。
+
+## 更新、再起動、電源、ログ（ssh を使わない保守）
+
+README の「Brain の保守」。lefthand が systemd のサービスとして動いていないとき（`-unit` も `/proc/self/cgroup` も分からない）は、`update_apply`、`update_rollback`、`restart` が `internal_error` になる。
+
+### 更新のファイルと、確かめた結果
+
+`upload_*`（kind: `update`）で、`tools/mkupdate` が作る tar.gz を送る。中身は `manifest.json`、`lefthand`、`gadget-setup.sh` の 3 つだけ（ほかのものがあれば断る）。
+
+```json
+{"format":1,"version":"hwtest-b","built":"2026-10-09T09:03:00Z",
+ "files":{"lefthand":{"sha256":"…","bytes":8206241},"gadget-setup.sh":{"sha256":"…","bytes":18832}}}
+```
+
+`upload_end` は、`<data-dir>/update/<stage>/` に展開して確かめ、次を返す（まだ何も入れ替えていない）。
+
+```json
+← {"id":118,"ok":true,"result":{"stage":"9f2a4c1d7e60","action":"update","version":"hwtest-b","current_version":"hwtest-a",
+   "bin_changed":true,"has_gadget":true,"gadget_changed":true,"rebind":"yes",
+   "rebind_reasons":["the HID report descriptor or attributes differ (want keyboard)"],"warnings":[]}}
+```
+
+| 確かめること | 合わなければ |
+| --- | --- |
+| manifest の format、ファイルごとの SHA-256 と大きさ、lefthand と gadget-setup.sh の両方があるか | `update_rejected` |
+| 新しい lefthand を `-version` で実行し、manifest の版と同じか（`update` が 1 以上か） | `update_rejected` |
+| 新しい lefthand の `-check-gadget`（ディスクリプタが gadget-setup.sh と同じか）、`bash -n` | `update_rejected` |
+| 新しい lefthand の `-check`（今の設定を読めるか）。警告は `warnings` に入れる | `update_rejected` |
+| gadget-setup.sh が変わるなら `GADGET_CHECK=1` で実行し、付け直しが要るか（`rebind`：`no`、`yes`、`maybe`） | — |
+
+`update_rejected` のときは、展開したものを消す。何も変えていない。
+
+### update_apply、update_discard、update_rollback
+
+```json
+→ {"id":119,"cmd":"update_apply","stage":"9f2a4c1d7e60"}
+← {"id":119,"ok":true,"result":{"stage":"9f2a4c1d7e60","action":"update","version":"hwtest-b","from":"hwtest-a","helper":"lefthand-update","confirm":true}}
+```
+
+- **update_apply**：`systemd-run --unit=lefthand-update` で係（`lefthand -update-apply <stage>/plan.json`）を起動して返事をする。係は 1 秒待ってからサービスを止めるので、このシリアルはそのあと切れる。PC はつなぎ直し、`update_status` の `phase` が `waiting_confirm` になったら、新しいデーモンに `update_confirm` を送る。
+- **update_discard**：確かめ終えた更新を入れ替えずに消す（`{"discarded":true}`）。
+- **update_rollback**：`.prev`（前の版）を、受け取ったものと同じように確かめて、同じ形の結果を返す（`action` は `rollback`）。続けて `update_apply` を送る。前の版が `-version` に答えない古い版なら `legacy: true` で、係は起動の知らせと `update_confirm` を待たず、10 秒動き続けることだけを確かめる。前の版がなければ `not_found`。
+- **断る**：端末モードのあいだ、USB の形の切り替えの途中、係が動いているあいだは `conflict`。
+
+### update_confirm、update_status
+
+```json
+→ {"id":5,"cmd":"update_confirm","stage":"9f2a4c1d7e60","source":"brain-deck"}
+← {"id":5,"ok":true,"result":{"confirmed":true,"version":"hwtest-b"}}
+→ {"id":6,"cmd":"update_status"}
+← {"id":6,"ok":true,"result":{"version":"hwtest-b","helper":"inactive","unit":"lefthand.service","bin":"/usr/local/bin/lefthand",
+   "gadget":"/usr/local/sbin/lefthand-gadget-setup","has_prev":true,
+   "state":{"stage":"9f2a4c1d7e60","action":"update","phase":"done","done":true,"ok":true,"from":"hwtest-a","to":"hwtest-b","rebound":false,…}}}
+```
+
+- **update_confirm**：受けたデーモンの PID を `<stage>/confirmed` に書く。係は、それが新しいデーモンの PID と同じなら確認できたとする（古いデーモンが受けたものは数えない）。
+- **state**（`<data-dir>/update/state.json`）の `phase`：`starting_helper`、`stopping`、`installing`、`rebinding`、`starting`、`waiting_ready`、`waiting_confirm`、`done`、`rolling_back`、`rolled_back`（失敗して前の版に戻した）、`failed`（restart で起動しなかった）。`done` が true で終わり、`ok` が結果、`message` が理由、`rebound` は USB を付け直したか（gadget-setup.sh がガジェットを変えたとき）。
+- **時間**：新しいデーモンが `-ready-file` に起動を書くまで 45 秒、そのあと `update_confirm` まで 90 秒、そのあと 2 秒動き続けること。どれかが満たされなければ、係は前の版（と前の `.prev`）に戻し、gadget-setup.sh を入れ替えていれば前のものを実行し直して、サービスを起動する。
+
+### restart、power
+
+```json
+→ {"id":7,"cmd":"restart","usb":true}
+← {"id":7,"ok":true,"result":{"stage":"3b0f9e2d1c44","action":"restart","usb":true,"helper":"lefthand-update"}}
+→ {"id":8,"cmd":"power","action":"reboot"}
+← {"id":8,"ok":true,"result":{"action":"reboot"}}
+```
+
+- **restart**：係が、サービスを止めて起動し、起動の知らせを待つ。`usb` なら、止めているあいだに `GADGET_UNBIND_ONLY=1` で切り離して gadget-setup.sh で付け直す（USB の形は保つ）。結果は `update_status` の `state`（同じ `stage`）。
+- **power**：`action` は `reboot` か `poweroff`。返事のあと 0.5 秒で `systemctl --no-block <action>`。係が動いているあいだは `conflict`。
+
+### get_logs
+
+```json
+→ {"id":9,"cmd":"get_logs","lines":100}
+← {"id":9,"ok":true,"result":{"text":"2026-10-09T18:06:31+09:00 brain lefthand[3999]: …","cursor":"s=…"}}
+→ {"id":10,"cmd":"get_logs","cursor":"s=…"}
+```
+
+`journalctl -u <デーモンのユニット> -u lefthand-update.service -o short-iso`。`cursor` を渡すと、そのあとのものだけ（追いかけるとき）。`lines` は 2000 まで、`text` は 200 KiB まで（長ければ新しいほうを残す）。
+
+## 設定のテキスト（get_config_text、put_config_text）
+
+`get_config`、`set_config` と違い、設定ファイルを**テキストのまま**（コメントも）読み書きする。brain-deck の `config get`、`config put`。
+
+```json
+→ {"id":11,"cmd":"get_config_text","prev":false}
+← {"id":11,"ok":true,"result":{"text":"# 手で書いたコメント\nhid_device: /dev/hidg0\n…","sha256":"…","path":"/etc/lefthand/config.yaml","prev":false}}
+→ {"id":12,"cmd":"put_config_text","text":"…","restart":false,"dry_run":false,"source":"brain-deck"}
+← {"id":12,"ok":true,"result":{"saved":"/etc/lefthand/config.yaml","previous":"/etc/lefthand/config.yaml.prev","warnings":[],"restarting":false,"status":{…}}}
+```
+
+- **検証**：`validate` と同じ。誤りは `invalid_config`（`problems` に場所付き。YAML の文法の誤りも）。何も書かない。
+- **保存**：`text` をそのままファイルにする（一時ファイル、fsync、rename）。前の版は `.prev`。そのあと再起動せずに反映し、反映に失敗したらファイルも戻す（`apply_failed`）。
+- **再起動が要る項目**（`hid_device`、`keyboard`、`touch.device`、`touch` の有無、`display`）が変わるとき：`restart` が false なら `needs_restart`（`problems` にその項目）で何も書かない。true なら書いてから、係でデーモンを再起動する（結果に `restarting: true` と `stage`）。新しいデーモンが起動しなければ、係が `.prev` に戻して起動し直す（`state.phase` は `rolled_back`）。
+- **dry_run**：検証だけ。`{"valid":true,"warnings":[…],"needs_restart":false}`。
+- `prev` が true なら `.prev` を読む。なければ `not_found`。
+
 ## エラーの種類
 
 | code | 意味 |
@@ -529,11 +651,13 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 | `invalid_config` | 設定の誤り。`problems` に場所付きで入る。何も変えていない |
 | `apply_failed` | 保存したが反映に失敗し、ファイルも動作も前の設定に戻した |
 | `internal_error` | そのほか（ファイルを書けないなど）。何も変えていないか、前の設定に戻せなかったことを message に書く |
-| `not_found` | Todo：その ID の項目がない。get_image：その id の画像がない。set_presence：その id の在席ランプが設定にない |
-| `conflict` | Todo：項目が、送った `rev` のあとに変わった。何も変えていない |
+| `not_found` | Todo：その ID の項目がない。get_image：その id の画像がない。set_presence：その id の在席ランプが設定にない。update_apply：確かめ終えた更新がない。update_rollback：前の版がない |
+| `conflict` | Todo：項目が、送った `rev` のあとに変わった。何も変えていない。更新、再起動：端末モード、USB の切り替え、ほかの更新の途中 |
 | `quota_exceeded` | 画像：置いてある画像との合計が上限（16 MiB）を超える。何も書いていない |
 | `no_space` | 画像：保存すると SD カードの空きが足りなくなる。何も書いていない |
-| `hash_mismatch` | 画像：受け取った中身の SHA-256 が `image_begin` と違う。一時ファイルを消した |
+| `hash_mismatch` | 画像、upload_*：受け取った中身の SHA-256 が、始めるときに言ったものと違う。一時ファイルを消した |
+| `update_rejected` | 更新：受け取ったものを確かめて断った（版、組、設定が読めない、など）。何も変えていない |
+| `needs_restart` | put_config_text：再起動が要る項目が変わった（`restart` を付けていない）。何も書いていない |
 
 brain-deck は、エラーの種類によって終了コードを変える（README の「終了コード」）。
 

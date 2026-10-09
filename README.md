@@ -27,17 +27,19 @@ USB HID のキーボードとマウスとして PC に送る。タッチパネ�
 6. [設定](#設定)
 7. [マウスとトラックパッド](#マウスとトラックパッド)
 8. [メディアキー、F13〜F24、スリープ解除](#メディアキーf13f24スリープ解除)
-9. [設定 GUI](#設定-gui)
-10. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
-11. [時刻合わせ](#時刻合わせ)
-12. [タッチのキャリブレーション](#タッチのキャリブレーション)
-13. [日常の操作](#日常の操作)
-14. [シリアルコンソール](#シリアルコンソール)
-15. [端末モード](#端末モード)
-16. [画面とコンソール](#画面とコンソール)
-17. [困ったとき](#困ったとき)
-18. [開発](#開発)
-19. [フォントとライセンス](#フォントとライセンス)
+9. [コマンドのショートカット](#コマンドのショートカット)
+10. [設定 GUI](#設定-gui)
+11. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
+12. [Brain の保守（ssh を使わない）](#brain-の保守ssh-を使わない)
+13. [時刻合わせ](#時刻合わせ)
+14. [タッチのキャリブレーション](#タッチのキャリブレーション)
+15. [日常の操作](#日常の操作)
+16. [シリアルコンソール](#シリアルコンソール)
+17. [端末モード](#端末モード)
+18. [画面とコンソール](#画面とコンソール)
+19. [困ったとき](#困ったとき)
+20. [開発](#開発)
+21. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -82,7 +84,16 @@ go test ./...
 
 ## インストール
 
-PC から Brain にファイルを送り、Brain 上で install.sh を実行する。
+初めて入れるときは、SD カードに直接入れる（ssh が要らない）か、ssh で送って Brain 上で入れる。一度入れたあとの更新は、`brain-deck update` で USB のシリアルから行える（[Brain の保守](#brain-の保守ssh-を使わない)）。
+
+**SD カードに直接入れる**：Brainux を書いた SD カードを PC に挿し、ルートのパーティションがマウントされた場所を `--root` に書く。ファイルを置き、lefthand.service を有効にする（`/boot` には触らない）。SD カードを Brain に戻して起動すれば、USB キーボードとして動き、brain-deck で操作できる。
+
+```sh
+GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -o lefthand
+sudo sh install.sh --root /media/$USER/rootfs     # rootfs はルートのパーティションの名前（環境による）
+```
+
+**ssh で入れる**：PC から Brain にファイルを送り、Brain 上で install.sh を実行する。
 
 ```sh
 scp -r lefthand config.yaml install.sh gadget-setup.sh console-setup.sh systemd brain:lefthand/
@@ -551,7 +562,7 @@ F13〜F24 は、PC のキーボードにないファンクションキー。ほ�
 
 - **ディスクリプタ**：前の版のブートキーボードのレポートディスクリプタは、キーの番号の上限が 0x65 だった。F13（0x68）〜F24（0x73）は上限を超えるので、PC が捨てていた（Linux の hid-input は上限を超えた値を無視する）。上限を 0x73 に上げた（`hid.go` の `hidKeyMax`、`gadget-setup.sh` の `KBD_DESC`）。
 - **BIOS や UEFI**：BIOS や UEFI はブートプロトコル（決まった 8 バイト）でキーを読み、レポートディスクリプタは読まない。上限を上げても、送る 8 バイトの形は同じなので、BIOS や UEFI での入力は変わらない（はず）。実機の BIOS では、まだ確かめていない。確かめ方は下の「BIOS や UEFI で確かめる」。
-- **Linux でのキーの名前**：X11（xkb の既定）では、F13 は `XF86Tools`、F14〜F18 は `XF86Launch5`〜`XF86Launch9`、F20 は `XF86AudioMicMute`（マイクのミュート）、F21〜F23 は `XF86TouchpadToggle`、`XF86TouchpadOn`、`XF86TouchpadOff` になり、F19 と F24 には名前がない（`/usr/share/X11/xkb/symbols/inet` の evdev）。**F20〜F23 は、デスクトップによっては押すだけでマイクやタッチパッドを切り替える**ので、ショートカットには F13〜F18 を先に使う。デスクトップごとの割り当て方は、コマンドのショートカット（次のフェーズ）で調べて書く。
+- **Linux でのキーの名前**：X11（xkb の既定）では、F13 は `XF86Tools`、F14〜F18 は `XF86Launch5`〜`XF86Launch9`、F20 は `XF86AudioMicMute`（マイクのミュート）、F21〜F23 は `XF86TouchpadToggle`、`XF86TouchpadOn`、`XF86TouchpadOff` になり、F19 と F24 には名前がない（`/usr/share/X11/xkb/symbols/inet` の evdev）。**F20〜F23 は、デスクトップによっては押すだけでマイクやタッチパッドを切り替える**ので、ショートカットには F13〜F18 を先に使う。デスクトップごとの割り当て方は [コマンドのショートカット](#コマンドのショートカット)。
 - **ガジェットを作り直すまで**：デーモンだけを新しくして、Brain を再起動していない（ガジェットが前の版のディスクリプタのまま）ときは、F13〜F24 が PC に届かない。`journalctl -u lefthand` の `hid:` の行に `old descriptor` と出る。`sudo /usr/local/sbin/lefthand-gadget-setup` を実行するか、Brain を再起動する。
 
 ### スリープ解除（USB のリモートウェイクアップ）
@@ -626,6 +637,96 @@ xev -event keyboard | grep -A2 KeyPress
 2. PC を再起動し、BIOS や UEFI の設定画面（F2 や Del など。PC による）に入る。Brain の本体のキーで、矢印、Enter、Esc、文字が打てるか確かめる。
 3. ブートローダー（GRUB など）のメニューで、矢印と Enter が効くか確かめる。
 4. 打てなければ、`/usr/local/sbin/lefthand-gadget-setup.prev`（前の版。キーの番号の上限 0x65）に戻して比べる：`ssh brain 'sudo HID_MOUSE=0 /usr/local/sbin/lefthand-gadget-setup.prev'`（USB を付け直す）。
+
+## コマンドのショートカット
+
+Brain のセルを押すと、USB でつないだ PC で決めておいたコマンドが動き、結果が Brain のテキストのタイルに出る。ssh も、PC で常駐するプログラムも使わない。
+
+```
+Brain のセル（key: F14）──USB の HID──→ PC の OS のショートカット（F14 → build.sh）
+                                                     │
+Brain のタイル（widget: text, id: build）←─USB のシリアル── brain-deck exec --result build -- make
+```
+
+- **Brain の側**：セルは、F14 などのキーを送るだけ（[F13〜F24](#f13f24)。修飾キーとの組み合わせ `LCTRL+F14` も書ける）。どちらの USB の形でも送れる。
+- **PC の側**：OS のショートカットの設定で、そのキーにスクリプトを割り当てる（下の手順。PC の設定はユーザーが行う）。
+- **結果**：スクリプトの中で `brain-deck exec --result <id> -- <コマンド>` を使う。実行する前にタイルに「実行中」を出し、終わったら、終了コードが 0 なら緑で「成功」、それ以外なら赤で「失敗(終了コード)」と、時刻、かかった時間、出力の最後の行を出す。
+- **例**：[config/shortcuts-example.yaml](config/shortcuts-example.yaml)（メニュー →「コマンド」）。上の段のセルが F14〜F17、その下が結果のタイル。スクリプトの例は [contrib/shortcuts/](contrib/shortcuts/)。
+
+![「コマンド」のレイヤー（結果を出したところ。プレビューの PNG）](gui/test/fixtures/commands-results.png)
+
+### 使うキー
+
+| キー | X11 の名前 | 使い方 |
+| --- | --- | --- |
+| F14〜F18 | `XF86Launch5`〜`XF86Launch9` | 修飾なしで使う（5 個）。GNOME、KDE とも既定の割り当てはない |
+| F13 | `XF86Tools` | **修飾なしでは使わない**。GNOME（`control-center-static`）と KDE Plasma（5.19 以降）は、F13 で「設定」を開く既定のショートカットを持っている。Ctrl などとの組み合わせなら使える |
+| Ctrl / Alt / Shift + F13〜F18 | 同じ名前に修飾キー | 足りない分はこれで増やす（Ctrl だけでも 6 個） |
+| F19〜F24 | F19、F24 は名前なし。F20〜F23 はマイクとタッチパッド | 使わない |
+
+macOS では、F13〜F19 はどれも既定の働きがなく、ショートカットに使える（外付けのキーボードで、F14 と F15 を画面の明るさにしている設定もある。下の手順を参照）。
+
+**この PC（Ubuntu 22.04、Enlightenment、X11）で調べた結果（2026-10-09）**：F13〜F18 と、修飾なし・Ctrl・Alt・Shift・Ctrl+Alt・Ctrl+Shift・Alt+Shift・Ctrl+Alt+Shift の 48 通りすべてを、X のショートカット（`XGrabKey`）として取れた（ほかのプログラムが使っていない）。調べ方が正しいことは、Enlightenment が使っている Alt+Tab が「使用中」になることで確かめた。キーの番号は、F13〜F18 が X のキーコード 191〜196（evdev の KEY_F13〜KEY_F18 に 8 を足したもの）。`XF86Tools` には 179 も割り当てられているので、名前でなくキーコードで指定するソフトでは 191 を使う。
+
+### Linux（GNOME）
+
+「設定」→「キーボード」→「キーボードショートカットを表示およびカスタマイズ」→「カスタムショートカット」→「＋」。名前（ビルド）、コマンド（`/home/<ユーザー>/bin/build.sh` のように絶対パス）を書き、「ショートカットを設定」で Brain のセル（F14）を押す。表示は `Launch5` などになる。
+
+コマンドでも登録できる（GNOME のショートカットの設定を書き換えるので、自分で実行する）：
+
+```sh
+P=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/brain-build/
+gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "['$P']"   # ほかのカスタムショートカットがあれば並べて書く
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$P name 'Brain ビルド'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$P command "$HOME/bin/build.sh"
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:$P binding 'XF86Launch5'   # F14。Ctrl+F14 は '<Control>XF86Launch5'
+```
+
+- 修飾なしの F13（`XF86Tools`）は「設定」を開くので使わない（変えるなら「設定」→「キーボード」→「システム」の「設定を開く」）。
+- Wayland でも同じ（キーの名前は xkb が決める）。
+
+### Linux（KDE Plasma）
+
+「システム設定」→「キーボード」→「ショートカット」→「新規追加」→「コマンドまたはスクリプト」（Plasma 5 は「カスタムショートカット」→「編集」→「新規」→「グローバルショートカット」→「コマンド/URL」）。コマンドにスクリプトの絶対パスを書き、ショートカットの欄で Brain のセルを押す。F14 は「Launch (5)」、F13 は「Tools」と表示される。F13 は既定で「システム設定」を開く。
+
+### Linux（Enlightenment）
+
+「設定」→「設定パネル」→「入力」→「キー割り当て」→「追加」（英語の表示では Settings → Settings Panel → Input → Key Bindings → Add）。セルを押してキーを決め、右の「アクション」で「起動」→「コマンド」（Launch → Command）を選び、下の欄にスクリプトの絶対パスを書いて「適用」。この PC の Enlightenment は、F13〜F18 をどの修飾でも使っていない（上の結果）。
+
+### macOS（「ショートカット」アプリ）
+
+1. 「ショートカット」アプリで新しいショートカットを作り、アクションに「シェルスクリプトを実行」を足す。中身に、スクリプトの絶対パスを書く（`/Users/<ユーザー>/bin/build.sh`）。PATH が短いので、スクリプトの中では `brain-deck` も絶対パスで呼ぶか、`PATH=$HOME/.local/bin:$PATH` を足す（[contrib/shortcuts/build.sh](contrib/shortcuts/build.sh) のように）。
+2. ショートカットの詳細（右の ⓘ）→「キーボードショートカットを追加」で、Brain のセル（F14）を押す。
+3. 初めて実行するとき、ショートカットが brain-deck の実行やファイルへのアクセスの許可を求めることがある。
+4. F14 と F15 が画面の明るさになっているときは、「システム設定」→「キーボード」→「キーボードショートカット」の「ディスプレイ」で、明るさの項目を外す。
+
+macOS の実機では試していない（手元に Mac がない）。F13〜F19 を macOS がショートカットに使えることは、Apple のコミュニティなどの情報による。
+
+### brain-deck exec
+
+```sh
+brain-deck exec --result build -- make -j4                 # 結果をタイル build に出す
+brain-deck exec --result deploy --limit 30m -- ./deploy.sh # 時間の上限（既定 10m。過ぎたら止めて「時間切れ」）
+brain-deck exec --result test --ttl 1h -- make test        # 結果を 1 時間で薄く表示（期限切れ）にする
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `--result <id>` | 結果を出すテキストのタイルの id（必須）。設定にそのセルがなくても、コマンドは実行する |
+| `--` | コマンドの前に必ず書く（コマンドの引数を brain-deck のオプションと取り違えないため） |
+| タイルの文 | 実行中：`実行中 18:16` とコマンド。終わったら `成功 18:14 2.0秒`、`失敗(2) 18:15 12秒`、`時間切れ 18:20 10分`、`実行不可`（コマンドがない）のどれかと、出力（標準出力と標準エラー）の最後の空でない行。色のエスケープと `\r` の書き直しは除く。どの行も、4×4 の格子の 1×1 のセルで縮めずに描ける幅（半角 19 文字）に切る |
+| 出力 | コマンドの出力は、そのまま brain-deck の標準出力と標準エラーにも出す（ショートカットから動かすときは、スクリプトでファイルに残す） |
+| 時間の上限 | `--limit`（既定 10 分）。過ぎたら、コマンドのプロセスグループに SIGTERM、5 秒後に SIGKILL を送り、終了コード 124 |
+| 重ねない | 同じ id で実行中なら、何もせずに終了コード 75（ロックファイル `$XDG_RUNTIME_DIR/brain-deck-exec-<uid>-<id>.lock`）。ショートカットを続けて押しても、ビルドが 2 つ動かない。違う id は同時に動く |
+| タイルに書けないとき | Brain がない、設定 GUI が接続中のときも、コマンドは実行し、コマンドの終了コードを返す（標準エラーに注意を出す）。ポートを開くのはタイルに書く一瞬だけなので、コマンドの中で `brain-deck text` などを使ってもよい |
+| Ctrl-C | brain-deck が受けた SIGINT、SIGTERM はコマンドにも送る |
+
+### 確かめる手順
+
+1. 設定 GUI で `config/shortcuts-example.yaml` を開き、「Brain に保存…」で保存する（または `brain-deck config put config/shortcuts-example.yaml`）。メニュー →「コマンド」。
+2. PC で `xev -event keyboard`（Wayland では `wev`）を開き、Brain の「ビルド」を押す。`keycode 192 (keysym 0x1008ff45, XF86Launch5)` と出れば、F14 が PC に届いている。「lint」（Ctrl+F14）では `Control_L` に続いて同じキーが出る。
+3. 端末で `brain-deck exec --result build -- sh -c 'sleep 3; echo ok'` を実行し、Brain の「ビルド」のタイルが「実行中」→ 緑の「成功」と `ok` になることを確かめる。
+4. OS のショートカットに [contrib/shortcuts/build.sh](contrib/shortcuts/build.sh)（`PROJECT` を自分のディレクトリに）を F14 で割り当て、Brain の「ビルド」を押す。
 
 ## 設定 GUI
 
@@ -713,6 +814,10 @@ brain-deck images                                          # Brain にある背�
 brain-deck time sync                                       # PC の時刻を Brain に送る
 brain-deck terminal on                                     # 端末モードに入る（off で抜ける。引数なしで今の状態）
 brain-deck status                                          # 版、レイヤー、Brain の時刻、電池、画面の明るさ
+brain-deck exec --result build -- make                     # コマンドを実行し、結果をタイル build に出す（コマンドのショートカット）
+brain-deck update lefthand-<版>.update.tar.gz             # lefthand と gadget-setup.sh を組で更新する（Brain の保守）
+brain-deck logs -f                                         # Brain の lefthand のログを追いかける
+brain-deck config put my.yaml                              # 設定を検証して、コメントもそのまま書き、すぐ反映する
 ```
 
 ### 入れ方
@@ -931,6 +1036,9 @@ macOS の launchd（`~/Library/LaunchAgents/local.brain-deck.calendar.plist`。`
 | 5 | Brain がエラーを返した | `--style` の誤り、古い lefthand（`set_text` がない）、Todo を読んだあとに Brain で変わった |
 | 6 | ポートを開く権限がない | Linux で dialout に入っていない |
 | 7 | 予定の取得に失敗した（`calendar sync`） | ICS の URL が 404、ネットワークにつながらない。取れたカレンダーは送っている |
+| 8 | 更新や再起動に失敗した（`update`、`restart`、`config put --restart`、`reboot`） | 新しい lefthand が起動しなかった（Brain は前の版に戻した）、`reboot` で Brain のポートが消えない |
+
+`exec` は、実行したコマンドの終了コードを返す（タイルに書けなくても）。ほかに、コマンドが `--limit` の時間内に終わらなかったら 124（`timeout` コマンドと同じ）、同じ `--result` の id で実行中なら 75。使い方の誤りは 2。
 
 - **待つ時間**：Brain との通信は、全体で 5 秒（`--timeout` で変える）。`calendar sync` の予定の取得は、これとは別に 30 秒まで（`--fetch-timeout`）。Brain が見つからない、GUI が接続中のときは、すぐに終わる。ビルドのスクリプトから呼んでも止まらない。
 - **出力**：成功したときは 1 行を標準出力に、エラーは標準エラーに出す。`-q` で成功の出力を消す。`-v` で通信の中身を出す。
@@ -1014,6 +1122,60 @@ Brain には RTC がないので、電源を切ると時刻が遅れる（[時�
 - **ユーザー**：自分の crontab に書く（root の crontab や `/etc/cron.d` で root として動かさない）。root は TIOCEXCL を無視するので、GUI の接続中に割り込んでしまうことがある。
 - **macOS**：cron も使えるが、launchd（`~/Library/LaunchAgents/` の plist で `StartInterval` 600）のほうが、スリープから戻ったあとも動く。
 - **NTP との比較**：PC を NTP サーバーにする方法（下）は、つないでいるあいだずっと合い続けるが、PC の設定が要る。brain-deck は cron に 1 行足すだけでよい。
+
+## Brain の保守（ssh を使わない）
+
+一度 lefthand を入れたあとは（[インストール](#インストール)。SD カードに直接入れれば、最初から ssh は要らない）、USB のシリアルだけで、更新、再起動、ログ、設定の読み書きができる。どれも Brain の画面での確認はしない（USB でつながっていることを、手元の PC からの操作とみなす）。そのかわり、失敗したら戻せるようにしてある。
+
+```sh
+go run ./tools/mkupdate                      # ARMv5 向けにビルドし、lefthand-<版>.update.tar.gz を作る（約 4 MB）
+brain-deck update lefthand-<版>.update.tar.gz   # 送る → Brain で確かめる → 入れ替える → つなぎ直して確かめる
+brain-deck update --rollback                 # 前の版に戻す（もう一度実行すると、戻す前の版になる）
+brain-deck update --status                   # 今の版、前の版があるか、最後の更新の結果
+brain-deck restart                           # lefthand を再起動する
+brain-deck restart --usb                     # USB も付け直す（数秒、キー入力と SSH とシリアルが切れる）
+brain-deck logs -n 200                       # lefthand と更新の係のログ（journal）
+brain-deck logs -f                           # 追いかける（Ctrl-C で終わる。lefthand を再起動しても続く）
+brain-deck config get > brain.yaml           # 設定ファイルを、コメントもそのまま読む（--prev で前の版）
+brain-deck config check brain.yaml           # Brain で検証するだけ
+brain-deck config put brain.yaml             # 検証してから、そのまま書き、すぐ反映する（前の版は .prev）
+brain-deck reboot                            # Brain を再起動し、起動するまで待つ（約 1 分）
+brain-deck poweroff                          # Brain の電源を切る
+```
+
+### 更新（update）
+
+lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタを同じにしておく必要があるので、いつも**組で**入れ替える。更新のファイル（`tools/mkupdate` が作る tar.gz）には、`manifest.json`、`lefthand`、`gadget-setup.sh` が入っている。
+
+1. **送る**：brain-deck が 96 KiB ずつ送る（実機で 4.3 MB を 6.8 秒）。途中で切れたら、Brain は受け取ったものを捨てる。
+2. **確かめる**（まだ何も変えない）：SHA-256（全体と manifest のファイルごと）、新しい lefthand を実際に `-version` で実行して manifest の版と同じか（CPU の種類が違えばここで分かる）、`-check-gadget` で新しい lefthand のディスクリプタと gadget-setup.sh のものが同じか、`-check` で今の設定を新しい lefthand が読めるか、`bash -n`。gadget-setup.sh が変わるときは、`GADGET_CHECK=1` で USB の付け直しが要るかを調べる。brain-deck は結果（版、gadget-setup.sh が変わるか、付け直しが要るか、その理由）を出す。`--dry-run` ならここで消して終わる。
+3. **入れ替える**：Brain のデーモンが、別のユニット（`lefthand-update`）で「係」（`lefthand -update-apply`）を起動する。係は lefthand.service を止め、今の lefthand と gadget-setup.sh を `.prev` に残して入れ替え、gadget-setup.sh が変わっていれば実行し（違うところがあれば USB を付け直す。今の USB の形は保つ）、lefthand.service を起動する。
+4. **確かめる**：新しい lefthand が起動を知らせ（版が合う）、brain-deck がシリアルでつなぎ直して `update_confirm` を送るのを待つ。**どちらかが時間内に来なければ（起動 45 秒、つなぎ直し 90 秒）、係は前の版（と前の `.prev`）に戻して起動し直す**。brain-deck は「前の版に戻しました」と理由を出し、終了コード 8 で終わる。
+
+- **時間**（実機）：同じ gadget-setup.sh で 41 秒、gadget-setup.sh が変わる（付け直しは要らない）ときで 37 秒、`--rollback` で 23 秒。brain-deck の `--timeout` の既定は 5 分。
+- **断るとき**：端末モードのあいだ、USB の形の切り替えの途中、ほかの更新や再起動の途中（`conflict`）。SD カードの空きが足りない（tar.gz の 3 倍と、16 MiB かファイルシステムの 10% を残せない）とき（`no_space`）。
+- **最初の一度**：この仕組みは、この版の lefthand から入っている。それより前の lefthand は `brain-deck update` を知らないので、最初の一度だけ [インストール](#インストール) の手順で入れ替える。
+- **`--rollback` で古い版に戻すとき**：起動を知らせる仕組みがない古い版（2026-10-09 より前）に戻すときは、10 秒動き続けるかだけを確かめる。戻した先の版では `brain-deck update` が使えないので、次は [インストール](#インストール) の手順で入れる。
+- **ログ**：係の動きは `brain-deck logs` に `update-apply:` の行で出る。最後の結果は Brain の `/var/lib/lefthand/update/state.json`。
+
+### 再起動（restart、reboot、poweroff）
+
+- **restart**：係が lefthand.service を止めて起動し、新しい lefthand が起動を知らせるまで待つ（実機で 11 秒）。`--usb` なら、止めているあいだに UDC から切り離して gadget-setup.sh で付け直す（15 秒）。lefthand が自分で自分を止めることはできないので、どれも係（別のユニット）が行う。
+- **reboot**：Brain が返事を送ってから 0.5 秒後に `systemctl reboot`。brain-deck は Brain のポートが消えるのを待ち、また現れて lefthand が答えるまで待つ（`--timeout` の既定 4 分）。`--no-wait` なら頼んだらすぐ終わる。
+- **poweroff**：同じく `systemctl poweroff`。ポートが消えたら終わる。起動するときは Brain の電源ボタン。
+
+### 設定（config）
+
+- **put**：書く前に `-check` と同じ検証をし、誤りがあれば場所（`/layers/0/keys/KEY_Q` など）を出して何も書かない。正しければ、送ったファイルを**コメントもそのまま**置き換え（設定 GUI の保存と違い、書き直さない）、前の版を `config.yaml.prev` に残し、再起動せずに反映する。
+- **再起動が要る項目**（`hid_device`、`keyboard`、`touch.device`、`display`）が変わるときは、何も書かずに終了コード 5 で、その項目を出す。`--restart` を付けると、書いてから lefthand を再起動する。新しい設定で lefthand が起動しなければ、前の設定（`.prev`）に戻して起動し直す。
+- **get**：今のファイルをそのまま出す（`--prev` で前の版）。戻すときは `brain-deck config get --prev > prev.yaml && brain-deck config put prev.yaml`。
+
+### まだ ssh（か Brain 本体でのログイン）が要ること
+
+- カーネルの入れ替え（[docs/kernel-build.md](docs/kernel-build.md)）、Brainux そのものの更新（apt）。
+- systemd のユニットと drop-in（`lefthand.service`、`ethernet_gadget.service.d`）、`/etc/lefthand/gadget.env`、シリアルコンソール（`console-setup.sh`）の変更。
+- `/var/lib/lefthand/`（Todo、テキストなど）のバックアップ。
+- lefthand が起動しなくなったとき（係が戻せなかったとき）。Brain 本体のキーボードと画面で、ログイン画面（ly）からログインして直すこともできる。
 
 ## 時刻合わせ
 
@@ -1480,7 +1642,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | qr.go | QR コードの符号化（Project Nayuki の手順をバイトモードに絞ったもの。gui/src/qr.ts も同じ） |
 | battery.go | 電池の状態（power_supply か、i.MX28 の LRADC の電圧） |
 | backlight.go | 自動減光（設定の backlight）。暗いときのタッチを捨てる、終わるときに戻す |
-| image.go | 背景画像の置き場所、受け取り（分割、SHA-256 の確認、一時ファイル）、一覧、削除、読み込みとキャッシュ、先読み |
+| image.go | 背景画像の置き場所、受け取り（transfer.go を使う）、一覧、削除、読み込みとキャッシュ、先読み |
+| transfer.go | 分割して送られる大きなファイルの受け取り（SHA-256 の確認、一時ファイル、順番、時間切れ）。種類を選べる upload_*（update、image） |
+| update.go | 更新のファイルの展開と確かめ（-version、-check-gadget、-check、GADGET_CHECK）、係の起動、restart、power、get_logs、起動の知らせ（-ready-file） |
+| updatehelper.go | 入れ替えの係（-update-apply）：止める、.prev に残して入れ替える、gadget-setup.sh、起動、確認を待つ、戻す |
 | todo.go | Todo の項目（get_todo、todo_* のコマンドの中身）と、その保存、変わったことの通知 |
 | todowidget.go | Todo のセルの配置、描画、ページ送り、長押しでの切り替え |
 | text.go | テキストのタイルの中身（set_text、get_text）と、その保存 |
@@ -1497,7 +1662,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | tools/mkfont/ | BDF フォントを埋め込み用の形式に変換するツール |
 | gadget-setup.sh | USB ガジェットを作るスクリプト。bash で実行すること（sh では HID の設定が壊れる） |
 | systemd/ | サービスと drop-in（serial-getty@ttyGS0.service.d/ はシリアルコンソールの getty） |
-| install.sh | Brain 上での配置 |
+| install.sh | Brain 上での配置。`--root` で、PC から SD カードのルートに直接入れる |
 | console-setup.sh | シリアルコンソール（ttyGS0 の getty）を有効にする・元に戻す |
 | contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則（70）、端末モードのときだけ getty を起動する規則（71）、スリープ解除を許す規則（72） |
 | contrib/systemd/brain-terminal-getty@.service、contrib/profile.d/brain-terminal.sh | PC 用。端末モードの getty と、端末の大きさを合わせるスクリプト |
@@ -1509,6 +1674,9 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config/trackpad-example.yaml | トラックパッドとマウスのボタンの例（current.yaml に「マウス」のレイヤーを足したもの） |
 | config/media-example.yaml | メディアキーと F13〜F24 の例（current.yaml に「メディア」と「F13〜F24」のレイヤーを足したもの） |
 | config/gadgets-example.yaml | 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプと、自動減光の例（widgets-example.yaml に「道具」と「共有」のレイヤーと backlight を足したもの） |
+| tools/mkupdate/ | brain-deck update で送る更新のファイル（manifest.json、lefthand、gadget-setup.sh の tar.gz）を作る |
+| config/shortcuts-example.yaml | コマンドのショートカットの例（current.yaml に「コマンド」のレイヤーを足したもの。F14〜F18、Ctrl + F14〜F16、結果のタイル） |
+| contrib/shortcuts/ | PC 用。OS のショートカットに割り当てるスクリプトの例（brain-deck exec でビルド、サービスの再起動） |
 | tools/record-touch.sh | トラックパッドの調整のために、動きごとにタッチを記録する（Brain で実行） |
 | tools/fbshot.sh | Brain の画面のスクリーンショットを、PC に PNG で保存する（PC で実行） |
 | testdata/touch/ | Brain で記録したタッチ（テストで再生する） |
@@ -1620,6 +1788,10 @@ go run . -render-png $F/media.png -render-layer media $C
 go run . -render-png $F/media-off.png -render-layer media -render-mouse-off $C
 go run . -render-png $F/media-off-pressed-fill.png -render-layer media -render-mouse-off -render-pressed "1,0 0,1" -render-press-style fill $C
 go run . -render-png $F/fkeys.png -render-layer fkeys $C
+# コマンドのショートカット（結果のタイルの中身は gui/test/fixtures/texts-exec.json）
+C=config/shortcuts-example.yaml; T=2026-10-09T18:21:00+09:00
+TZ=Asia/Tokyo go run . -render-png $F/commands.png -render-layer commands -render-time $T $C
+TZ=Asia/Tokyo go run . -render-png $F/commands-results.png -render-layer commands -render-time $T -render-texts $F/texts-exec.json -render-pressed "0,0 1,2" $C
 ```
 
 `TestHWCalendar` は、6 秒後に始まって 9 秒後に終わる予定で、予定の始まりと終わりに自分で描き直すことと、▲▼、PC から送り直したときの描き直しの時間を測る。
@@ -1656,6 +1828,26 @@ ssh brain 'sudo systemctl stop lefthand.service && sudo systemd-run --collect --
 # 明るさは /sys/class/backlight/backlight@0/brightness、ログは journalctl -u lefthand-try、画面は tools/fbshot.sh で見る
 ```
 
+`brain-deck update` などを試すときは、本番の場所を使わないよう、入れ替える先とデータの場所を /tmp に置いた試験用のユニットを作る（/run に置くので、Brain を再起動すると消える。時間が来ると止まり、本番のサービスを起動し直す）。
+
+```sh
+# Brain：/tmp/lhu に lefthand、gadget-setup.sh、設定の写しを置いてから
+cat <<'EOF' | sudo tee /run/systemd/system/lefthand-hwtest.service
+[Unit]
+Conflicts=lefthand.service
+[Service]
+ExecStart=/tmp/lhu/bin/lefthand -data-dir /tmp/lhu/data -update-bin /tmp/lhu/bin/lefthand -update-gadget /tmp/lhu/sbin/gadget-setup -gadget-setup /tmp/lhu/sbin/gadget-setup -ready-file /tmp/lhu/ready /tmp/lhu/config.yaml
+ExecStopPost=-/tmp/lhu/bin/lefthand -restore-console
+RuntimeMaxSec=1200
+EOF
+sudo systemctl daemon-reload
+sudo systemd-run --unit=lefthand-hwtest-end --on-active=20min /bin/sh -c "systemctl stop lefthand-hwtest; systemctl start lefthand.service"
+sudo systemctl start lefthand-hwtest
+# PC：版を変えてビルドし、更新のファイルを作って送る
+GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=hwtest-b" -o lefthand-b .
+go run ./tools/mkupdate -bin lefthand-b -version hwtest-b -o b.tar.gz && brain-deck update b.tar.gz
+```
+
 ssh の中で、明るさを読むループを `&` で動かすときは、`nohup ... > ファイル 2>&1 < /dev/null &` にする（出力をつないだままだと、ssh がループの終わりまで戻らない）。
 
 ### コマンドラインのオプション
@@ -1670,6 +1862,13 @@ lefthand -calibrate [config.yaml]            タッチの座標を測る
 lefthand -check [config.yaml]                設定を検証して終わる
 lefthand -dump-json [config.yaml]            layers の形にそろえた JSON を出力して終わる
 lefthand -restore-console                    残った専用 VT を元に戻して終わる
+lefthand -version                            版を JSON で書いて終わる（{"version":"…","update":1}。brain-deck update が新しい版を確かめる）
+lefthand -check-gadget gadget-setup.sh       gadget-setup.sh のディスクリプタが、この lefthand のものと同じかを確かめて終わる
+lefthand -update-apply plan.json             更新・再起動の係として動いて終わる（デーモンが systemd-run で起動する。手で使わない）
+         -update-bin path                    brain-deck update で入れ替える lefthand（既定 /usr/local/bin/lefthand）
+         -update-gadget path                 brain-deck update で入れ替える gadget-setup.sh（既定 /usr/local/sbin/lefthand-gadget-setup）
+         -ready-file path                    起動を終えたことを書くファイル（既定 /run/lefthand-ready。空なら書かない）
+         -unit name                          自分の systemd のサービス（省略すると /proc/self/cgroup から読む）
 lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き出して終わる
          -render-layer name[:hold]           base に重ねるレイヤー（hold なら一時的な色）
          -render-pressed "列,行 ..."         押下中として描くセル
