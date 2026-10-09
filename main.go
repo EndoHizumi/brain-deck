@@ -818,12 +818,33 @@ func main() {
 	replayCfg := flag.String("replay-config", "", "-replay-touch で、トラックパッドの設定を読む設定ファイル（省略すると既定値）")
 	replayParams := flag.String("replay-params", "", `-replay-touch で、上書きするトラックパッドの項目（JSON。例: {"speed":1.5,"smooth":4}）`)
 	replayOps := flag.Bool("replay-ops", false, "-replay-touch で、送るマウスの操作を 1 つずつ書く")
+	showVersion := flag.Bool("version", false, "版を JSON で書いて終わる（brain-deck update が、新しい lefthand を確かめるのに使う）")
+	checkGadget := flag.String("check-gadget", "", "この gadget-setup.sh のディスクリプタが、この lefthand のものと同じかを確かめて終わる")
+	updateApply := flag.String("update-apply", "", "更新・再起動の係として、plan.json のとおりに入れ替えて終わる（デーモンが systemd-run で起動する）")
+	updateBin := flag.String("update-bin", "/usr/local/bin/lefthand", "brain-deck update で入れ替える lefthand の場所")
+	updateGadget := flag.String("update-gadget", defaultGadgetSetup, "brain-deck update で入れ替える gadget-setup.sh の場所")
+	readyFile := flag.String("ready-file", defaultReadyFile, "起動を終えたことを書くファイル（更新の係が、新しい版が動いたことを確かめる）。空なら書かない")
+	unitName := flag.String("unit", "", "自分の systemd のサービスの名前（省略すると /proc/self/cgroup から読む。再起動と更新に使う）")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [-v] [-calibrate] [-check] [-dump-json] [-restore-console] [-render-png out.png] [config.yaml]\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
+	switch {
+	case *showVersion:
+		printVersion()
+		return
+	case *checkGadget != "":
+		if err := checkGadgetScript(*checkGadget); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("ok: the descriptors in", *checkGadget, "match", daemonVersion())
+		return
+	case *updateApply != "":
+		os.Exit(runUpdateHelper(*updateApply))
+	}
 	if *restore {
 		restoreConsole()
 		restoreBacklight()
@@ -1166,6 +1187,14 @@ func main() {
 			term:    term,
 			started: time.Now(),
 		}
+		upd := NewUpdater(*dataDir, *updateBin, *updateGadget, *unitName, cfgPath, imagesDir, *readyFile, usb, term)
+		ctl.updater = upd
+		ctl.uploads = NewUploads()
+		ctl.uploads.Register("update", upd.UploadKind())
+		ctl.uploads.Register("image", images.UploadKind())
+		if upd.Unit == "" {
+			log.Printf("update: not running as a systemd service; brain-deck update and restart are unavailable")
+		}
 		todos.SetOnNotify(mon.TodoChanged)
 		gadgets.SetOnNotify(mon.WidgetsChanged)
 		go ctl.runSerial(*serialPath)
@@ -1174,6 +1203,7 @@ func main() {
 	if touch != nil {
 		go runTouch(touch, e, disp, mon, dim)
 	}
+	writeReady(*readyFile) // 更新の係は、これで新しい版が起動したことを知る
 	runKeyboard(kbd, e, mon, dim)
 }
 

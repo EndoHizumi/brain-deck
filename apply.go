@@ -208,26 +208,70 @@ func (s *configStore) Set(raw []byte) ([]string, error) {
 		return nil, fmt.Errorf("internal error: the YAML to be saved does not read back the same (%v)", err)
 	}
 
+	return warns, s.save(out, cfg, km)
+}
+
+// save は out を設定ファイルに書き（前の版は .prev）、cfg と km を反映する。反映に失敗したらファイルも戻す。
+func (s *configStore) save(out []byte, cfg *Config, km *Keymap) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old, err := os.ReadFile(s.path)
 	if err != nil {
-		return nil, fmt.Errorf("read current config: %w", err)
+		return fmt.Errorf("read current config: %w", err)
 	}
 	if err := writeFileAtomic(s.path, out, true); err != nil {
-		return nil, fmt.Errorf("save %s: %w", s.path, err)
+		return fmt.Errorf("save %s: %w", s.path, err)
 	}
 	if err := s.apply(cfg, km); err != nil {
 		aerr := err
 		// ファイルを元に戻し、前の割り当てで動かす
 		if err := writeFileAtomic(s.path, old, false); err != nil {
-			return nil, fmt.Errorf("apply failed (%v), and restoring %s also failed: %v", aerr, s.path, err)
+			return fmt.Errorf("apply failed (%v), and restoring %s also failed: %v", aerr, s.path, err)
 		}
 		if err := s.apply(s.cfg, s.km); err != nil {
-			return nil, fmt.Errorf("apply failed (%v), and re-applying the previous config also failed: %v", aerr, err)
+			return fmt.Errorf("apply failed (%v), and re-applying the previous config also failed: %v", aerr, err)
 		}
-		return nil, fmt.Errorf("apply failed: %v: %w", aerr, errRolledBack)
+		return fmt.Errorf("apply failed: %v: %w", aerr, errRolledBack)
 	}
 	s.cfg, s.km = cfg, km
-	return warns, nil
+	return nil
+}
+
+// errNeedsRestart は、put_config_text で、再起動が要る項目が変わったのに、再起動を許されていないこと。
+var errNeedsRestart = errors.New("the config changes items that need a restart")
+
+// PutText は、YAML のテキスト（手で書いたもの）を検証し、コメントもそのままにファイルを置き換えて、反映する。
+// 前の版は .prev に残す。再起動が要る項目（hid_device など）が変わるときは、allowRestart なら書くだけで反映せず
+// restart を true で返す（呼ぶ側がデーモンを再起動する）。許されていなければ、何も書かずに errNeedsRestart を返す。
+// dryRun なら、検証だけをする。
+func (s *configStore) PutText(raw []byte, allowRestart, dryRun bool) (warns []string, restart Problems, err error) {
+	cfg, km, warns, err := checkConfig(raw)
+	if err != nil {
+		return nil, nil, asProblems(err) // YAML の文法の誤りなども、場所付きの誤りの形にする
+	}
+	rp := restartProblems(s.Current(), cfg)
+	if len(rp) > 0 && !allowRestart && !dryRun {
+		return warns, rp, errNeedsRestart
+	}
+	if dryRun {
+		return warns, rp, nil
+	}
+	if len(rp) > 0 {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := writeFileAtomic(s.path, raw, true); err != nil {
+			return nil, nil, fmt.Errorf("save %s: %w", s.path, err)
+		}
+		return warns, rp, nil
+	}
+	return warns, nil, s.save(raw, cfg, km)
+}
+
+// Text は設定ファイルの中身（prev なら .prev）を返す。
+func (s *configStore) Text(prev bool) ([]byte, error) {
+	p := s.path
+	if prev {
+		p += ".prev"
+	}
+	return os.ReadFile(p)
 }

@@ -100,7 +100,8 @@ layers:
       KEY_Q: LCTRL+C
 `
 
-func newTestDaemon(t *testing.T, src string) *testDaemon {
+// setup があれば、Serve を始める前に呼ぶ（Controller に足すもの）。
+func newTestDaemon(t *testing.T, src string, setup ...func(*testDaemon)) *testDaemon {
 	t.Helper()
 	dir := t.TempDir()
 	d := &testDaemon{t: t, path: filepath.Join(dir, "config.yaml"), hid: filepath.Join(dir, "hidg"), served: make(chan error, 1)}
@@ -133,6 +134,9 @@ func newTestDaemon(t *testing.T, src string) *testDaemon {
 	d.images = OpenImageStore(filepath.Join(d.dataDir, "images"))
 	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, todos: d.todos,
 		cals: d.cals, images: d.images, qrs: d.qrs, gadgets: d.gadgets, started: time.Now()}
+	for _, f := range setup {
+		f(d)
+	}
 	daemonSide, gui := net.Pipe()
 	d.conn, d.rd = gui, bufio.NewReaderSize(gui, 1<<20)
 	go func() { d.served <- d.ctl.Serve(daemonSide) }()

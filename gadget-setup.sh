@@ -41,6 +41,9 @@
 #                /etc/lefthand/gadget.env にも書ける。違っていれば、UDC から切り離して書き換える
 #   GADGET_UNBIND_ONLY=1  UDC から切り離すだけで終わる。lefthand の端末モードが、切り離しているあいだに
 #                    Brain の getty を止める・ttyGS0 を閉じるために使う（そのあと、もう一度このスクリプトで付ける）
+#   GADGET_CHECK=1   何も変えずに、このスクリプトを実行したら USB を付け直すかを調べる。付け直すなら理由を
+#                    「rebind: …」の行に書いて終了コード 10、今のままでよければ 0。brain-deck update が、
+#                    入れ替える前に知らせるために使う（lefthand の update.go）
 set -e
 
 GADGET_ENV=${GADGET_ENV:-/etc/lefthand/gadget.env}
@@ -235,6 +238,34 @@ add_acm_gui() {
   echo "NCM+HID+ACM+ACM" > configs/c.1/strings/0x409/configuration
   echo "added: ACM for the settings GUI (port $(cat functions/acm.usb1/port_num))"
 }
+
+# 何も変えずに、付け直しが要るかを調べる（GADGET_CHECK=1）
+if [ "${GADGET_CHECK:-0}" = 1 ]; then
+  need=0
+  reason() { echo "rebind: $*"; need=1; }
+  if [ ! -d "$G" ]; then
+    reason "the gadget $G does not exist"
+  else
+    if [ ! -e "$G/configs/c.1/hid.usb0" ]; then
+      reason "HID and ACM are not linked"
+    elif ! hid_matches; then
+      reason "the HID report descriptor or attributes differ (want $HID_KIND)"
+    fi
+    [ -e "$G/configs/c.1/acm.usb1" ] || reason "the ACM for the settings GUI is not linked"
+    want_conf="NCM+HID+ACM+ACM"
+    [ "${GADGET_TERMINAL:-0}" = 1 ] && want_conf="$want_conf terminal"
+    [ "$(cat "$G/configs/c.1/strings/0x409/configuration" 2>/dev/null)" = "$want_conf" ] || reason "the configuration name differs (want $want_conf)"
+    want_attr=0x80
+    [ "$USB_WAKEUP" = 1 ] && want_attr=0xa0
+    [ "$(cat "$G/configs/c.1/bmAttributes" 2>/dev/null)" = "$want_attr" ] || reason "bmAttributes differs (want $want_attr)"
+    [ -n "$(cat "$G/UDC" 2>/dev/null)" ] || reason "the gadget is not bound to the UDC"
+  fi
+  if [ "$need" = 1 ]; then
+    exit 10
+  fi
+  echo "up to date: HID = $HID_KIND"
+  exit 0
+fi
 
 [ -d "$G" ] || create_eth
 

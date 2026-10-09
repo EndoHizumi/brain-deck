@@ -56,6 +56,8 @@ const (
 	errQuota      = "quota_exceeded"  // 画像：合計の上限を超える
 	errNoSpace    = "no_space"        // 画像：SD カードの空きが足りない
 	errHash       = "hash_mismatch"   // 画像：受け取った中身の SHA-256 が違う。何も残していない
+	errRejected   = "update_rejected" // 更新：受け取ったものを確かめて断った。何も変えていない
+	errRestart    = "needs_restart"   // put_config_text：再起動が要る項目が変わった。何も書いていない
 )
 
 // 通知の種類（event）
@@ -155,6 +157,15 @@ type request struct {
 	Keep   []string `json:"keep,omitempty"`  // prune_images：今の設定のほかに残す id（GUI で編集中の設定が使うもの）
 	State  string   `json:"state,omitempty"` // set_presence：状態の名前
 	Step   int      `json:"step,omitempty"`  // set_presence：+1 で次、-1 で前の状態
+	// 更新、再起動、電源、ログ、設定のテキスト
+	Kind    string `json:"kind,omitempty"`    // upload_begin：受け取るものの種類（update、image）
+	Stage   string `json:"stage,omitempty"`   // update_apply、update_confirm、update_discard：upload_end などが返した名前
+	USB     bool   `json:"usb,omitempty"`     // restart：USB も付け直す
+	Action  string `json:"action,omitempty"`  // power：reboot か poweroff
+	Lines   int    `json:"lines,omitempty"`   // get_logs：行数
+	Cursor  string `json:"cursor,omitempty"`  // get_logs：前の結果の cursor（そのあとだけ読む）
+	Prev    bool   `json:"prev,omitempty"`    // get_config_text：前の版（.prev）を読む
+	Restart bool   `json:"restart,omitempty"` // put_config_text：再起動が要る項目が変わってもよい（書いて再起動する）
 }
 
 type response struct {
@@ -412,6 +423,8 @@ type Controller struct {
 	images  *ImageStore
 	usb     *USBMode
 	term    *TermMode
+	uploads *Uploads // upload_*（種類を選べる分割の受け取り）
+	updater *Updater // 更新、再起動、電源、ログ
 	started time.Time
 }
 
@@ -442,7 +455,11 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
 				"set_calendar", "get_calendar",
 				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_terminal",
-				"set_qr", "get_qr", "get_widgets", "set_presence"},
+				"set_qr", "get_qr", "get_widgets", "set_presence",
+				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
+				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
+				"restart", "power", "get_logs", "get_config_text", "put_config_text"},
+			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -552,6 +569,12 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(calendarJSON(c.cals.Snapshot(), calendarShown(c.store.Current())))
 	case "list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images":
 		return c.image(id, req)
+	case "upload_begin", "upload_chunk", "upload_end", "upload_abort":
+		return c.upload(id, req)
+	case "update_apply", "update_discard", "update_rollback", "update_confirm", "update_status", "restart", "power", "get_logs":
+		return c.update(id, req)
+	case "get_config_text", "put_config_text":
+		return c.configText(id, req)
 	case "subscribe_data":
 		on := req.Enable == nil || *req.Enable
 		if on {
@@ -866,6 +889,169 @@ func (c *Controller) image(id json.RawMessage, req request) response {
 	}
 }
 
+// upload は upload_* を処理する。
+func (c *Controller) upload(id json.RawMessage, req request) response {
+	var (
+		res any
+		err error
+	)
+	switch req.Cmd {
+	case "upload_begin":
+		src := req.Source
+		if src == "" {
+			src = "unknown"
+		}
+		res, err = c.uploads.Begin(UploadBegin{Kind: req.Kind, SHA256: req.SHA256, Bytes: req.Bytes, Name: req.Name, Source: src})
+	case "upload_chunk":
+		if req.Offset == nil || req.Data == "" {
+			return errResp(id, errBadRequest, `"upload", "offset" and "data" (base64) are required`, nil)
+		}
+		b, derr := base64.StdEncoding.DecodeString(req.Data)
+		if derr != nil {
+			c.uploads.Abort(req.Upload)
+			return errResp(id, errBadRequest, "data is not valid base64: "+derr.Error()+" (the upload was discarded)", nil)
+		}
+		var got int64
+		got, err = c.uploads.Chunk(req.Upload, *req.Offset, b)
+		res = map[string]any{"received": got}
+	case "upload_end":
+		res, err = c.uploads.End(req.Upload)
+	case "upload_abort":
+		res = map[string]any{"aborted": c.uploads.Abort(req.Upload)}
+	}
+	if err != nil {
+		return c.updateErr(id, err)
+	}
+	return response{ID: id, OK: true, Result: res}
+}
+
+// update は、更新、再起動、電源、ログのコマンドを処理する。
+func (c *Controller) update(id json.RawMessage, req request) response {
+	u := c.updater
+	if u == nil {
+		return errResp(id, errInternal, "updates are not available", nil)
+	}
+	var (
+		res any
+		err error
+	)
+	switch req.Cmd {
+	case "update_apply":
+		var p *updatePlan
+		if p, err = u.Apply(req.Stage); err == nil {
+			res = map[string]any{"stage": p.Stage, "action": p.Action, "version": p.Version, "from": p.From,
+				"helper": updateHelperUnit, "confirm": p.Confirm}
+		}
+	case "update_discard":
+		res = map[string]any{"discarded": u.Discard(req.Stage)}
+	case "update_rollback":
+		res, err = u.PrepareRollback()
+	case "update_confirm":
+		if err = u.Confirm(req.Stage); err == nil {
+			res = map[string]any{"confirmed": true, "version": daemonVersion()}
+			log.Printf("update: %s confirmed by %s", req.Stage, req.Source)
+		}
+	case "update_status":
+		res = u.Status()
+	case "restart":
+		var p *updatePlan
+		if p, err = u.Restart(req.USB, ""); err == nil {
+			res = map[string]any{"stage": p.Stage, "action": p.Action, "usb": p.Rebind, "helper": updateHelperUnit}
+		}
+	case "power":
+		if err = u.Power(req.Action); err == nil {
+			res = map[string]any{"action": req.Action}
+		}
+	case "get_logs":
+		var text, cursor string
+		if text, cursor, err = u.Logs(req.Lines, req.Cursor); err == nil {
+			res = map[string]any{"text": text, "cursor": cursor}
+		}
+	}
+	if err != nil {
+		return c.updateErr(id, err)
+	}
+	return response{ID: id, OK: true, Result: res}
+}
+
+// updateErr は、更新と受け取りのエラーを、プロトコルのエラーにする。
+func (c *Controller) updateErr(id json.RawMessage, err error) response {
+	code := errInternal
+	switch {
+	case errors.Is(err, errUpdateCheck):
+		code = errRejected
+	case errors.Is(err, errUpdateBusy):
+		code = errConflict
+	case errors.Is(err, errUpdateGone), errors.Is(err, errImageNotFound):
+		code = errNotFound
+	case errors.Is(err, errUpdateBad), errors.Is(err, errTransferBad), errors.Is(err, errTransferUpload):
+		code = errBadRequest
+	case errors.Is(err, errTransferHash):
+		code = errHash
+	case errors.Is(err, errImageNoSpace):
+		code = errNoSpace
+	case errors.Is(err, errImageQuota):
+		code = errQuota
+	}
+	msg := err.Error()
+	for _, e := range []error{errUpdateCheck, errUpdateBusy, errUpdateGone, errUpdateBad, errNoService} {
+		msg = strings.TrimPrefix(msg, e.Error()+": ")
+	}
+	return errResp(id, code, msg, nil)
+}
+
+// configText は get_config_text と put_config_text を処理する（コメントを残したまま、設定のファイルを読み書きする）。
+func (c *Controller) configText(id json.RawMessage, req request) response {
+	if req.Cmd == "get_config_text" {
+		b, err := c.store.Text(req.Prev)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return errResp(id, errNotFound, err.Error(), nil)
+			}
+			return errResp(id, errInternal, err.Error(), nil)
+		}
+		_, sum := imageIDOf(b)
+		return response{ID: id, OK: true, Result: map[string]any{"text": string(b), "sha256": sum, "path": c.store.path, "prev": req.Prev}}
+	}
+	if req.Text == nil {
+		return errResp(id, errBadRequest, `"text" (the YAML of the config file) is required`, nil)
+	}
+	raw := []byte(*req.Text)
+	warns, rp, err := c.store.PutText(raw, req.Restart, req.DryRun)
+	var p Problems
+	switch {
+	case errors.Is(err, errNeedsRestart):
+		return errResp(id, errRestart, "the config changes items that need restarting lefthand; nothing was written (send it again with restart)", rp)
+	case errors.As(err, &p):
+		return errResp(id, errInvalid, "the config is not valid; nothing was changed", p)
+	case errors.Is(err, errRolledBack):
+		return errResp(id, errApply, err.Error(), nil)
+	case err != nil:
+		return errResp(id, errInternal, err.Error(), nil)
+	}
+	if req.DryRun {
+		return response{ID: id, OK: true, Result: map[string]any{"valid": true, "warnings": nonNil(warns), "needs_restart": len(rp) > 0, "restart_items": rp}}
+	}
+	res := map[string]any{"saved": c.store.path, "previous": c.store.path + ".prev", "warnings": nonNil(warns), "restarting": false}
+	if len(rp) > 0 {
+		if c.updater == nil {
+			return errResp(id, errInternal, "saved, but lefthand cannot restart itself; restart lefthand.service", nil)
+		}
+		pl, err := c.updater.Restart(false, c.store.path)
+		if err != nil {
+			return errResp(id, errInternal, "saved, but restarting failed: "+err.Error()+"; restart lefthand.service", nil)
+		}
+		res["restarting"], res["stage"] = true, pl.Stage
+		log.Printf("control: put_config_text saved %s; restarting for %d items (by %s)", c.store.path, len(rp), req.Source)
+	} else {
+		warns = append(warns, c.imageWarnings(c.store.Current(), c.store.Keymap())...)
+		res["warnings"] = nonNil(warns)
+		res["status"] = c.engine.Status()
+		log.Printf("control: put_config_text saved and applied %s (by %s)", c.store.path, req.Source)
+	}
+	return response{ID: id, OK: true, Result: res}
+}
+
 // todoShown は、設定のどこかに Todo のセルがあるか。
 func todoShown(cfg *Config) bool {
 	for _, l := range cfg.Layers {
@@ -915,6 +1101,7 @@ func (c *Controller) Serve(rw io.ReadWriter) error {
 	if c.images != nil {
 		defer c.images.Abort("") // 接続が切れたら、受け取りの途中の画像を残さない
 	}
+	defer c.uploads.Abort("")
 
 	out := make(chan []byte, 16)
 	writeErr := make(chan error, 1)
