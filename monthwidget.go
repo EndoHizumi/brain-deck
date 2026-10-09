@@ -232,31 +232,65 @@ func eachDay(ev *CalEvent, from, to time.Time, f func(day time.Time)) {
 	}
 }
 
+// monthGeom は、月の表示の格子の配置（予定によらない）。タップした位置を解くのにも使う。
+type monthGeom struct {
+	first, next, start, end time.Time // 月の 1 日、次の月の 1 日、格子の最初の日、格子の次の日
+	weeks, dim, cellH       int
+	gridTop                 int
+}
+
+func newMonthGeom(area image.Rectangle, w *WidgetDef, today time.Time, offset int, titleS, navH int) monthGeom {
+	var g monthGeom
+	g.first = time.Date(today.Year(), today.Month()+time.Month(offset), 1, 0, 0, 0, 0, time.Local)
+	g.next = g.first.AddDate(0, 1, 0)
+	lead := (int(g.first.Weekday()) - int(w.WeekStart) + 7) % 7
+	g.start = g.first.AddDate(0, 0, -lead)
+	g.dim = g.next.AddDate(0, 0, -1).Day()
+	g.weeks = (lead + g.dim + 6) / 7
+	g.end = g.start.AddDate(0, 0, g.weeks*7)
+	g.gridTop = area.Min.Y + fontH*titleS + widgetLineGap + fontH + 2
+	g.cellH = max((area.Max.Y-navH-g.gridTop)/g.weeks, 1)
+	return g
+}
+
+// dayRect は、格子の i 番目（0 から）の日付の範囲。
+func (g monthGeom) dayRect(area image.Rectangle, i int) image.Rectangle {
+	col, row := i%7, i/7
+	y0 := g.gridTop + row*g.cellH
+	return image.Rect(area.Min.X+col*area.Dx()/7, y0, area.Min.X+(col+1)*area.Dx()/7, y0+g.cellH)
+}
+
+// monthBands は、見出しの倍率と、帯の高さ、帯（全体、▲、中央、▼）。
+func monthBands(area image.Rectangle, title string) (titleS, navH int, nav, up, mid, down image.Rectangle) {
+	aw, ah := area.Dx(), area.Dy()
+	titleS = 1
+	if aw >= 300 && ah >= 220 && font.textWidth(title)*2 <= aw/2 {
+		titleS = 2
+	}
+	navH = min(max(ah/7, fontH+8), todoNavH)
+	nav = image.Rect(area.Min.X, area.Max.Y-navH, area.Max.X, area.Max.Y)
+	a, b := area.Min.X+aw/5, area.Max.X-aw/5
+	up = image.Rect(area.Min.X, nav.Min.Y, a, nav.Max.Y)
+	mid = image.Rect(a, nav.Min.Y, b, nav.Max.Y)
+	down = image.Rect(b, nav.Min.Y, area.Max.X, nav.Max.Y)
+	return
+}
+
 // monthLayout は、見出しの下の範囲 area の中の配置と、日付ごとの色と印を決める。
 func monthLayout(area image.Rectangle, w *WidgetDef, env WidgetEnv) monthLay {
 	now := env.Now.In(time.Local)
 	today := dayStart(now)
 	offset, sel, nav := w.month.view(env.Now, w.PageReset)
-	first := time.Date(today.Year(), today.Month()+time.Month(offset), 1, 0, 0, 0, 0, time.Local)
-	next := first.AddDate(0, 1, 0)
-	lead := (int(first.Weekday()) - int(w.WeekStart) + 7) % 7
-	start := first.AddDate(0, 0, -lead)
-	dim := next.AddDate(0, 0, -1).Day()
-	weeks := (lead + dim + 6) / 7
-	end := start.AddDate(0, 0, weeks*7)
-
-	l := monthLay{Title: monthTitle(first), Weeks: weeks, Offset: offset, navPressed: nav, TitleWarn: !env.TimeSynced}
-	aw, ah := area.Dx(), area.Dy()
-	l.TitleS = 1
-	if aw >= 300 && ah >= 220 && font.textWidth(l.Title)*2 <= aw/2 {
-		l.TitleS = 2
-	}
-	titleH := fontH * l.TitleS
-	navH := min(max(ah/7, fontH+8), todoNavH)
-	l.WdayY = area.Min.Y + titleH + widgetLineGap
-	gridTop := l.WdayY + fontH + 2
-	gridBot := area.Max.Y - navH
-	cellH := max((gridBot-gridTop)/weeks, 1)
+	firstDay := time.Date(today.Year(), today.Month()+time.Month(offset), 1, 0, 0, 0, 0, time.Local)
+	l := monthLay{Title: monthTitle(firstDay), Offset: offset, navPressed: nav, TitleWarn: !env.TimeSynced}
+	var navH int
+	l.TitleS, navH, l.nav, l.up, l.mid, l.down = monthBands(area, l.Title)
+	g := newMonthGeom(area, w, today, offset, l.TitleS, navH)
+	first, next, start, end, dim, weeks := g.first, g.next, g.start, g.end, g.dim, g.weeks
+	l.Weeks = weeks
+	aw := area.Dx()
+	l.WdayY = area.Min.Y + fontH*l.TitleS + widgetLineGap
+	cellH := g.cellH
 	for i := 0; i < 7; i++ {
 		l.Wdays = append(l.Wdays, (int(w.WeekStart)+i)%7)
 	}
@@ -329,10 +363,6 @@ func monthLayout(area image.Rectangle, w *WidgetDef, env WidgetEnv) monthLay {
 	}
 	for i := 0; i < weeks*7; i++ {
 		day := start.AddDate(0, 0, i)
-		col, row := i%7, i/7
-		x0 := area.Min.X + col*aw/7
-		x1 := area.Min.X + (col+1)*aw/7
-		y0 := gridTop + row*cellH
 		md := monthDay{Day: day.Format(calDayLayout), In: !day.Before(first) && day.Before(next), num: day.Day(),
 			Today: day.Equal(today), Sat: day.Weekday() == time.Saturday, Red: day.Weekday() == time.Sunday}
 		md.Sel = day.Equal(selDay) && !md.Today
@@ -349,7 +379,7 @@ func monthLayout(area image.Rectangle, w *WidgetDef, env WidgetEnv) monthLay {
 				md.Dots = append(md.Dots, marks[ci].Color)
 			}
 		}
-		md.rect = image.Rect(x0, y0, x1, y0+cellH)
+		md.rect = g.dayRect(area, i)
 		md.Rect = rect4(md.rect)
 		l.Days = append(l.Days, md)
 	}
@@ -389,11 +419,6 @@ func monthLayout(area image.Rectangle, w *WidgetDef, env WidgetEnv) monthLay {
 		}
 	}
 
-	l.nav = image.Rect(area.Min.X, area.Max.Y-navH, area.Max.X, area.Max.Y)
-	a, b := area.Min.X+aw/5, area.Max.X-aw/5
-	l.up = image.Rect(area.Min.X, l.nav.Min.Y, a, l.nav.Max.Y)
-	l.mid = image.Rect(a, l.nav.Min.Y, b, l.nav.Max.Y)
-	l.down = image.Rect(b, l.nav.Min.Y, area.Max.X, l.nav.Max.Y)
 	l.Nav, l.Up, l.Mid, l.Down = rect4(l.nav), rect4(l.up), rect4(l.mid), rect4(l.down)
 	return l
 }
@@ -530,42 +555,48 @@ func drawMonthDay(cv *Canvas, d monthDay, s, dot int) {
 
 // monthTouch は、月の表示のセルを押したとき。入力の goroutine から呼ばれるので、待たずに返る。
 // ▲▼ で月を送り、日付で選び、帯の中央で今月と今日に戻る。どこを押しても「触った」ことにする。
+// 予定は見ずに、格子の配置だけで押した位置を解く（入力の goroutine を待たせない）。
 func (w *WidgetDef) monthTouch(rt *WidgetRT, t widgetTouch, label string) {
-	env := rt.env()
-	l := monthLayout(widgetArea(t.cell, label), w, env)
+	now := rt.env().Now
+	area := widgetArea(t.cell, label)
 	s := w.month
 	s.mu.Lock()
-	if !s.live(env.Now, w.PageReset) {
+	if !s.live(now, w.PageReset) {
 		s.offset, s.sel = 0, ""
 	}
-	s.touched = env.Now
-	today := dayStart(env.Now.In(time.Local)).Format(calDayLayout)
+	s.touched = now
+	today := dayStart(now.In(time.Local))
+	first := time.Date(today.Year(), today.Month()+time.Month(s.offset), 1, 0, 0, 0, 0, time.Local)
+	titleS, navH, _, up, mid, down := monthBands(area, monthTitle(first))
 	switch {
-	case t.pt.In(l.up):
+	case t.pt.In(up):
 		if s.offset > -monthMaxOffset {
 			s.offset--
 			s.nav = -1
 		}
-	case t.pt.In(l.down):
+	case t.pt.In(down):
 		if s.offset < monthMaxOffset {
 			s.offset++
 			s.nav = 1
 		}
-	case t.pt.In(l.mid):
+	case t.pt.In(mid):
 		s.offset, s.sel = 0, ""
 	default:
-		for _, d := range l.Days {
-			if t.pt.In(d.rect) {
-				s.sel = d.Day
-				if d.Day == today {
+		g := newMonthGeom(area, w, today, s.offset, titleS, navH)
+		for i := 0; i < g.weeks*7; i++ {
+			if t.pt.In(g.dayRect(area, i)) {
+				day := g.start.AddDate(0, 0, i)
+				s.sel = day.Format(calDayLayout)
+				if day.Equal(today) {
 					s.sel = ""
 				}
-				vlogf("month: %s selected %s", w.ID, d.Day)
 			}
 		}
 	}
+	offset, sel := s.offset, s.sel
 	s.mu.Unlock()
 	rt.redraw()
+	vlogf("month: %s offset %d selected %q", w.ID, offset, sel)
 }
 
 // monthRelease は、離したとき。押している矢印を戻す。
