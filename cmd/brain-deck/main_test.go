@@ -83,18 +83,20 @@ func TestReportExitCodes(t *testing.T) {
 
 // fakeBrain は PTY のマスター側で、lefthand の代わりに返事をする。
 type fakeBrain struct {
-	mouse   bool // USB にマウスがあるか（set_usb_mode）
-	term    bool // 端末モード（set_terminal）
-	master  *os.File
-	slave   string
-	got     chan map[string]any
-	ignore  int // 最初のこの数の hello に答えない（デーモンの再起動直後を真似る）
-	todo    todoList
-	removed int
-	cals    any               // set_calendar で受け取った calendars
-	images  map[string][]byte // image_end で受け取った画像（id → 中身）
-	upload  []byte            // 受け取っている途中の画像
-	upName  string
+	mouse bool // USB にマウスがあるか（set_usb_mode）
+	term  bool // 端末モード（set_terminal）
+	// noPresence なら、get_widgets で在席ランプのセルがない設定のふりをする
+	noPresence bool
+	master     *os.File
+	slave      string
+	got        chan map[string]any
+	ignore     int // 最初のこの数の hello に答えない（デーモンの再起動直後を真似る）
+	todo       todoList
+	removed    int
+	cals       any               // set_calendar で受け取った calendars
+	images     map[string][]byte // image_end で受け取った画像（id → 中身）
+	upload     []byte            // 受け取っている途中の画像
+	upName     string
 }
 
 func newFakeBrain(t *testing.T) *fakeBrain {
@@ -176,7 +178,7 @@ func (f *fakeBrain) serve(commands []string) {
 			res = map[string]any{"texts": map[string]any{"share": map[string]any{"text": "https://example.com/", "set_at": "2026-10-06T00:00:00Z"}}, "ids": []string{"share"}}
 		case "get_widgets":
 			res = map[string]any{"widgets": map[string]any{"presence": map[string]any{"presence": map[string]any{"state": "集中"}}},
-				"ids":             map[string]any{"presence": []string{"door", "presence"}},
+				"ids":             map[string]any{"presence": map[bool][]string{false: {"door", "presence"}, true: {}}[f.noPresence]},
 				"presence_states": map[string]any{"presence": []any{map[string]any{"name": "在席"}, map[string]any{"name": "集中"}}, "door": []any{map[string]any{"name": "在室"}, map[string]any{"name": "不在"}}}}
 		case "set_presence":
 			if req["state"] == "外出" || req["name"] == "nope" {
@@ -623,6 +625,10 @@ func TestQRAndPresenceAgainstFakeBrain(t *testing.T) {
 	}
 	if code, _, errs := runCLI(t, "--port", f.slave, "presence", "外出"); code != exitBrainError || strings.Contains(errs, "todo") {
 		t.Errorf("presence unknown state: %d %q", code, errs)
+	}
+	f.noPresence = true
+	if code, _, errs := runCLI(t, "--port", f.slave, "presence"); code != exitBrainError || !strings.Contains(errs, "在席ランプのセル") {
+		t.Errorf("presence without cells: %d %q", code, errs)
 	}
 	if code, _, _ := runCLI(t, "--port", f.slave, "text", "x", "y", "--id", "door"); code != exitUsage {
 		t.Errorf("--id with text: exit %d", code)

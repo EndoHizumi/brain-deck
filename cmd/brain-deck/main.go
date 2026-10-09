@@ -877,7 +877,7 @@ func presenceCommand(o *options) (func(*Client) (string, error), error) {
 				return "", err
 			}
 			if len(r.IDs["presence"]) == 0 {
-				return "", errors.New("今の設定に、在席ランプのセル（widget: presence）がありません")
+				return "", &brainError{Code: "not_found", Message: "今の設定に、在席ランプのセル（widget: presence）がありません"}
 			}
 			var b strings.Builder
 			b.WriteString("id\t今の状態\t選べる状態\n")
