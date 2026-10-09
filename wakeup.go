@@ -36,6 +36,7 @@ type Waker struct {
 	req    chan struct{}
 	last   time.Time // 最後に起こそうとしたとき
 	warned bool      // 起こせなかったことを、サスペンドのたびに一度だけログに出す
+	gone   bool      // USB がつながっていないことを、一度だけログに出す
 }
 
 func NewWaker() *Waker {
@@ -67,8 +68,17 @@ func (w *Waker) try() {
 	if dir == "" {
 		return
 	}
-	if readUDCState(dir) != "suspended" {
-		w.warned = false
+	switch readUDCState(dir) {
+	case "suspended":
+	case "not attached":
+		// PC の電源が切れている、スリープ中に USB の電源を切る PC、ケーブルを抜いた。起こせない
+		if !w.gone {
+			w.gone = true
+			log.Printf("wakeup: the USB is not attached (the PC is off, cuts the USB power while asleep, or the cable is out); cannot wake the PC")
+		}
+		return
+	default:
+		w.warned, w.gone = false, false
 		return
 	}
 	if time.Since(w.last) < wakeMinInterval {

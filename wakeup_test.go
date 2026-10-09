@@ -128,3 +128,17 @@ func TestWakerRequestFromPress(t *testing.T) {
 		t.Errorf("the key report must still be written: % x", reps)
 	}
 }
+
+func TestWakerNotAttached(t *testing.T) {
+	dir := fakeUDC(t, "not attached")
+	w := &Waker{}
+	w.try()
+	if srpWritten(dir) != "" || !w.gone {
+		t.Fatalf("srp = %q, gone = %v", srpWritten(dir), w.gone)
+	}
+	os.WriteFile(filepath.Join(dir, "state"), []byte("configured\n"), 0o644)
+	w.try()
+	if w.gone {
+		t.Error("gone is not reset after the USB came back")
+	}
+}
