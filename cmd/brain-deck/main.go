@@ -104,6 +104,9 @@ const usage = `使い方：
   brain-deck config put <ファイル|-> [--restart] [--dry-run]   設定を検証してから、そのまま書き、すぐ反映する
                                       （前の版は .prev）。再起動が要る項目を変えるときは --restart
   brain-deck config check <ファイル>  設定を Brain で検証するだけ
+  brain-deck exec --result <id> [--limit 10m] -- <コマンド> [引数...]
+                                      コマンドを実行し、結果をテキストのタイル <id> に出す（実行中、成功、失敗と、
+                                      出力の最後の行）。終了コードはコマンドのもの
   brain-deck version
 
 共通のオプション：
@@ -120,13 +123,16 @@ const usage = `使い方：
   -f, --follow       logs で、新しいログを待って出し続ける
   --prev             config get で、前の版（.prev）を読む
   --restart          config put で、再起動が要る項目を変えてもよい（書いて lefthand を再起動する）
+  --result <id>      exec で、結果を出すテキストのタイルの id
+  --limit <時間>     exec で、コマンドの時間の上限（既定 10m。過ぎたら止めて「失敗」にする）
   -q, --quiet        成功したときに何も出さない
   -v, --verbose      通信の内容を標準エラーに出す
 
 終了コード：0 成功、1 予期しないエラー、2 使い方の誤り、3 Brain が見つからない・返事がない、
            4 設定 GUI が接続中（ほかのプログラムがポートを使用中）、5 Brain がエラーを返した、6 ポートを開く権限がない、
            7 予定の取得に失敗した（calendar sync。取れたカレンダーは送る）、
-           8 更新・再起動に失敗した（update は前の版に戻した）
+           8 更新・再起動に失敗した（update は前の版に戻した）。exec はコマンドの終了コード
+           （コマンドが時間切れなら 124、同じ id で実行中なら 75）
 `
 
 type options struct {
@@ -329,7 +335,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		name string
 		cmds string
 	}{{o.status || o.rollback, "--status、--rollback", "update"}, {o.usb, "--usb", "restart"}, {o.noWait, "--no-wait", "reboot poweroff"},
-		{o.follow || o.lines != 0, "-f、-n", "logs"}, {o.prev || o.restartOK, "--prev、--restart", "config"}} {
+		{o.follow || o.lines != 0, "-f、-n", "logs"}, {o.prev || o.restartOK, "--prev、--restart", "config"}, {o.result != "" || o.limit != 0, "--result、--limit", "exec"}} {
 		if f.on && !strings.Contains(" "+f.cmds+" ", " "+o.args[0]+" ") {
 			fmt.Fprintf(stderr, "brain-deck: %s は %s で使います%s\n", f.name, f.cmds, hint)
 			return exitUsage
@@ -361,7 +367,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runLogs(o, stdout, stderr)
 	case "config":
 		return runConfig(o, stdin, stdout, stderr)
-
+	case "exec":
+		return runExec(o, stdout, stderr)
 	case "images":
 		cmd, err = imagesCommand(o)
 	case "time":

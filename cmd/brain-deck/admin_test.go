@@ -224,3 +224,92 @@ func TestPoweroffWaitsForThePortToGo(t *testing.T) {
 		t.Fatalf("poweroff %d %s %s", code, out, errs)
 	}
 }
+
+// ---------- exec ----------
+
+func TestExecWritesTheTile(t *testing.T) {
+	f, _ := newAdminFake(t)
+	var texts []map[string]any
+	f.handler = func(req map[string]any) (any, bool) {
+		if req["cmd"] == "set_text" {
+			texts = append(texts, req)
+			return map[string]any{"shown": true}, true
+		}
+		return (&fakeUpdater{version: "v1"}).handle(req)
+	}
+	code, out, errs := runCLI(t, "--port", f.slave, "exec", "--result", "build", "--", "sh", "-c", "echo building; printf '\\033[32mall 3 passed\\033[0m\\n'")
+	if code != 0 || !strings.Contains(out, "all 3 passed") {
+		t.Fatalf("exit %d %q %s", code, out, errs)
+	}
+	f.mu.Lock()
+	if len(texts) != 2 || !strings.HasPrefix(texts[0]["text"].(string), "実行中") || texts[1]["style"] != "ok" ||
+		!strings.HasSuffix(texts[1]["text"].(string), "\nall 3 passed") || !strings.HasPrefix(texts[1]["text"].(string), "成功 ") {
+		t.Fatalf("texts %v", texts)
+	}
+	texts = nil
+	f.mu.Unlock()
+
+	code, _, _ = runCLI(t, "--port", f.slave, "exec", "--result", "build", "--", "sh", "-c", "echo 'error: x' >&2; exit 3")
+	f.mu.Lock()
+	if code != 3 || texts[1]["style"] != "error" || !strings.Contains(texts[1]["text"].(string), "終了コード 3") || !strings.HasSuffix(texts[1]["text"].(string), "error: x") {
+		t.Fatalf("exit %d %v", code, texts)
+	}
+	texts = nil
+	f.mu.Unlock()
+
+	code, _, _ = runCLI(t, "--port", f.slave, "exec", "--result", "build", "--limit", "300ms", "--", "sleep", "5")
+	f.mu.Lock()
+	if code != execExitTimeout || !strings.Contains(texts[1]["text"].(string), "時間切れ") {
+		t.Fatalf("timeout %d %v", code, texts)
+	}
+	f.mu.Unlock()
+
+	if code, _, _ := runCLI(t, "--port", f.slave, "exec", "--result", "build", "--", "no-such-command-xyz"); code != 127 {
+		t.Fatalf("not found: %d", code)
+	}
+	for _, args := range [][]string{{"exec", "--", "true"}, {"exec", "--result", "build", "true"}, {"exec", "--result", "a/b", "--", "true"}} {
+		if code, _, _ := runCLI(t, append([]string{"--port", f.slave}, args...)...); code != exitUsage {
+			t.Errorf("%q: %d", args, code)
+		}
+	}
+}
+
+func TestExecWithoutBrainAndWhileRunning(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	// Brain がなくても、コマンドは実行し、終了コードを返す
+	code, out, errs := runCLI(t, "--port", "/dev/nonexistent-brain", "exec", "--result", "build", "--", "sh", "-c", "echo hi; exit 4")
+	if code != 4 || out != "hi\n" || !strings.Contains(errs, "Brain が見つかりません") {
+		t.Fatalf("exit %d %q %s", code, out, errs)
+	}
+	// 同じ id で実行中なら、重ねない
+	unlock, ok := execLock("build")
+	if !ok {
+		t.Fatal("lock")
+	}
+	code, _, errs = runCLI(t, "--port", "/dev/nonexistent-brain", "exec", "--result", "build", "--", "true")
+	unlock()
+	if code != execExitBusy || !strings.Contains(errs, "まだ実行中") {
+		t.Fatalf("busy %d %s", code, errs)
+	}
+	// 別の id は動く
+	if code, _, _ := runCLI(t, "--port", "/dev/nonexistent-brain", "exec", "--result", "deploy", "--", "true"); code != 0 {
+		t.Fatal(code)
+	}
+}
+
+func TestTailLastLine(t *testing.T) {
+	var w tailWriter
+	w.Write([]byte("first\nprogress 10%\rprogress 100%\r\n\x1b[1;31mFAILED\x1b[0m\tcase\n\n"))
+	if l := w.lastLine(); l != "FAILED case" {
+		t.Fatalf("%q", l)
+	}
+	w = tailWriter{}
+	w.Write([]byte("a\nprogress 10%\rprogress 100%\n"))
+	if l := w.lastLine(); l != "progress 100%" {
+		t.Fatalf("%q", l)
+	}
+	w.Write(bytes.Repeat([]byte("x"), 10000))
+	if len(w.buf) != execTailBytes {
+		t.Fatal(len(w.buf))
+	}
+}
