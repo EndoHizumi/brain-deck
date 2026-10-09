@@ -58,7 +58,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 
 - `protocol` はこの文書の版。互換性のない変更をしたら上げる。GUI は違えば使わない。
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
-- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱う。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
+- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱い、`get_qr`・`get_widgets` があるときだけ QR コードとストップウォッチなどの状態を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
 
 ### get_config
@@ -151,12 +151,27 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
    "uptime_sec":120,"subscribed":true,"suppressing":true,
    "time":{"now":"2026-10-06T19:04:27.13+09:00","timezone":"Asia/Tokyo","utc_offset_sec":32400,"synced":true,"ntp_synced":false,
    "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true},
-   "terminal":{"active":true,"state":"on","transport":"serial","status":"PC のログイン画面","cols":100,"rows":31}}}
+   "terminal":{"active":true,"state":"on","transport":"serial","status":"PC のログイン画面","cols":100,"rows":31},
+   "battery":{"percent":100,"voltage_mv":4172,"plugged":true,"charging":false,"source":"lradc","estimated":true},
+   "backlight":{"enabled":true,"state":"dim","level":1,"max":7,"device":"/sys/class/backlight/backlight@0"}}}
 ```
 
 `time` は Brain の時刻の状態（下の `set_time` の結果と同じ形）。
 
 `hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.switching` は、`set_usb_mode` で切り替えている途中か。この項目がなければ、lefthand がマウスに対応する前の版。
+
+`battery` は電池の状態（`battery.go` の `BatteryInfo`）。読めなければ `null`。この項目がなければ、電池を読まない版。
+
+| 項目 | 内容 |
+| --- | --- |
+| `percent` | 残り（0〜100） |
+| `voltage_mv` | 電池の電圧（mV。lradc では 5 回の移動平均） |
+| `plugged` | USB などから給電されている |
+| `charging` | 充電中。`estimated` なら、給電されていて満充電の電圧（4.15 V）より低いことからの見積もり |
+| `source` | `power_supply` か `lradc`（PW-SH2） |
+| `estimated` | 残りと充電中を電圧から見積もった |
+
+`backlight` は自動減光（設定の `backlight`）の状態（`backlight.go` の `DimInfo`）。`enabled` が false なら減光していない（設定に `backlight` がない、バックライトがない）。`state` は `bright`、`dim`、`off`、`level` は今の明るさ、`max` は max_brightness。
 
 `terminal` は端末モードの状態（`termmode.go` の `TermInfo`）。この項目がなければ、端末モードがない版。
 
@@ -383,18 +398,76 @@ Todo のセル（`{ widget: todo }`）の項目を読み書きする。項目は
 
 Brain にある予定を返す。形は `set_calendar` の引数と同じ（`error` を含む）。一度も受け取っていなければ `rev` は 0、`calendars` は空。`shown` は、今の設定にカレンダーのセルがあるか。設定 GUI は、接続したときに読んでプレビューに描く。
 
+### set_qr、get_qr
+
+QR コードのセル（`{ widget: qr, id: share }`）の中身を書き換える、読む。引数と結果は `set_text`、`get_text` と同じ（`name`、`text`、`ttl_sec`、`clear`、`source`。`style` は使わない）。
+
+```json
+→ {"id":60,"cmd":"set_qr","name":"share","text":"https://github.com/endohizumi/brain-deck","ttl_sec":3600,"source":"brain-deck"}
+← {"id":60,"ok":true,"result":{"name":"share","cleared":false,"shown":true,"entry":{"text":"https://...","style":"normal","set_at":"...","expires_at":"...","expired":false}}}
+→ {"id":61,"cmd":"get_qr"}
+← {"id":61,"ok":true,"result":{"texts":{"share":{...}},"ids":["share"]}}
+```
+
+- **違い**：長さは UTF-8 で 400 バイトまで（行数の上限はない）。タブはそのまま残す。そのほかの制御文字は `bad_request`。
+- **保存**：`/var/lib/lefthand/qr.json`。返事は書き込みを待たない。64 個まで。時刻を合わせる前に書いたときの扱いもテキストと同じ。
+- `shown` と `ids` は、QR コードのセルについて。
+
+### get_widgets
+
+ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態と、今の設定で使っている id を返す。設定 GUI はプレビューに描く。
+
+```json
+→ {"id":62,"cmd":"get_widgets"}
+← {"id":62,"ok":true,"result":{
+   "widgets":{"stopwatch":{"stopwatch":{"elapsed_ms":5000,"started_at":"2026-10-09T05:32:19.58Z","updated_at":"..."}},
+     "pomodoro":{"pomodoro":{"running":true,"anchor":"2026-10-09T05:32:34.58Z","work_ms":1500000,"break_ms":300000,"done":2,"updated_at":"..."}},
+     "counter":{"coffee":{"value":3,"updated_at":"..."}},
+     "presence":{"presence":{"state":"会議中","updated_at":"...","source":"brain-deck"}}},
+   "ids":{"stopwatch":["stopwatch"],"pomodoro":["pomodoro"],"counter":["coffee","counter"],"presence":["door","presence"],"qr":["share"]},
+   "presence_states":{"presence":[{"name":"在席","color":"#40c070"},...],"door":[{"name":"在室","color":"#40c070"},{"name":"不在","color":"#606870"}]},
+   "battery":{...},"now":"2026-10-09T14:33:30.1+09:00"}}
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `stopwatch` | `elapsed_ms`（止めているあいだの経過時間。動いているなら、始める前までの分）、`started_at`（動いているなら、始めた時刻）。今の経過時間は `elapsed_ms` + (今 − `started_at`) |
+| `pomodoro` | 動いているとき（`running`）：`anchor`（最初の作業を始めたことにした時刻）、`work_ms`、`break_ms`、`done`（`anchor` より前に終えた作業の数）。今の段階は、`anchor` からの経過を `work_ms + break_ms` で割って求める。止めているとき：`phase`（`work` か `break`。なければ、まだ始めていない）、`remaining_ms`、`done`。`ack_at` は点滅をタップで止めた時刻 |
+| `counter` | `value` |
+| `presence` | `state`（状態の名前）、`source`（変えた側。Brain でタップしたときは `brain`） |
+| `ids` | 今の設定で、種類ごとに使われている id（id を書かないセルは種類の名前） |
+| `presence_states` | id ごとの、在席ランプの状態の並び（同じ id のセルの状態を、出てきた順に重なりを除いて並べたもの） |
+
+- **保存**：`/var/lib/lefthand/widgets.json`（`boot_id`、`last_seen` も入る）。状態は Brain でのタップか `set_presence` で変わる。
+
+### set_presence
+
+在席ランプの状態を変える。`name` は在席ランプの id（省略すると `presence`）。`state`（状態の名前）か `step`（1 で次、-1 で前）のどちらかを書く。
+
+```json
+→ {"id":63,"cmd":"set_presence","state":"会議中","source":"brain-deck"}
+← {"id":63,"ok":true,"result":{"name":"presence","state":"会議中","color":"#ff8020","states":4}}
+→ {"id":64,"cmd":"set_presence","name":"door","step":1}
+```
+
+- **誤り**：設定にその id の在席ランプがなければ `not_found`。`state` がその id の状態にない、`state` と `step` の両方か、どちらもないときは `bad_request`（message に選べる状態を書く）。
+- **画面**：すぐ描き直す。画面を明るくはしない。
+
 ### subscribe_data
 
 ```json
 → {"id":27,"cmd":"subscribe_data","enable":true}
-← {"id":27,"ok":true,"result":{"subscribed":true,"events":["todo"]}}
+← {"id":27,"ok":true,"result":{"subscribed":true,"events":["todo","widgets"]}}
 ```
 
-Brain のデータが変わったことを、通知で知らせる。今は Todo だけ。設定 GUI は接続したときに購読し、Brain で長押しして切り替えたことを、すぐ一覧に反映する。
+Brain のデータが変わったことを、通知で知らせる。今は Todo と、ストップウォッチなどの状態。設定 GUI は接続したときに購読し、Brain で長押しして切り替えたことを、すぐ一覧やプレビューに反映する。
 
 ```json
 {"event":"todo","rev":14,"items":[...]}
+{"event":"widgets","stopwatch":{...},"pomodoro":{...},"counter":{...},"presence":{...}}
 ```
+
+- **widgets**：ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態が変わるたび（Brain でのタップ、`set_presence`、時刻合わせで動いているタイマーをずらしたとき）。形は `get_widgets` の `widgets` と同じで、すべての状態が入る。時間がたつだけでは届かない（受け取る側が計算する）。
 
 - **いつ届くか**：一覧が変わるたび（どこから変えても。自分のリクエストで変えたときも届く）。続けて変わったときは、最後の一覧だけが届くことがある。返事の前後どちらにも届きうるので、受け取る側は `rev` が今持っているものより小さければ捨てる。
 - **終わり**：`enable: false`、またはポートの開き直し。`subscribe_input` とは別で、学習モードを終えても購読は続く。
@@ -456,7 +529,7 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 | `invalid_config` | 設定の誤り。`problems` に場所付きで入る。何も変えていない |
 | `apply_failed` | 保存したが反映に失敗し、ファイルも動作も前の設定に戻した |
 | `internal_error` | そのほか（ファイルを書けないなど）。何も変えていないか、前の設定に戻せなかったことを message に書く |
-| `not_found` | Todo：その ID の項目がない。get_image：その id の画像がない |
+| `not_found` | Todo：その ID の項目がない。get_image：その id の画像がない。set_presence：その id の在席ランプが設定にない |
 | `conflict` | Todo：項目が、送った `rev` のあとに変わった。何も変えていない |
 | `quota_exceeded` | 画像：置いてある画像との合計が上限（16 MiB）を超える。何も書いていない |
 | `no_space` | 画像：保存すると SD カードの空きが足りなくなる。何も書いていない |

@@ -7,9 +7,10 @@ USB HID のキーボードとマウスとして PC に送る。タッチパネ�
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
 - **トラックパッド**：タッチパネルのセルを、マウスのトラックパッドにできる（`widget: trackpad`）。指でカーソルを動かし、タップでクリック、右端の帯でスクロール。キーやセルにマウスのボタンも割り当てられる（`mouse: left`）。Android のスマホでもそのまま使える。起動したときはブートキーボード（BIOS でも使える）で、マウスを使うときだけ USB の形を切り替える（`usb_mode`）。
-- **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定を表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定、電池の残り、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **自動減光**：しばらく触らなければ画面を暗くし、さらに時間がたったら消す（`backlight`）。暗いときのタッチは明るくするだけで、セルは押さない。本体キーは暗いときもそのまま PC に送る。
 - **背景画像**：セルごとの背景と、レイヤーごとの壁紙に、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
-- **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、Brain の時刻を合わせたりする。
+- **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、URL を QR コードにして出したり（`brain-deck qr share "https://..."`）、在席ランプを変えたり（`brain-deck presence 会議中`）、Brain の時刻を合わせたりする。
 - **端末モード**：Brain の画面とキーボードを、USB でつないだ PC のコンソールの端末にする。画面やキーボードのない PC に、Brain からログインして操作できる（PC の OS が起動したあとだけ。BIOS や GRUB は見えない）。PC 側の設定が一度だけ要る。
 - **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI が接続したときに PC の時刻に合わせる。
 - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
@@ -168,6 +169,7 @@ keyboard: brain-kbd-i2c     # 本体キーボード。省略可
 touch: { ... }              # タッチパネルとソフトキーの範囲。省略するとタッチと画面を使わない
 layers: [ ... ]             # レイヤーごとの割り当て。最初のものが base
 display: { ... }            # 画面表示。省略可
+backlight: { ... }          # 自動減光。省略すると減光しない
 ```
 
 入力デバイスは、`/dev/input/eventN` のパスでも、デバイス名でも指定できる。
@@ -271,6 +273,46 @@ cells:
 - **カレンダー**：予定は Brain のデータ（`/var/lib/lefthand/calendar.json`）で、PC の [brain-deck calendar sync](#カレンダー) が ICS の URL から取ってきて送る。今日の予定（終日、時刻の順）と、今日より先の次の予定を 1 つ出す。**今の予定は行を青く塗り**、終わった予定は薄く出す。左の色の帯はカレンダーの色。いちばん下に**最終更新の時刻**を小さく出し、3 時間より古い（`stale: 3h` で変えられる）、取得に失敗した、Brain の時刻を合わせていない、のどれかなら橙色にする。入りきらないときは Todo と同じく下の ▲▼ でページを送り、触っていないときは「今かこれからの予定」があるページを出す。`calendars: [仕事]` で出すカレンダーを選べる。
 - **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」と「Todo」のレイヤーを足したもの。
 
+電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプもある。
+
+```yaml
+cells:
+  "0,0": { widget: stopwatch, span: [2, 1] }                       # タップで開始と停止、長押しで 0 に戻す
+  "2,0": { widget: battery, label: 電池 }                          # 電池の残りと、USB から給電しているか
+  "3,0": { widget: counter, id: coffee, label: コーヒー }           # タップで +1、長押しで 0 に戻す
+  "0,1": { widget: pomodoro, span: [2, 2], work: 25m, break: 5m }  # タップで開始と一時停止、長押しで最初に戻す
+  "2,1": { widget: presence, span: [2, 2] }                        # 在席ランプ。タップで次の状態、長押しで前の状態
+  "0,0": { widget: qr, id: share, span: [2, 3] }                   # QR コード。中身は brain-deck qr share "https://..." で送る
+```
+
+- **長押し**：ストップウォッチ、ポモドーロ、カウンター、在席ランプは、タップ（離したとき）と、**0.5 秒の長押し**（Todo と同じ長さ）で働きが違う。長押しの働きは離す前に起き、離しても何もしない。誤って触れただけで 0 に戻らないよう、リセットは長押しにした。これらのセルには `key` などのタップの動きは書けない。
+- **電池**：PW-SH2 では、残りと充電中を電池の電圧から見積もる（`/sys/class/power_supply` がないため。[docs/config.md](docs/config.md) の「電池」）。USB につないでいるあいだは、残りが多めに出る。
+- **ストップウォッチ**：1 秒ごとに描き直す（実機で約 5 ms）。デーモンを再起動しても数え続ける。Brain を再起動すると止まる（Brain には RTC がないため。終了した時点までの時間は残る）。
+- **ポモドーロ**：作業（既定 25 分）と休憩（既定 5 分）をくり返す。**切り替わるとセルを 15 秒点滅させ、画面が暗ければ明るくする**。点滅はタップで止まる。
+- **QR コード**：中身はテキストのタイルと同じ仕組みで、PC の [brain-deck qr](#qr-コード) で送る（UTF-8 で 400 バイトまで、有効期限も付けられる）。セルに入らないときは「QR が入りません」と出る。
+- **在席ランプ**：セル全体を状態の色で塗る。状態の名前と色は `states` で決める（既定は在席、集中、会議中、休憩）。PC から [brain-deck presence](#在席ランプ) でも変えられる。
+- **状態の保存**：ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態は `/var/lib/lefthand/widgets.json` に残す。同じ `id` のセルは同じ状態を出す（`id` を省略すると種類の名前）。
+- **例**：[config/gadgets-example.yaml](config/gadgets-example.yaml)（widgets-example.yaml に、メニューから入る「道具」と「共有」のレイヤーと、自動減光を足したもの）。
+
+### 自動減光（backlight）
+
+```yaml
+backlight:
+  dim_after: 1m       # 触らずに 1 分たったら暗くする
+  dim_level: 1        # 暗くしたときの明るさ（PW-SH2 は 0〜7。ふだんは 7）
+  off_after: 5m       # 触らずに 5 分たったら消す
+  wake_on_key: true   # 本体キーでも明るくする
+  in_terminal: false  # 端末モードのあいだは暗くしない
+```
+
+- **暗いときのタッチ**：明るくするだけで、そのタッチではセルもソフトキーも押さない（誤操作を防ぐため）。次のタッチから、ふつうに働く。
+- **暗いときのキー**：本体キーは、暗いときもそのまま PC に送る。`wake_on_key: true`（既定）なら、キーで明るくもなる。
+- **端末モード**：`in_terminal: false`（既定）なら、端末モードのあいだは暗くしない。
+- **ほかに明るくするとき**：ポモドーロの作業と休憩が切り替わったとき。
+- **終わるとき**：デーモンが終わると、起動したときの明るさに戻す（落ちたときも、サービスの ExecStopPost の `lefthand -restore-console` が戻す）。
+- **バックライト**：PW-SH2 では `/sys/class/backlight/backlight@0`（pwm-backlight、0〜7）。実機で、暗くする・消す・明るくする・終了時に戻す、を確かめた。
+- **書かなければ**、今までどおり減光しない。設定 GUI では編集しないが、GUI で保存しても残る。詳しくは [docs/config.md](docs/config.md) の「自動減光」。
+
 ### 背景画像
 
 セルの背景（`background`）と、レイヤーの壁紙（`touch.background`）に画像を置ける。キーのセル、ウィジェットのセル、span のセルのどれでもよい。
@@ -307,6 +349,8 @@ layers:
 | text.json | テキストのタイルの中身（id ごとに、テキスト、色、書いた時刻、有効期限、送った側）。64 個まで覚え、超えたら古いものから捨てる |
 | todo.json | Todo の項目（ID、文、完了、更新番号、時刻、変えた側）。数の上限はない |
 | calendar.json | カレンダーの予定（カレンダーごとに、名前、色、取ってきた時刻、取得の失敗、予定）。展開したあとの予定で、1000 件まで |
+| qr.json | QR コードのウィジェットの中身（text.json と同じ形）。64 個まで |
+| widgets.json | ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（種類と id ごと。種類ごとに 64 個まで）と、書いたときの起動の ID、終了した時刻 |
 | images/&lt;id&gt;.565 | 背景画像。8 バイトのヘッダ（`LHI1`、幅、高さ）と RGB565 の画素。id はファイルの SHA-256 の先頭 16 文字 |
 | images/index.json | 背景画像の名前（元のファイル名など）、大きさ、SHA-256、足した時刻、送った側 |
 
@@ -316,6 +360,10 @@ layers:
 - **Todo を全部消すとき**：GUI の「Todo」タブか `brain-deck todo rm`。ファイルごと消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/todo.json`。
 
 - **予定を消すとき**：`brain-deck calendar clear`。
+
+- **QR コードを消すとき**：`brain-deck qr <id> --clear`。
+
+- **ストップウォッチなどの状態を消すとき**：Brain で長押しすれば 0（最初）に戻る。ファイルごと消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/widgets.json`。
 
 - **背景画像を消すとき**：`brain-deck images prune`（使っていない画像だけ）。受け取りの途中で切れた一時ファイル（`images/.upload-*.part`）は、60 秒たつか、デーモンを再起動すると消える。
 
@@ -545,6 +593,8 @@ brain-deck text build "ビルド成功" --style ok --ttl 10m   # テキストの
 brain-deck text build --clear                              # 消す（「未設定」に戻す）
 printf "複数行も\n書ける" | brain-deck text note -          # 標準入力から読む
 brain-deck text --list                                     # Brain にあるテキストの一覧
+brain-deck qr share "https://example.com/" --ttl 1h        # QR コードのセル（id: share）に出す
+brain-deck presence 会議中                                 # 在席ランプを「会議中」にする（next、prev でも）
 brain-deck todo add "牛乳を買う"                           # Todo を足す
 brain-deck todo                                            # Todo の一覧（番号は Brain の画面と同じ順）
 brain-deck todo done 2                                     # 2 番を完了にする
@@ -552,7 +602,7 @@ brain-deck calendar sync                                   # カレンダー（I
 brain-deck images                                          # Brain にある背景画像の一覧
 brain-deck time sync                                       # PC の時刻を Brain に送る
 brain-deck terminal on                                     # 端末モードに入る（off で抜ける。引数なしで今の状態）
-brain-deck status                                          # 版、レイヤー、Brain の時刻
+brain-deck status                                          # 版、レイヤー、Brain の時刻、電池、画面の明るさ
 ```
 
 ### 入れ方
@@ -579,6 +629,37 @@ GOOS=darwin GOARCH=arm64 go build -o brain-deck ./cmd/brain-deck   # Apple シ�
 
 - **時刻**：有効期限を正しくするため、Brain の時刻がずれていれば（合わせていない、または 2 秒以上違う）、書く前に PC の時刻に合わせる。`--no-time-sync` で合わせない。時刻を合わせる前に書いたテキストは、あとで時刻を合わせたときに、期限も同じだけずらす（書いてから `--ttl` の時間で切れる）。
 - **書き換えの速さ**：コマンド全体で 40〜100 ms、Brain での描き直しは 1 セル 5〜20 ms（実機）。続けて何度も書いたときは、SD カードへの保存と重なって 100 ms を超えることがあった。入力の処理は待たせない。
+
+### QR コード
+
+```sh
+brain-deck qr share "https://github.com/endohizumi/brain-deck"    # QR コードのセル（id: share）に出す
+brain-deck qr share "https://example.com/meet/abc" --ttl 1h       # 1 時間たったら薄く出す
+git remote get-url origin | brain-deck qr share -                 # 標準入力から読む
+brain-deck qr share --clear                                       # 消す（「未設定」に戻す）
+brain-deck qr --list                                              # Brain にある中身の一覧
+```
+
+- **形**：テキスト（`brain-deck text`）と同じ。`--style` だけは使えない。長さは UTF-8 で 400 バイトまで（改行、タブも可）。
+- **読み取り**：Brain の画面の QR コードは、スマホのカメラで読める（白い余白付き、1 升 2 ドット以上）。小さいセルに長い文字列を送ると「QR が入りません」と出るので、`span` でセルを大きくする。
+
+### 在席ランプ
+
+```sh
+brain-deck presence                    # 在席ランプの今の状態と、選べる状態（id ごと）
+brain-deck presence 会議中             # id: presence（省略したとき）のランプを「会議中」に
+brain-deck presence next --id door     # id: door のランプを次の状態に（prev で前の状態）
+```
+
+```
+$ brain-deck presence
+id	今の状態	選べる状態
+door	在室	在室、不在
+presence	会議中	在席、集中、会議中、休憩
+```
+
+- **選べる状態**：設定のセルの `states`（同じ id のセルの状態）。ないものは終了コード 5 で、選べる状態を出す。
+- **例**：カレンダーの予定の始まりに合わせて cron から `brain-deck presence 会議中`、終わったら `brain-deck presence 在席`。
 
 ### Todo
 
@@ -1282,6 +1363,11 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
 | control.go | 設定 GUI とのシリアル通信（/dev/ttyGS1） |
 | widget.go | ウィジェット（時計、テキスト）の書式、折り返し、描き直しの間隔、描画 |
+| gadgetwidget.go | 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプの検証、描画、タップと長押し |
+| gadgets.go | ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（widgets.json）、再起動と時刻合わせの扱い |
+| qr.go | QR コードの符号化（Project Nayuki の手順をバイトモードに絞ったもの。gui/src/qr.ts も同じ） |
+| battery.go | 電池の状態（power_supply か、i.MX28 の LRADC の電圧） |
+| backlight.go | 自動減光（設定の backlight）。暗いときのタッチを捨てる、終わるときに戻す |
 | image.go | 背景画像の置き場所、受け取り（分割、SHA-256 の確認、一時ファイル）、一覧、削除、読み込みとキャッシュ、先読み |
 | todo.go | Todo の項目（get_todo、todo_* のコマンドの中身）と、その保存、変わったことの通知 |
 | todowidget.go | Todo のセルの配置、描画、ページ送り、長押しでの切り替え |
@@ -1309,6 +1395,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config/background-example.yaml、config/background-images/ | 背景画像の例（current.yaml に背景を足したもの）と、式で描いた例の画像 |
 | tools/mkbg/ | 例の画像（グラデーションと模様）を作るツール |
 | config/trackpad-example.yaml | トラックパッドとマウスのボタンの例（current.yaml に「マウス」のレイヤーを足したもの） |
+| config/gadgets-example.yaml | 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプと、自動減光の例（widgets-example.yaml に「道具」と「共有」のレイヤーと backlight を足したもの） |
 | tools/record-touch.sh | トラックパッドの調整のために、動きごとにタッチを記録する（Brain で実行） |
 | tools/fbshot.sh | Brain の画面のスクリーンショットを、PC に PNG で保存する（PC で実行） |
 | testdata/touch/ | Brain で記録したタッチ（テストで再生する） |
@@ -1413,6 +1500,40 @@ go run . -render-png gui/test/fixtures/trackpad-off.png -render-layer mouse -ren
 
 `TestHWCalendar` は、6 秒後に始まって 9 秒後に終わる予定で、予定の始まりと終わりに自分で描き直すことと、▲▼、PC から送り直したときの描き直しの時間を測る。
 
+電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプのプレビューの PNG は、次のコマンドで書き出す。
+状態は `gui/test/fixtures/widgets-state*.json`（-render-widgets）、QR コードの中身は `qr*.json`（-render-qr）。
+
+```sh
+T=2026-10-06T09:41:27+09:00; C=config/gadgets-example.yaml; F=gui/test/fixtures
+TZ=Asia/Tokyo go run . -render-png $F/gadgets-tools.png -render-layer tools -render-time $T -render-battery 87,charging -render-widgets $F/widgets-state.json $C
+TZ=Asia/Tokyo go run . -render-png $F/gadgets-tools-paused.png -render-layer tools -render-time $T -render-battery 12 -render-widgets $F/widgets-state-paused.json $C
+TZ=Asia/Tokyo go run . -render-png $F/gadgets-tools-alert.png -render-layer tools -render-time $T -render-widgets $F/widgets-state-alert.json -render-pressed "3,0 3,1" $C
+TZ=Asia/Tokyo go run . -render-png $F/gadgets-tools-alert-fill.png -render-layer tools -render-time $T -render-battery 50,plugged -render-widgets $F/widgets-state-alert.json -render-press-style fill -render-pressed "0,1 3,1 2,0" $C
+TZ=Asia/Tokyo go run . -render-png $F/gadgets-share.png -render-layer share -render-time $T -render-qr $F/qr.json -render-widgets $F/widgets-state.json $C
+TZ=Asia/Tokyo go run . -render-png $F/gadgets-share-none.png -render-layer share -render-time $T -render-pressed "2,0" $C
+TZ=Asia/Tokyo go run . -render-png $F/gadgets-share-expired.png -render-layer share -render-time $T -render-qr $F/qr-expired.json -render-widgets $F/widgets-state-paused.json $C
+```
+
+QR コードの模様は、Go と GUI（`gui/src/qr.ts`）で同じ表（`gui/test/fixtures/qrcodes.json`）と比べる。表は、Project Nayuki の Python 版（`pip install qrcodegen`）で同じ模様になることを確かめてある。
+符号化を変えたら `LEFTHAND_UPDATE_QRCODES=1 go test -run QRCodesTable` で書き直し、Python 版とも比べ直す。
+書き出した PNG の QR コードが読めることは、zxing-cpp（`pip install zxing-cpp pillow`）で確かめた（`zxingcpp.read_barcodes(Image.open("gadgets-share.png"))`）。
+
+ストップウォッチ、ポモドーロ、自動減光は、実機で時間を区切って動かして確かめる（タッチは自動で再現できないので、状態は `widgets.json` に書いておく）。
+試験の設定と `-data-dir` は本番と別にし、`/etc/lefthand/config.yaml` と `/var/lib/lefthand/` は使わない。
+
+```sh
+# PC：試験の設定（dim_after: 10s、off_after: 20s など）と、ARM の lefthand を送る
+GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -o lefthand.new .
+scp lefthand.new hwtest.yaml brain:lefthand/
+# Brain：本番のサービスを止め、75 秒だけ動かす。終わると画面を戻し、本番のサービスを起動し直す
+ssh brain 'sudo systemctl stop lefthand.service && sudo systemd-run --collect --unit=lefthand-try -p RuntimeMaxSec=75 \
+  -p "ExecStopPost=/home/user/lefthand/lefthand.new -restore-console" -p "ExecStopPost=/bin/systemctl start lefthand.service" \
+  /home/user/lefthand/lefthand.new -v -data-dir /tmp/lh-hw-data /home/user/lefthand/hwtest.yaml'
+# 明るさは /sys/class/backlight/backlight@0/brightness、ログは journalctl -u lefthand-try、画面は tools/fbshot.sh で見る
+```
+
+ssh の中で、明るさを読むループを `&` で動かすときは、`nohup ... > ファイル 2>&1 < /dev/null &` にする（出力をつないだままだと、ssh がループの終わりまで戻らない）。
+
 ### コマンドラインのオプション
 
 
@@ -1445,6 +1566,9 @@ lefthand -record-touch out.touch [config.yaml]  タッチの生のイベント�
          -record-for 60s                     記録する時間（最大 10m）
          -gadget-setup path                  USB の形を切り替えるときに実行する gadget-setup.sh（既定 /usr/local/sbin/lefthand-gadget-setup）
          -render-mouse-off                   -render-png で、マウスがオフのときのトラックパッドを描く
+         -render-battery 87,charging         -render-png で、電池のウィジェットに出す状態（87、87,plugged、87,charging。省略すると読めないとき）
+         -render-widgets widgets.json        -render-png で、ストップウォッチなどの状態（widgets.json と同じ形）
+         -render-qr qr.json                  -render-png で、QR コードの中身（qr.json と同じ形）
 lefthand -replay-touch file.touch ...        記録を再生し、トラックパッドの判定の結果を書いて終わる（実機不要）
          -replay-config config.yaml          トラックパッドの設定を読む設定ファイル（省略すると既定値）
          -replay-params '{"speed":1.5}'      上書きするトラックパッドの項目（JSON）
@@ -1474,3 +1598,12 @@ go run ./tools/mkfont k8x12.bdf font/k8x12.bin
 > あらゆる改変の有無に関わらず、また商業的な利用であっても、自由にご利用、複製、再配布することができますが、全て無保証とさせていただきます。
 
 Copyright (C) 2015-2021 Num Kadoma
+
+QR コードの符号化（`qr.go`、`gui/src/qr.ts`）は、Project Nayuki の QR Code generator library（https://www.nayuki.io/page/qr-code-generator-library 、MIT ライセンス）の手順を、バイトモードだけに絞って書き直したもの。
+
+> Copyright (c) Project Nayuki. (MIT License)
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> - The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+> - The Software is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages or other liability, whether in an action of contract, tort or otherwise, arising from, out of or in connection with the Software or the use or other dealings in the Software.

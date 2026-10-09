@@ -8,6 +8,7 @@
 - **知らない項目**：書き間違いを見逃さないよう、知らない項目があると読み込みに失敗する。
 - **設定 GUI で保存したとき**：デーモンが YAML で書き直す（`lefthand -check` を通る形）。割り当ては 1 行（`KEY_A: LCTRL+Z`、`"0,0": {key: B, label: ブラシ}`）で、項目は名前順になる。**手で書いたコメントは消える**。前の版は `config.yaml.prev` に残る。
 - **設定 GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`touch` の有無、`display`（`press_style` を除く）は、開いているデバイスにかかわるので、動作中のデーモンには反映できない。ファイルを直接編集し、サービスを再起動する。プロトコルは [protocol.md](protocol.md)。
+- **設定 GUI で編集しない項目**：`terminal` と `backlight` は、GUI では編集しない（GUI で保存しても残る）。ファイルを直接編集する。
 
 ## 全体
 
@@ -18,6 +19,7 @@ touch: { ... }              # タッチパネルそのものの設定。省略�
 layers: [ ... ]             # レイヤー。最初のものが base
 display: { ... }            # 画面表示。省略可
 terminal: { ... }           # 端末モード。省略可（下の「端末モード（terminal）」）
+backlight: { ... }          # 自動減光。省略すると減光しない（下の「自動減光（backlight）」）
 ```
 
 | 項目 | 型 | 内容 |
@@ -28,6 +30,7 @@ terminal: { ... }           # 端末モード。省略可（下の「端末モ�
 | layers | 配列 | 1 つ以上。下を参照 |
 | display | オブジェクト | enabled（真偽）、device（既定 `/dev/fb0`）、vt（0 で自動）、rotate（0、90、180、270）、press_style（下を参照） |
 | terminal | オブジェクト | 端末モードの設定。下の「端末モード（terminal）」 |
+| backlight | オブジェクト | 触らなければ画面を暗くし、消す。下の「自動減光（backlight）」 |
 
 ## touch：タッチパネル
 
@@ -204,7 +207,7 @@ terminal:
 
 ### ウィジェット
 
-タッチのセルに、キーの代わりに情報を出す。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）、トラックパッド（`trackpad`）。
+タッチのセルに、キーの代わりに情報を出す。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）、トラックパッド（`trackpad`）、電池（`battery`）、ストップウォッチ（`stopwatch`）、ポモドーロ（`pomodoro`）、カウンター（`counter`）、QR コード（`qr`）、在席ランプ（`presence`）。
 
 ```yaml
 "0,0": { widget: clock }                                       # 時刻と日付。既定の書式
@@ -213,20 +216,28 @@ terminal:
 "2,1": { widget: text, id: build, label: ビルド }                # テキスト。中身は PC の brain-deck で書き換える
 "0,0": { widget: todo, span: [2, 3], label: Todo }              # Todo の一覧。長押しで完了を切り替える
 "0,0": { widget: calendar, span: [2, 3], label: 予定 }          # 今日の予定と次の予定
+"2,0": { widget: battery, label: 電池 }                         # 電池の残りと、USB から給電しているか
+"0,0": { widget: stopwatch, span: [2, 1] }                      # タップで開始と停止、長押しで 0 に戻す
+"0,1": { widget: pomodoro, span: [2, 2], work: 25m, break: 5m } # タップで開始と一時停止、長押しで最初に戻す
+"3,0": { widget: counter, id: coffee, label: コーヒー }          # タップで +1、長押しで 0 に戻す
+"0,0": { widget: qr, id: share, span: [2, 3] }                  # QR コード。中身は PC の brain-deck で送る
+"2,0": { widget: presence, span: [2, 2] }                       # 在席ランプ。タップで次の状態
 ```
 
 | 項目 | 内容 |
 | --- | --- |
-| `widget` | ウィジェットの種類。`clock`、`text`、`todo`、`calendar`、`trackpad` |
+| `widget` | ウィジェットの種類。`clock`、`text`、`todo`、`calendar`、`trackpad`、`battery`、`stopwatch`、`pomodoro`、`counter`、`qr`、`presence` |
 | `label` | セルの上に小さく出す見出し（省略可） |
-| `key`、`layer_*`、`mouse` | タップしたときの動き（省略可）。書けば、ふつうのセルと同じく働き、押したときに枠が光る。書かなければ、タップしても何もせず、枠も光らない。`todo`、`calendar`、`trackpad` には書けない（押した位置で働くため） |
+| `key`、`layer_*`、`mouse` | タップしたときの動き（省略可）。書けば、ふつうのセルと同じく働き、押したときに枠が光る。書かなければ、タップしても何もせず、枠も光らない。`todo`、`calendar`、`trackpad` には書けない（押した位置で働くため）。`stopwatch`、`pomodoro`、`counter`、`presence` にも書けない（タップと長押しを自分で処理するため） |
+| `id` | `text` と `qr`：中身の名前（必須）。`stopwatch`、`pomodoro`、`counter`、`presence`：状態の名前（省略すると種類の名前。同じ id のセルは同じ状態を出す）。英数字と `_ . -` の 32 文字まで |
 | `span` | セルの大きさ。上を参照 |
 
 - **使える場所**：タッチのセルだけ。本体キーとソフトキーには書けない。
 - **`key: none` は書けない**：ウィジェットを出すだけなら、key を省略する。
 - **描き直し**：ウィジェットごとに、中身が次に変わる時刻まで待って、変わったセルだけを描き直す。描画は今までどおり別のスレッドで行い、入力の処理を待たせない。壁時計が NTP などで飛んでも、1 分以内には表示が追いつく。
 - **データ**：テキスト、Todo、カレンダーの中身は、設定ファイルではなく `/var/lib/lefthand/` に置く。設定 GUI で設定を保存しても消えない。
-- **ほかの種類の項目**：`format` などの時計の項目をテキストに、`id` を時計に、`rows` と `page_reset` を Todo とカレンダー以外に、`stale` と `calendars` をカレンダー以外に、トラックパッドの項目をトラックパッド以外に書くと誤り。
+- **ほかの種類の項目**：`format` などの時計の項目をテキストに、`id` を時計などに、`rows` と `page_reset` を Todo とカレンダー以外に、`stale` と `calendars` をカレンダー以外に、トラックパッドの項目をトラックパッド以外に、`work` と `break` をポモドーロ以外に、`states` を在席ランプ以外に書くと誤り。
+- **タップと長押し**（`stopwatch`、`pomodoro`、`counter`、`presence`）：離したときに「タップ」の働きをする。**0.5 秒押し続ける**と（Todo の完了の切り替えと同じ長さ）、離す前に「長押し」の働きをし、離しても何もしない。押しているあいだは、ふつうのセルと同じく枠が光る。設定を差し替えたときに押していたものは、何もしない。
 
 #### 時計（clock）
 
@@ -402,6 +413,92 @@ terminal:
 - **帯の外の縦のなぞり**：帯の外を縦に速くなぞると、途中で切れた短いかけらがタップに見え、まれにクリックやドラッグになる（scroll の記録をそのまま再生すると、20 回のタッチで、クリック 1、ドラッグ 2）。
 - **感度と加速**：PC の画面の大きさと、OS の加速によって感じ方が変わる。記録からは決めきれないので、使ってみて `speed`、`accel` を変える。
 
+#### 電池（battery）
+
+```yaml
+"2,0": { widget: battery, label: 電池 }
+"3,2": { widget: battery, key: F5 }        # タップでキーを送る
+```
+
+電池の残り（%）を大きく、その下に「充電中」「USB 給電」「電池」のどれかを出し、いちばん下に残りの帯を出す。項目はない（`label` とタップの動きだけ）。
+
+- **読み方**：`/sys/class/power_supply` に電池があれば、その `capacity` と `status`。PW-SH2（Brainux のカーネル）にはないので、i.MX28 の LRADC（IIO の `mxs-lradc-adc`）の ch7（電池の電圧）と ch15（USB の 5V）を読む。30 秒ごとに読み、電圧は 5 回（2 分半）の移動平均を取る。
+- **見積もり（PW-SH2）**：残りは Li-ion の電圧の目安の表から見積もる（3.40 V で 0%、3.70 V で 33%、4.00 V で 85%、4.15 V 以上で 100%）。USB の 5V があって 4.15 V より低ければ「充電中」、4.15 V 以上なら「USB 給電」とする。充電は外付けの IC が行い、その状態はソフトウェアから読めないため。USB につないでいるあいだは電圧が高めに出るので、残りも多めに出る。
+- **色**：充電中は緑。そうでなければ 30% 以下で黄、15% 以下で赤。
+- **読めないとき**：「--%」「電池を読めません」を灰色で出す。
+
+#### ストップウォッチ（stopwatch）
+
+```yaml
+"0,0": { widget: stopwatch, span: [2, 1], label: ストップウォッチ }
+"2,0": { widget: stopwatch, id: meeting, label: 会議 }   # 別のストップウォッチ
+```
+
+- **タップ**：止まっていれば始め、動いていれば止める。**長押し**：0 に戻して止める。
+- **表示**：1 時間までは「分:秒」、それより長ければ「時:分:秒」。下に「計測中」「停止中」（黄）、0 のときは「タップで開始」（灰）。動いているあいだは 1 秒ごとに描き直す。
+- **保存**：`/var/lib/lefthand/widgets.json`。動いているあいだは始めた時刻を覚えるので、デーモンを再起動しても数え続ける。**Brain を再起動すると止まる**（Brain には RTC がなく、起動直後の時刻が当てにならないため）。デーモンが終了の処理をしたとき（電源を切る、再起動するなど）は、その時点までの時間が残る。電池が切れたときなどは、最後に始めた時点までになる。
+- **時刻合わせ**：設定 GUI や brain-deck が Brain の時刻を動かしても、経過時間は変わらない（始めた時刻も同じだけ動かす）。
+
+#### ポモドーロ（pomodoro）
+
+```yaml
+"0,1": { widget: pomodoro, span: [2, 2], label: ポモドーロ }               # 作業 25 分、休憩 5 分
+"2,1": { widget: pomodoro, id: deep, work: 50m, break: 10m, label: 集中 }
+```
+
+| 項目 | 既定 | 内容 |
+| --- | --- | --- |
+| `work` | `25m` | 作業の時間。1 分〜4 時間、秒の単位まで |
+| `break` | `5m` | 休憩の時間。1 分〜4 時間、秒の単位まで |
+
+- **タップ**：まだ始めていない、または一時停止なら始める（続ける）。動いていれば一時停止する。点滅しているあいだのタップは、点滅を止めるだけ。**長押し**：最初（作業の始まり、終えた回数 0）に戻す。
+- **動き**：作業と休憩をくり返す。残りを大きく（作業は赤、休憩は緑）、下に「作業中」「休憩中」と終えた作業の回数（「2回」）を出す。一時停止は灰色で「一時停止 作業」。
+- **知らせ方**：作業と休憩が切り替わったら、**セルを 15 秒、0.5 秒ごとに点滅させる**（段階の色で塗る）。画面が暗ければ明るくする（下の「自動減光」）。音は出さない（Brain のブザーは、今のカーネルとデバイスツリーでは使えるデバイスになっていない。2026-10-09 に確かめた）。
+- **時間を変えたとき**：始めたときの `work` と `break` で動き続ける。新しい時間は、長押しで最初に戻してから始めると使う。
+- **保存**：ストップウォッチと同じ（`widgets.json`。Brain を再起動すると一時停止になる）。
+
+#### カウンター（counter）
+
+```yaml
+"3,0": { widget: counter, label: カウンター }
+"2,1": { widget: counter, id: coffee, label: コーヒー }
+```
+
+- **タップ**：1 増やす。**長押し**：0 に戻す。値は 0〜999999999。
+- **保存**：`widgets.json`。デーモンや Brain を再起動しても残る。
+
+#### QR コード（qr）
+
+```yaml
+"0,0": { widget: qr, id: share, span: [2, 3], label: 共有 }
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `id` | 必須。中身の名前（テキストと同じ形） |
+
+- **中身**：テキストのタイルと同じ仕組み。設定には書かず、PC から `brain-deck qr <id> "https://..."`（プロトコルの `set_qr`）で送り、Brain の `/var/lib/lefthand/qr.json` に残る。`--ttl` で有効期限を付けられ、過ぎると消さずに薄い色（灰色の地に濃い灰色）で描く。一度も送っていなければ「未設定」。
+- **長さ**：UTF-8 で 400 バイトまで。改行とタブも使える。ASCII 以外の文字を含むときは、UTF-8 であることを示す ECI を付ける。
+- **符号**：誤り訂正のレベル M（同じ大きさに収まるなら上げる）、バージョンは収まるいちばん小さいもの。
+- **大きさ**：1 升を 2 ドット以上の整数倍にし、周りに白い余白を 4 升（入らなければ 2 升）付けて、セルの中央に置く。入らなければ「QR が入りません」と出すので、`span` でセルを大きくする。4×3 の格子の 2×3 のセルなら、400 バイトでも入る。
+- **タップしたときの動き**：`key` などを書ける。
+
+#### 在席ランプ（presence）
+
+```yaml
+"2,0": { widget: presence, span: [2, 2] }                      # 在席、集中、会議中、休憩
+"3,1": { widget: presence, id: door, states: [{name: 在室, color: "#40c070"}, {name: 不在, color: "#606870"}] }
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `states` | 状態の並び（1〜12 個）。`name` は 1〜16 文字（前後の空白、制御文字は不可）、`color` は `#rrggbb`（省略すると順に決まった色）。省略すると、在席（#40c070）、集中（#ff5858）、会議中（#ff8020）、休憩（#4f9dff） |
+
+- **表示**：セル全体を今の状態の色で塗り、状態の名前を大きく出す（文字は、色の明るさで黒か白）。まだ一度も変えていなければ、最初の状態。ほかのセルの状態の名前にした（同じ id で、状態の並びが違う）ときは、名前を灰色の地で出す。
+- **タップ**：次の状態（最後の次は最初）。**長押し**：前の状態。
+- **PC から**：`brain-deck presence 会議中`、`brain-deck presence next --id door`（プロトコルの `set_presence`）。
+- **保存**：`widgets.json`（状態の名前）。再起動しても残る。
+
 ### 背景画像（background）
 
 ```yaml
@@ -464,6 +561,36 @@ display:
 - **反映**：`display` のほかの項目と違い、設定 GUI から保存すれば、デーモンを再起動せずにすぐ反映する。
 - **確かめ方**：`lefthand -render-png out.png -render-pressed "0,0" config.yaml` で押した画面を書き出せる。`-render-press-style fill` で、設定と違う見せ方も試せる。
 
+## 自動減光（backlight）
+
+しばらく触らなければ画面（バックライト）を暗くし、さらに時間がたったら消す。書かなければ、今までどおり減光しない。
+
+```yaml
+backlight:
+  dim_after: 1m       # 触らずにこの時間がたったら暗くする。off か省略で暗くしない
+  dim_level: 1        # 暗くしたときの明るさ（既定 1）
+  off_after: 5m       # 触らずにこの時間がたったら消す（明るさ 0）。off か省略で消さない
+  level: 7            # ふだんの明るさ。省略すると起動したときの明るさ
+  wake_on_key: true   # 本体キーでも明るくする（既定 true）
+  in_terminal: false  # 端末モードのあいだも暗くする（既定 false）
+  device: /sys/class/backlight/backlight@0   # 省略すると最初のもの
+```
+
+| 項目 | 範囲 | 内容 |
+| --- | --- | --- |
+| `dim_after`、`off_after` | 5s〜24h、off | 最後に触ってからの時間。両方書くなら `off_after` を長くする。`dim_after` だけなら暗くするだけ、`off_after` だけなら暗くせずに消す |
+| `level`、`dim_level` | 0〜max_brightness | PW-SH2 は 0〜7（PWM の 255 分率で 0、4、8、16、32、64、128、255）。max_brightness より大きければ、max_brightness にする（ログに出す）。`level` は 1 以上 |
+| `wake_on_key` | 真偽 | true なら、本体キーを押すと明るくし、時間を数え直す。false なら、キーは明るさに関係しない |
+| `in_terminal` | 真偽 | false なら、端末モードのあいだは暗くしない（抜けたら数え直す） |
+
+- **暗いときのタッチ**：暗くしたか消したあとのタッチは、**明るくするだけで、そのタッチではセルもソフトキーも押さない**（誤って押さないため）。離すまでのサンプルもすべて捨てる。次のタッチからふつうに働く。
+- **暗いときのキー**：本体キーは、暗いときもそのまま PC に送る（文字の入力を止めない）。
+- **触れているあいだ**：指が触れているあいだ（トラックパッドで長く動かしているときなど）は暗くしない。離したときから数える。
+- **ほかに明るくするとき**：ポモドーロの作業と休憩が切り替わったとき。設定 GUI から設定を保存したとき（新しい設定ですぐ数え直す）。
+- **反映**：設定 GUI から保存すれば、再起動せずに反映する（`backlight` は GUI では編集しないが、ファイルを直接編集したあと GUI で保存しても残る）。
+- **終わるとき**：起動したときの明るさに戻す。強制終了などで戻せなかったときは、`lefthand -restore-console`（サービスの ExecStopPost）が `/run/lefthand-backlight` に残した明るさに戻す。
+- **状態を見る**：`brain-deck status` の「画面の明るさ」、プロトコルの `get_status` の `backlight`。
+
 ## 読み込み時の検証
 
 次のものは誤りとして、デーモンを起動しない。
@@ -481,6 +608,8 @@ display:
 | 背景画像の書き方 | id が 16 文字の 16 進でない、本体キーやソフトキーの `background` |
 | ウィジェットの書き方 | 知らない `widget`、知らない `tz`、widget なしの `format`、本体キーやソフトキーの `widget`・`span`、ウィジェットに `key: none`、`todo`、`calendar`、`trackpad` に `key` や `layer_*` や `mouse`、`rows` が 1〜20 の外、`page_reset` や `stale` の時間の誤り、トラックパッドの項目の範囲の外、トラックパッド以外のトラックパッドの項目 |
 | マウスの操作 | 知らない `mouse` の値、知らない `usb_mode` の値 |
+| 新しいウィジェット | `stopwatch`、`pomodoro`、`counter`、`presence` に `key` などのタップの動き、`qr` に `id` がない、`work`・`break` の時間の誤り、`states` の数・名前・色の誤り、名前の重なり |
+| 自動減光 | `dim_after`・`off_after` の時間の誤り、`off_after` が `dim_after` より短い、`level` が 0、`device` が /sys/class/backlight の外（場所は `/backlight`） |
 | 定義していないソフトキー | soft_areas にない名前を soft_keys に書いた |
 | base の格子がない | touch があるのに、base に cols/rows がない |
 | 旧形式との混在 | layers と、トップレベルの keys（または touch.cells）を両方書いた |
@@ -544,4 +673,4 @@ touch:
 }
 ```
 
-完全な例は、リポジトリの [config.yaml](../config.yaml)。ウィジェットと span の例は [config/widgets-example.yaml](../config/widgets-example.yaml)（「情報」「Todo」「予定」レイヤー）。背景画像の例は [config/background-example.yaml](../config/background-example.yaml)。トラックパッドとマウスのボタンの例は [config/trackpad-example.yaml](../config/trackpad-example.yaml)（「マウス」レイヤー）。
+完全な例は、リポジトリの [config.yaml](../config.yaml)。ウィジェットと span の例は [config/widgets-example.yaml](../config/widgets-example.yaml)（「情報」「Todo」「予定」レイヤー）。背景画像の例は [config/background-example.yaml](../config/background-example.yaml)。トラックパッドとマウスのボタンの例は [config/trackpad-example.yaml](../config/trackpad-example.yaml)（「マウス」レイヤー）。電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプと、自動減光の例は [config/gadgets-example.yaml](../config/gadgets-example.yaml)（「道具」「共有」レイヤーと backlight）。
