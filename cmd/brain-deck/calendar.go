@@ -29,6 +29,10 @@ import (
 const (
 	defaultCalDays      = 7
 	maxCalDays          = 31
+	defaultPastMonths   = 1 // 先月の初めから
+	defaultFutureMonths = 1 // 来月の終わりまで
+	maxRangeMonths      = 3
+	maxCalSendBytes     = 200 << 10 // 送る予定の JSON の上限。Brain の 1 行の上限（256 KiB）に余裕を残す
 	defaultFetchTimeout = 30 * time.Second
 	maxICSBytes         = 20 << 20
 	maxCalEvents        = 1000 // Brain の上限（calendar.go の calMaxEvents）
@@ -37,14 +41,31 @@ const (
 
 // calendarsFile は calendars.yaml の形。
 type calendarsFile struct {
-	Days      int           `yaml:"days"`
-	Calendars []calendarCfg `yaml:"calendars"`
+	Days         int           `yaml:"days"`
+	PastMonths   *int          `yaml:"past_months"`
+	FutureMonths *int          `yaml:"future_months"`
+	Calendars    []calendarCfg `yaml:"calendars"`
 }
 
 type calendarCfg struct {
-	Name  string `yaml:"name"`
-	URL   string `yaml:"url"`
-	Color string `yaml:"color"`
+	Name    string `yaml:"name"`
+	URL     string `yaml:"url"`
+	Color   string `yaml:"color"`
+	Holiday bool   `yaml:"holiday"` // 祝日のカレンダー（Brain の月の表示で日付を赤くする）
+	// Observances は、祝日のカレンダーの「祭日」（Google の日本の祝日の、七五三やクリスマスなど。DESCRIPTION が「祭日」で始まる）も送るか
+	Observances bool `yaml:"observances"`
+}
+
+// isObservance は、Google の「日本の祝日」のカレンダーで、祝日でない記念日や行事（DESCRIPTION の 1 行目が「祭日」）か。
+// 祝日は「祝日」と書いてある。
+func isObservance(c *icsComp) bool {
+	d := icsText(propValue(c, "DESCRIPTION"))
+	return d == "祭日" || strings.HasPrefix(d, "祭日\n")
+}
+
+// syncRange は、送る予定の範囲の決め方。今日から days 日先までと、今月の past か月前の初めから future か月後の終わりまでを合わせた範囲。
+type syncRange struct {
+	days, past, future int
 }
 
 // colorNames は、calendars.yaml の color に書ける名前（#rrggbb も書ける）。
@@ -89,18 +110,25 @@ func calendarsPath() string {
 }
 
 const calendarsExample = `# ~/.config/brain-deck/calendars.yaml の例（chmod 600 にする。URL は秘密の情報）
-days: 7                       # 今日から何日先までを送るか（1〜31）
+past_months: 1                # 何か月前の初めからを送るか（0〜3。既定 1：先月の初めから）
+future_months: 1              # 何か月後の終わりまでを送るか（0〜3。既定 1：来月の終わりまで）
+days: 7                       # 少なくとも今日から何日先までを送るか（1〜31）
 calendars:
   - name: 仕事                # Brain の画面と、セルの calendars: で使う名前
     url: https://calendar.google.com/calendar/ical/xxxx/private-xxxx/basic.ics
     color: blue               # #rrggbb か、blue green orange purple yellow cyan pink gray red white
   - name: 家
     url: webcal://p00-caldav.icloud.com/published/2/xxxx
-    color: green`
+    color: green
+  - name: 祝日                # 祝日のカレンダー。月の表示で日付を赤くし、名前は日付をタップすると出る
+    url: https://calendar.google.com/calendar/ical/ja.japanese%23holiday%40group.v.calendar.google.com/public/basic.ics
+    color: red
+    holiday: true`
 
 // loadCalendars は、--ics か calendars.yaml から、取ってくるカレンダーを決める。
-func loadCalendars(o *options, stderr io.Writer) ([]calendarCfg, int, error) {
+func loadCalendars(o *options, stderr io.Writer) ([]calendarCfg, syncRange, error) {
 	days := o.days
+	rng := syncRange{past: defaultPastMonths, future: defaultFutureMonths}
 	if len(o.ics) > 0 {
 		var cs []calendarCfg
 		for i, u := range o.ics {
@@ -113,7 +141,8 @@ func loadCalendars(o *options, stderr io.Writer) ([]calendarCfg, int, error) {
 		if days == 0 {
 			days = defaultCalDays
 		}
-		return cs, days, nil
+		rng.days = days
+		return cs, rng, nil
 	}
 	path := o.config
 	if path == "" {
@@ -121,10 +150,10 @@ func loadCalendars(o *options, stderr io.Writer) ([]calendarCfg, int, error) {
 	}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, 0, usageError(fmt.Sprintf("カレンダーの設定 %s がありません。--ics <URL> で URL を指定するか、次のように書いてください：\n%s", path, calendarsExample))
+		return nil, syncRange{}, usageError(fmt.Sprintf("カレンダーの設定 %s がありません。--ics <URL> で URL を指定するか、次のように書いてください：\n%s", path, calendarsExample))
 	}
 	if err != nil {
-		return nil, 0, err
+		return nil, syncRange{}, err
 	}
 	if st, err := os.Stat(path); err == nil && st.Mode().Perm()&0o077 != 0 {
 		fmt.Fprintf(stderr, "brain-deck: 注意：%s はほかのユーザーも読めます。ICS の URL は秘密の情報なので、chmod 600 %s にしてください\n", path, path)
@@ -133,21 +162,21 @@ func loadCalendars(o *options, stderr io.Writer) ([]calendarCfg, int, error) {
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
-		return nil, 0, usageError(fmt.Sprintf("%s：%v", path, err))
+		return nil, syncRange{}, usageError(fmt.Sprintf("%s：%v", path, err))
 	}
 	if len(f.Calendars) == 0 {
-		return nil, 0, usageError(path + " に calendars がありません：\n" + calendarsExample)
+		return nil, syncRange{}, usageError(path + " に calendars がありません：\n" + calendarsExample)
 	}
 	seen := map[string]bool{}
 	for i := range f.Calendars {
 		c := &f.Calendars[i]
 		c.Name = strings.TrimSpace(c.Name)
 		if c.Name == "" || len([]rune(c.Name)) > maxCalNameRunes || seen[c.Name] {
-			return nil, 0, usageError(fmt.Sprintf("%s：%d 番目のカレンダーの name は、1〜%d 文字で、ほかと違う名前にします", path, i+1, maxCalNameRunes))
+			return nil, syncRange{}, usageError(fmt.Sprintf("%s：%d 番目のカレンダーの name は、1〜%d 文字で、ほかと違う名前にします", path, i+1, maxCalNameRunes))
 		}
 		seen[c.Name] = true
 		if strings.TrimSpace(c.URL) == "" {
-			return nil, 0, usageError(fmt.Sprintf("%s：カレンダー「%s」に url がありません", path, c.Name))
+			return nil, syncRange{}, usageError(fmt.Sprintf("%s：カレンダー「%s」に url がありません", path, c.Name))
 		}
 	}
 	if days == 0 {
@@ -157,9 +186,23 @@ func loadCalendars(o *options, stderr io.Writer) ([]calendarCfg, int, error) {
 		days = defaultCalDays
 	}
 	if days < 1 || days > maxCalDays {
-		return nil, 0, usageError(fmt.Sprintf("days は 1〜%d です（%d）", maxCalDays, days))
+		return nil, syncRange{}, usageError(fmt.Sprintf("days は 1〜%d です（%d）", maxCalDays, days))
 	}
-	return f.Calendars, days, nil
+	rng.days = days
+	for _, m := range []struct {
+		name string
+		v    *int
+		to   *int
+	}{{"past_months", f.PastMonths, &rng.past}, {"future_months", f.FutureMonths, &rng.future}} {
+		if m.v == nil {
+			continue
+		}
+		if *m.v < 0 || *m.v > maxRangeMonths {
+			return nil, syncRange{}, usageError(fmt.Sprintf("%s：%s は 0〜%d です（%d）", path, m.name, maxRangeMonths, *m.v))
+		}
+		*m.to = *m.v
+	}
+	return f.Calendars, rng, nil
 }
 
 // redactURL は、秘密の URL をエラーやログに出さないよう、スキームとホストだけにする。
@@ -233,6 +276,7 @@ func fetchICS(ctx context.Context, raw string) ([]byte, error) {
 type calendarOut struct {
 	Name      string     `json:"name"`
 	Color     string     `json:"color"`
+	Holiday   bool       `json:"holiday,omitempty"`
 	FetchedAt *time.Time `json:"fetched_at,omitempty"`
 	Error     string     `json:"error,omitempty"`
 	Events    []calEvent `json:"events"`
@@ -247,7 +291,7 @@ func gatherCalendars(cfgs []calendarCfg, win window, timeout time.Duration, verb
 	var wg sync.WaitGroup
 	for i, c := range cfgs {
 		color, err := normColor(c.Color, i)
-		out[i] = calendarOut{Name: c.Name, Color: color, Events: []calEvent{}}
+		out[i] = calendarOut{Name: c.Name, Color: color, Holiday: c.Holiday, Events: []calEvent{}}
 		if err != nil {
 			out[i].Error = err.Error()
 			continue
@@ -261,7 +305,18 @@ func gatherCalendars(cfgs []calendarCfg, win window, timeout time.Duration, verb
 				out[i].Error = err.Error()
 				return
 			}
-			evs, _, w, err := expandICS(b, win)
+			var skip func(*icsComp) bool
+			skipped := 0
+			if c.Holiday && !c.Observances {
+				skip = func(e *icsComp) bool {
+					if isObservance(e) {
+						skipped++
+						return true
+					}
+					return false
+				}
+			}
+			evs, _, w, err := expandICSWith(b, win, skip)
 			if err != nil {
 				out[i].Error = "ICS として読めません（" + err.Error() + "）"
 				return
@@ -271,6 +326,9 @@ func gatherCalendars(cfgs []calendarCfg, win window, timeout time.Duration, verb
 			warns[i] = w
 			if verbose {
 				fmt.Fprintf(stderr, "brain-deck: %s: %s から %d バイト、%d 件（%v）\n", c.Name, redactURL(c.URL), len(b), len(evs), time.Since(t0).Round(time.Millisecond))
+				if skipped > 0 {
+					fmt.Fprintf(stderr, "brain-deck: %s: ICS の中の、祝日でない「祭日」（七五三など）%d 個を外しました（observances: true で残す）\n", c.Name, skipped)
+				}
 			}
 		}(i, c)
 	}
@@ -281,34 +339,78 @@ func gatherCalendars(cfgs []calendarCfg, win window, timeout time.Duration, verb
 			notes = append(notes, out[i].Name+"："+s)
 		}
 	}
-	// Brain の上限を超えたら、始まりの早いものから残す
-	total := 0
-	for _, c := range out {
-		total += len(c.Events)
+	notes = append(notes, fitCalendars(out, win.today, maxCalEvents, maxCalSendBytes)...)
+	return out, notes
+}
+
+// fitCalendars は、予定が Brain の上限（件数と、送る JSON の大きさ）を超えたら、今日から遠いものを外す。
+// 遠さは、今日の 0 時 today から予定の始まりまで（過ぎた予定は、終わりから today まで）。外したときは、そのことを書いた注意を返す。
+func fitCalendars(out []calendarOut, today time.Time, maxEvents, maxBytes int) []string {
+	type ref struct {
+		c, i int
+		dist time.Duration
 	}
-	if total > maxCalEvents {
-		var all []time.Time
-		for _, c := range out {
-			for _, e := range c.Events {
-				all = append(all, e.sortKey())
+	var all []ref
+	for ci, c := range out {
+		for i, e := range c.Events {
+			s, end := e.span()
+			var d time.Duration
+			switch {
+			case !end.After(today):
+				d = today.Sub(end)
+			case s.After(today):
+				d = s.Sub(today)
 			}
+			all = append(all, ref{ci, i, d})
 		}
-		sort.Slice(all, func(i, j int) bool { return all[i].Before(all[j]) })
-		cut := all[maxCalEvents-1]
-		kept := 0
+	}
+	size := func() int {
+		b, _ := json.Marshal(out)
+		return len(b)
+	}
+	total, bytes0 := len(all), size()
+	if total <= maxEvents && bytes0 <= maxBytes {
+		return nil
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].dist < all[j].dist })
+	orig := make([][]calEvent, len(out))
+	for i := range out {
+		orig[i] = out[i].Events
+	}
+	keep := func(k int) {
+		take := make([][]bool, len(out))
 		for i := range out {
-			var ev []calEvent
-			for _, e := range out[i].Events {
-				if !e.sortKey().After(cut) && kept < maxCalEvents {
+			take[i] = make([]bool, len(orig[i]))
+		}
+		for _, r := range all[:k] {
+			take[r.c][r.i] = true
+		}
+		for i := range out {
+			ev := []calEvent{}
+			for j, e := range orig[i] {
+				if take[i][j] {
 					ev = append(ev, e)
-					kept++
 				}
 			}
 			out[i].Events = ev
 		}
-		notes = append(notes, fmt.Sprintf("予定が %d 件あり、Brain の上限（%d 件）を超えたので、先の予定を送りませんでした（days を減らしてください）", total, maxCalEvents))
 	}
-	return out, notes
+	k := min(total, maxEvents)
+	keep(k)
+	for sz := size(); sz > maxBytes && k > 0; sz = size() {
+		k = min(k-1, int(float64(k)*float64(maxBytes)/float64(sz)*0.98))
+		keep(max(k, 0))
+	}
+	var notes []string
+	if total > maxEvents {
+		notes = append(notes, fmt.Sprintf("予定が %d 件あり、Brain の上限（%d 件）を超えたので、今日から遠い %d 件を送りませんでした（calendars.yaml の past_months、future_months を減らしてください）",
+			total, maxEvents, total-min(total, maxEvents)))
+	}
+	if bytes0 > maxBytes && k < min(total, maxEvents) {
+		notes = append(notes, fmt.Sprintf("送る予定が %d KiB になり、上限（%d KiB）を超えたので、今日から遠い %d 件を送りませんでした（past_months、future_months を減らしてください）",
+			(bytes0+1023)>>10, maxBytes>>10, min(total, maxEvents)-k))
+	}
+	return notes
 }
 
 const exitFetch = 7 // 予定の取得に失敗した（ほかのカレンダーは送った）
@@ -346,12 +448,13 @@ func runCalendar(o *options, stdout, stderr io.Writer) int {
 		return report(stderr, usageError(calendarUsage))
 	}
 
-	cfgs, days, err := loadCalendars(o, stderr)
+	cfgs, sr, err := loadCalendars(o, stderr)
 	if err != nil {
 		return report(stderr, err)
 	}
 	now := time.Now()
-	win := newWindow(now, days)
+	win := newSyncWindow(now, sr)
+	days := win.days()
 	cals, notes := gatherCalendars(cfgs, win, o.fetchTimeout, o.verbose, stderr)
 	for _, n := range notes {
 		fmt.Fprintln(stderr, "brain-deck: 注意："+n)
@@ -368,6 +471,14 @@ func runCalendar(o *options, stdout, stderr io.Writer) int {
 		lines = append(lines, fmt.Sprintf("%s：%d 件", c.Name, len(c.Events)))
 	}
 	rng := fmt.Sprintf("%s〜%s", win.from.Format("1/2"), win.to.Add(-time.Second).Format("1/2"))
+	if o.verbose {
+		b, _ := json.Marshal(cals)
+		n := 0
+		for _, c := range cals {
+			n += len(c.Events)
+		}
+		fmt.Fprintf(stderr, "brain-deck: 送る予定 %d 件、%.1f KiB（%s、上限 %d 件、%d KiB）\n", n, float64(len(b))/1024, rng, maxCalEvents, maxCalSendBytes>>10)
+	}
 	if o.dryRun {
 		if !o.quiet {
 			fmt.Fprintln(stdout, formatEvents(cals, now))
@@ -400,7 +511,7 @@ func runCalendar(o *options, stdout, stderr io.Writer) int {
 		}
 		json.Unmarshal(raw, &r)
 		if !r.Shown {
-			fmt.Fprintln(stderr, "brain-deck: 注意：今の設定には、カレンダーのセル（widget: calendar）がありません。予定は Brain に保存しました")
+			fmt.Fprintln(stderr, "brain-deck: 注意：今の設定には、カレンダーのセル（widget: calendar か month）がありません。予定は Brain に保存しました")
 		}
 		return fmt.Sprintf("%s の予定を送りました（%s）\n%s", rng, strings.Join(lines, "、"), strings.Join(msgs, "\n")), nil
 	})
@@ -511,7 +622,11 @@ func listCalendar(c *Client, asJSON bool) (string, error) {
 		if cal.FetchedAt != nil {
 			at = cal.FetchedAt.Local().Format("01/02 15:04")
 		}
-		fmt.Fprintf(&b, "%s（%s）：%d 件、最終更新 %s", cal.Name, cal.Color, len(cal.Events), at)
+		kind := ""
+		if cal.Holiday {
+			kind = "、祝日"
+		}
+		fmt.Fprintf(&b, "%s（%s%s）：%d 件、最終更新 %s", cal.Name, cal.Color, kind, len(cal.Events), at)
 		if cal.Error != "" {
 			fmt.Fprintf(&b, "、取得に失敗：%s", cal.Error)
 		}

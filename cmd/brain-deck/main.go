@@ -77,8 +77,10 @@ const usage = `使い方：
   brain-deck todo edit <番号|ID> <文> 項目の文を書き換える
   brain-deck todo rm <番号|ID>...     項目を消す
   brain-deck todo clear-done          完了した項目をまとめて消す
-  brain-deck calendar sync            予定を ICS の URL から取ってきて Brain に送る（~/.config/brain-deck/calendars.yaml）
-  brain-deck calendar sync --ics <URL> [--days 7]   設定ファイルを使わず、URL を直接指定する（何度でも書ける）
+  brain-deck calendar sync            予定を ICS の URL から取ってきて Brain に送る（~/.config/brain-deck/calendars.yaml）。
+                                      送るのは、先月の初めから来月の終わりまで（past_months、future_months で変える）
+  brain-deck calendar sync --ics <URL> [--days 7]   設定ファイルを使わず、URL を直接指定する（何度でも書ける。
+                                      --days は、少なくとも今日から何日先までを送るか）
   brain-deck calendar sync --dry-run  取ってきた予定を表示するだけで、Brain には送らない
   brain-deck calendar [list] [--json] Brain にある予定
   brain-deck calendar clear           Brain の予定を消す

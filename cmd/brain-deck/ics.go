@@ -520,6 +520,22 @@ type calEvent struct {
 	Location string     `json:"location,omitempty"`
 }
 
+// span は、予定の始まりと終わり（終日の予定は PC のタイムゾーンの 0 時）。
+func (e calEvent) span() (time.Time, time.Time) {
+	if e.Start != nil {
+		end := *e.Start
+		if e.End != nil {
+			end = *e.End
+		}
+		return *e.Start, end
+	}
+	s := e.sortKey()
+	if t, err := time.ParseInLocation("2006-01-02", e.EndDay, time.Local); err == nil {
+		return s, t
+	}
+	return s, s.AddDate(0, 0, 1)
+}
+
 func (e calEvent) sortKey() time.Time {
 	if e.Start != nil {
 		return *e.Start
@@ -532,13 +548,35 @@ func (e calEvent) sortKey() time.Time {
 type window struct {
 	from, to       time.Time
 	fromDay, toDay time.Time // time.UTC の 0 時
+	today          time.Time // 今日の 0 時（上限を超えたときに外す予定を、ここからの遠さで決める）
 }
 
 func newWindow(now time.Time, days int) window {
 	y, m, d := now.Date()
 	from := time.Date(y, m, d, 0, 0, 0, 0, now.Location())
 	to := time.Date(y, m, d+days+1, 0, 0, 0, 0, now.Location())
-	return window{from: from, to: to, fromDay: time.Date(y, m, d, 0, 0, 0, 0, time.UTC), toDay: time.Date(y, m, d+days+1, 0, 0, 0, 0, time.UTC)}
+	return window{from: from, to: to, today: from, fromDay: time.Date(y, m, d, 0, 0, 0, 0, time.UTC), toDay: time.Date(y, m, d+days+1, 0, 0, 0, 0, time.UTC)}
+}
+
+// newSyncWindow は、calendar sync で送る範囲。今日から r.days 日先までと、今月の r.past か月前の 1 日から、
+// r.future か月後の月末までを合わせたもの。
+func newSyncWindow(now time.Time, r syncRange) window {
+	w := newWindow(now, r.days)
+	y, m, _ := now.Date()
+	if f := time.Date(y, m-time.Month(r.past), 1, 0, 0, 0, 0, now.Location()); f.Before(w.from) {
+		w.from = f
+		w.fromDay = time.Date(f.Year(), f.Month(), f.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	if t := time.Date(y, m+time.Month(r.future)+1, 1, 0, 0, 0, 0, now.Location()); t.After(w.to) {
+		w.to = t
+		w.toDay = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	return w
+}
+
+// days は、Brain に送る days（from から何日先までか。範囲は from から days+1 日）。
+func (w window) days() int {
+	return int(w.toDay.Sub(w.fromDay).Hours()/24) - 1
 }
 
 // cleanText は、Brain に送れる 1 行の文にする（改行は空白に、制御文字は除く、200 文字まで）。
@@ -573,6 +611,11 @@ type vevent struct {
 
 // expandICS は、ICS の中の予定のうち、範囲 win に重なる回を返す。warnings は、読めなかった予定など。
 func expandICS(b []byte, win window) (events []calEvent, name string, warnings []string, err error) {
+	return expandICSWith(b, win, nil)
+}
+
+// expandICSWith は expandICS と同じ。skip が true を返す VEVENT は、読まない（繰り返しの例外も含めて）。
+func expandICSWith(b []byte, win window, skip func(*icsComp) bool) (events []calEvent, name string, warnings []string, err error) {
 	root, err := parseICS(b)
 	if err != nil {
 		return nil, "", nil, err
@@ -591,7 +634,7 @@ func expandICS(b []byte, win window) (events []calEvent, name string, warnings [
 		return uid + "\x00" + t.instant().UTC().Format(time.RFC3339)
 	}
 	for _, c := range root.Subs {
-		if c.Name != "VEVENT" {
+		if c.Name != "VEVENT" || (skip != nil && skip(c)) {
 			continue
 		}
 		ds := c.prop("DTSTART")
