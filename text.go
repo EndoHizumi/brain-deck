@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +70,7 @@ func (e TextEntry) Expired(t time.Time) bool { return e.ExpiresAt != nil && !t.B
 type TextService struct {
 	mu       sync.Mutex
 	m        map[string]TextEntry
+	lim      textLimits
 	store    *Store
 	onChange func() // 中身が変わったとき（画面の描き直し）。待たずに返ること
 	dirty    chan struct{}
@@ -82,10 +82,32 @@ type textFile struct {
 	Texts map[string]TextEntry `json:"texts"`
 }
 
-func NewTextService(store *Store) *TextService {
-	ts := &TextService{m: map[string]TextEntry{}, store: store, dirty: make(chan struct{}, 1)}
+// textLimits は、テキストの置き場所と長さの上限。QR コードのウィジェット（widget: qr）も、同じ仕組みで中身を持つ。
+type textLimits struct {
+	store    string // /var/lib/lefthand/<store>.json
+	maxRunes int    // 文字数の上限。0 なら見ない
+	maxLines int    // 行数の上限。0 なら見ない
+	maxBytes int    // UTF-8 のバイト数の上限。0 なら見ない
+	tabs     bool   // タブを空白にしない
+}
+
+var (
+	textLimitsText = textLimits{store: textStoreName, maxRunes: textMaxRunes, maxLines: textMaxLines}
+	textLimitsQR   = textLimits{store: qrStoreName, maxBytes: qrMaxBytes, tabs: true}
+)
+
+const qrStoreName = "qr"
+
+// NewTextService は、テキストのタイルの中身（text.json）を読む。
+func NewTextService(store *Store) *TextService { return newTextService(store, textLimitsText) }
+
+// NewQRService は、QR コードのウィジェットの中身（qr.json）を読む。
+func NewQRService(store *Store) *TextService { return newTextService(store, textLimitsQR) }
+
+func newTextService(store *Store, lim textLimits) *TextService {
+	ts := &TextService{m: map[string]TextEntry{}, lim: lim, store: store, dirty: make(chan struct{}, 1)}
 	var f textFile
-	if err := store.Load(textStoreName, &f); err == nil {
+	if err := store.Load(lim.store, &f); err == nil {
 		for id, e := range f.Texts {
 			if validTextID(id) {
 				if !validTextStyle(e.Style) {
@@ -95,7 +117,7 @@ func NewTextService(store *Store) *TextService {
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		log.Printf("text: %v", err)
+		log.Printf("%s: %v", lim.store, err)
 	}
 	go ts.saver()
 	return ts
@@ -135,23 +157,31 @@ type TextRequest struct {
 var errBadText = errors.New("bad text")
 
 // normalizeText は、表示できる形にそろえる。\r を除き、タブを空白にする。ほかの制御文字は誤り。
-func normalizeText(s string) (string, error) {
+func normalizeText(s string) (string, error) { return textLimitsText.normalize(s) }
+
+// normalize は、lim の上限で normalizeText と同じことをする。QR コードでは、タブはそのまま残す。
+func (lim textLimits) normalize(s string) (string, error) {
 	if !utf8.ValidString(s) {
 		return "", fmt.Errorf("%w: text is not valid UTF-8", errBadText)
 	}
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
-	s = strings.ReplaceAll(s, "\t", " ")
+	if !lim.tabs {
+		s = strings.ReplaceAll(s, "\t", " ")
+	}
 	for _, r := range s {
-		if r != '\n' && unicode.IsControl(r) {
+		if r != '\n' && !(lim.tabs && r == '\t') && unicode.IsControl(r) {
 			return "", fmt.Errorf("%w: text contains a control character %U", errBadText, r)
 		}
 	}
-	if n := utf8.RuneCountInString(s); n > textMaxRunes {
-		return "", fmt.Errorf("%w: text is %d characters (at most %d)", errBadText, n, textMaxRunes)
+	if n := utf8.RuneCountInString(s); lim.maxRunes > 0 && n > lim.maxRunes {
+		return "", fmt.Errorf("%w: text is %d characters (at most %d)", errBadText, n, lim.maxRunes)
 	}
-	if n := strings.Count(s, "\n") + 1; n > textMaxLines {
-		return "", fmt.Errorf("%w: text has %d lines (at most %d)", errBadText, n, textMaxLines)
+	if n := len(s); lim.maxBytes > 0 && n > lim.maxBytes {
+		return "", fmt.Errorf("%w: text is %d bytes in UTF-8 (at most %d)", errBadText, n, lim.maxBytes)
+	}
+	if n := strings.Count(s, "\n") + 1; lim.maxLines > 0 && n > lim.maxLines {
+		return "", fmt.Errorf("%w: text has %d lines (at most %d)", errBadText, n, lim.maxLines)
 	}
 	return s, nil
 }
@@ -172,7 +202,7 @@ func (ts *TextService) Set(req TextRequest, now time.Time, clockSet bool) (TextE
 		}
 		return TextEntry{}, false, nil
 	}
-	text, err := normalizeText(req.Text)
+	text, err := ts.lim.normalize(req.Text)
 	if err != nil {
 		return TextEntry{}, false, err
 	}
@@ -208,7 +238,7 @@ func (ts *TextService) evictLocked() {
 				oldest = id
 			}
 		}
-		log.Printf("text: more than %d texts, dropping %q", textMaxEntries, oldest)
+		log.Printf("%s: more than %d entries, dropping %q", ts.lim.store, textMaxEntries, oldest)
 		delete(ts.m, oldest)
 	}
 }
@@ -236,7 +266,7 @@ func (ts *TextService) ClockStepped(off time.Duration) {
 	}
 	ts.mu.Unlock()
 	if n > 0 {
-		log.Printf("text: shifted %d texts written before the clock was set by %v", n, off.Round(time.Millisecond))
+		log.Printf("%s: shifted %d entries written before the clock was set by %v", ts.lim.store, n, off.Round(time.Millisecond))
 		ts.changed()
 	}
 }
@@ -280,8 +310,8 @@ func (ts *TextService) changed() {
 func (ts *TextService) saver() {
 	for range ts.dirty {
 		f := textFile{Texts: ts.Snapshot()}
-		if err := ts.store.Save(textStoreName, f); err != nil {
-			log.Printf("text: save %s: %v", textStoreName, err)
+		if err := ts.store.Save(ts.lim.store, f); err != nil {
+			log.Printf("%s: save: %v", ts.lim.store, err)
 		}
 		if ts.saved != nil {
 			ts.saved <- struct{}{}
@@ -305,22 +335,4 @@ func (ts *TextService) List(now time.Time) map[string]TextInfo {
 }
 
 // textIDs は、設定のどこかでテキストのセルに使われている id を、名前の順に返す。
-func textIDs(cfg *Config) []string {
-	seen := map[string]bool{}
-	for _, l := range cfg.Layers {
-		if l.Touch == nil {
-			continue
-		}
-		for _, a := range l.Touch.Cells {
-			if a.Widget == widgetText && a.ID != "" {
-				seen[a.ID] = true
-			}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for id := range seen {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out
-}
+func textIDs(cfg *Config) []string { return gadgetIDs(cfg, widgetText) }

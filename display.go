@@ -224,11 +224,20 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 		return cell.Union(redrawBadge(cv, l, cell))
 	}
 	fillC, textC, subC := cellFill(v), colText, colSub
-	if pressed && l.pressFill() {
+	own2, filled := widgetFill(&v, l.Env)
+	switch {
+	case pressed && l.pressFill():
 		fillC, textC, subC = colPressed, colPressedText, colPressedSub
 		cv.fill(box, fillC)
 		hasImg = false
-	} else {
+	case filled:
+		// 在席ランプ、点滅しているポモドーロ：ウィジェットが決めた色で塗る（背景画像は隠れる）
+		fillC = own2
+		textC = contrastInk(fillC)
+		subC = textC
+		cv.fill(box, fillC)
+		hasImg = false
+	default:
 		paintBack(cv, box, fillC, wall, own)
 	}
 	cv.frame(box, borderW, modeBorder[l.Mode])
@@ -292,8 +301,13 @@ func drawRing(cv *Canvas, l *Layout, v *CellView, box image.Rectangle, on bool) 
 	}
 	cv.frame(box, borderW, modeBorder[l.Mode])
 	wall, own, _ := l.cellBack(v, box)
+	c, filled := widgetFill(v, l.Env)
 	for _, r := range ringRects(box.Inset(borderW), pressRingW-borderW) {
-		paintBack(cv, r, cellFill(*v), wall, own)
+		if filled {
+			cv.fill(r, c)
+		} else {
+			paintBack(cv, r, cellFill(*v), wall, own)
+		}
 	}
 }
 
@@ -722,8 +736,8 @@ func (d *Display) redraw() bool {
 		t := time.Now()
 		col, row := i%d.layout.Cols, i/d.layout.Cols
 		var rs []image.Rectangle
+		d.layout.Env = d.widgetEnv() // 枠の内側をウィジェットの色で塗り直すこともある（在席ランプ）
 		if d.layout.pressFill() {
-			d.layout.Env = d.widgetEnv()
 			rs = []image.Rectangle{drawCell(d.cv, d.layout, col, row, want[i])}
 			if v := &d.layout.Cells[i]; v.Widget != nil {
 				d.wkeys[i] = widgetKey(v, d.layout.Env)

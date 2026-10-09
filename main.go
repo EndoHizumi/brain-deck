@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -779,6 +780,9 @@ func main() {
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	gadgetSetup := flag.String("gadget-setup", defaultGadgetSetup, "USB の形（キーボードだけ、キーボードとマウス）を切り替えるときに実行する gadget-setup.sh")
 	pngMouseOff := flag.Bool("render-mouse-off", false, "-render-png で、USB にマウスがないとき（キーボードだけの形）のトラックパッドを描く")
+	pngBattery := flag.String("render-battery", "", "-render-png で、電池のウィジェットに出す状態（87、87,charging、87,plugged。省略すると読めないとき）")
+	pngGadgets := flag.String("render-widgets", "", "-render-png で、ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（widgets.json の形のファイル）")
+	pngQR := flag.String("render-qr", "", "-render-png で、QR コードのウィジェットに出す中身（qr.json の形のファイル）")
 	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
 	recGesture := flag.String("record-gesture", "", "-record-touch で、見出しに書く動きの名前（slow、tap など）")
 	recNote := flag.String("record-note", "", "-record-touch で、見出しに書くメモ")
@@ -905,6 +909,33 @@ func main() {
 			}
 			env.Todo = TodoList{Rev: f.Rev, Items: f.Items}
 		}
+		if *pngBattery != "" {
+			b, err := parseRenderBattery(*pngBattery)
+			if err != nil {
+				log.Fatalf("bad -render-battery %q: %v", *pngBattery, err)
+			}
+			env.Battery = b
+		}
+		if *pngGadgets != "" {
+			b, err := os.ReadFile(*pngGadgets)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if err := json.Unmarshal(b, &env.Gadgets); err != nil {
+				log.Fatalf("%s: %v", *pngGadgets, err)
+			}
+		}
+		if *pngQR != "" {
+			b, err := os.ReadFile(*pngQR)
+			if err != nil {
+				log.Fatal(err)
+			}
+			var f textFile
+			if err := json.Unmarshal(b, &f); err != nil {
+				log.Fatalf("%s: %v", *pngQR, err)
+			}
+			env.QR = f.Texts
+		}
 		if *pngCal != "" {
 			b, err := os.ReadFile(*pngCal)
 			if err != nil {
@@ -988,8 +1019,12 @@ func main() {
 		log.Printf("time: not set since boot (the clock widget shows %q until the settings GUI connects)", unsyncedText)
 	}
 	texts := NewTextService(store)
+	qrs := NewQRService(store)
 	todos := NewTodoService(store)
 	cals := NewCalendarService(store)
+	gadgets := NewGadgetService(store)
+	addAtExit(gadgets.Shutdown)
+	battery := NewBatteryService("/sys")
 	images := OpenImageStore(imagesDir)
 	if ps := imageProblems(km, images, 800, 480); len(ps) > 0 {
 		for _, p := range ps {
@@ -997,13 +1032,17 @@ func main() {
 		}
 	}
 	widgetRT := NewWidgetRT(todos)
+	widgetRT.gadgets = gadgets
 	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
 		env.Texts = texts.Snapshot()
+		env.QR = qrs.Snapshot()
 		env.Todo = todos.Snapshot()
 		env.Calendar = cals.Snapshot()
 		env.MouseOff = !s.mouse.Available()
+		env.Gadgets = gadgets.Snapshot()
+		env.Battery = battery.Info()
 		return env
 	}
 	widgetRT.SetEnv(widgetEnv)
@@ -1045,6 +1084,9 @@ func main() {
 				term.SetDisplay(d)
 				clock.SetOnChange(d.Poke)
 				texts.SetOnChange(d.Poke)
+				qrs.SetOnChange(d.Poke)
+				gadgets.SetOnChange(d.Poke)
+				battery.SetOnChange(d.Poke)
 				todos.SetOnChange(d.Poke)
 				cals.SetOnChange(d.Poke)
 				images.SetOnChange(d.Invalidate)
@@ -1075,6 +1117,9 @@ func main() {
 			monitor: mon,
 			clock:   clock,
 			texts:   texts,
+			qrs:     qrs,
+			gadgets: gadgets,
+			battery: battery,
 			todos:   todos,
 			cals:    cals,
 			images:  images,
@@ -1083,6 +1128,7 @@ func main() {
 			started: time.Now(),
 		}
 		todos.SetOnNotify(mon.TodoChanged)
+		gadgets.SetOnNotify(mon.WidgetsChanged)
 		go ctl.runSerial(*serialPath)
 	}
 
@@ -1133,4 +1179,27 @@ func reloader(e *Engine) func(*Config, *Keymap) error {
 		e.Reload(km)
 		return nil
 	}
+}
+
+// parseRenderBattery は -render-battery の値（87、87,charging、87,plugged、none）を読む。
+func parseRenderBattery(s string) (*BatteryInfo, error) {
+	if s == "none" {
+		return nil, nil
+	}
+	pct, rest, _ := strings.Cut(s, ",")
+	n, err := strconv.Atoi(pct)
+	if err != nil || n < 0 || n > 100 {
+		return nil, errors.New("percent must be 0..100")
+	}
+	b := &BatteryInfo{Percent: n, Source: "render"}
+	switch rest {
+	case "":
+	case "plugged":
+		b.Plugged = true
+	case "charging":
+		b.Plugged, b.Charging = true, true
+	default:
+		return nil, errors.New("use 87, 87,plugged or 87,charging")
+	}
+	return b, nil
 }

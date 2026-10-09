@@ -60,6 +60,8 @@ type testDaemon struct {
 	monitor *Monitor
 	clock   *TimeService
 	texts   *TextService
+	qrs     *TextService
+	gadgets *GadgetService
 	todos   *TodoService
 	cals    *CalendarService
 	images  *ImageStore
@@ -119,13 +121,18 @@ func newTestDaemon(t *testing.T, src string) *testDaemon {
 	d.dataDir = dataDir(t)
 	d.clock = NewTimeService(OpenStore(d.dataDir))
 	d.texts = NewTextService(OpenStore(d.dataDir))
+	d.qrs = NewQRService(OpenStore(d.dataDir))
+	d.gadgets = NewGadgetService(OpenStore(d.dataDir))
+	d.gadgets.SetOnNotify(d.monitor.WidgetsChanged)
 	d.todos = NewTodoService(OpenStore(d.dataDir))
 	d.todos.SetOnNotify(d.monitor.TodoChanged)
 	d.cals = NewCalendarService(OpenStore(d.dataDir))
-	d.engine.SetWidgets(NewWidgetRT(d.todos))
+	rt := NewWidgetRT(d.todos)
+	rt.gadgets = d.gadgets
+	d.engine.SetWidgets(rt)
 	d.images = OpenImageStore(filepath.Join(d.dataDir, "images"))
 	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, todos: d.todos,
-		cals: d.cals, images: d.images, started: time.Now()}
+		cals: d.cals, images: d.images, qrs: d.qrs, gadgets: d.gadgets, started: time.Now()}
 	daemonSide, gui := net.Pipe()
 	d.conn, d.rd = gui, bufio.NewReaderSize(gui, 1<<20)
 	go func() { d.served <- d.ctl.Serve(daemonSide) }()

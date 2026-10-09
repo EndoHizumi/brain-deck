@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -62,6 +63,8 @@ const (
 	notifyInput = "input"
 	notifyLayer = "layer"
 	notifyTodo  = "todo"
+	// notifyWidgets は、ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態の変化
+	notifyWidgets = "widgets"
 	// notifyTerminal は端末モードの変化（termmode.go の TermInfo）
 	notifyTerminal = "terminal"
 )
@@ -149,7 +152,9 @@ type request struct {
 	Image  string   `json:"image,omitempty"`  // get_image：画像の id
 	Length int      `json:"length,omitempty"` // get_image：読む大きさ
 	DryRun bool     `json:"dry_run,omitempty"`
-	Keep   []string `json:"keep,omitempty"` // prune_images：今の設定のほかに残す id（GUI で編集中の設定が使うもの）
+	Keep   []string `json:"keep,omitempty"`  // prune_images：今の設定のほかに残す id（GUI で編集中の設定が使うもの）
+	State  string   `json:"state,omitempty"` // set_presence：状態の名前
+	Step   int      `json:"step,omitempty"`  // set_presence：+1 で次、-1 で前の状態
 }
 
 type response struct {
@@ -218,6 +223,55 @@ func (m *Monitor) TodoChanged(l TodoList) {
 	case ch <- b:
 	default: // PC が読まないときは捨てる。GUI は次に読み直したときにそろう
 	}
+}
+
+// WidgetsChanged は、ストップウォッチなどの状態が変わったときに呼ぶ（GadgetService の通知）。
+func (m *Monitor) WidgetsChanged(f gadgetFile) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	ch := m.dataCh
+	m.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	b, err := json.Marshal(struct {
+		Event string `json:"event"`
+		widgetsState
+	}{notifyWidgets, widgetsJSON(f)})
+	if err != nil {
+		return
+	}
+	select {
+	case ch <- b:
+	default:
+	}
+}
+
+// widgetsState は、get_widgets と widgets の通知の、状態の部分。
+type widgetsState struct {
+	Stopwatch map[string]StopwatchState `json:"stopwatch"`
+	Pomodoro  map[string]PomodoroState  `json:"pomodoro"`
+	Counter   map[string]CounterState   `json:"counter"`
+	Presence  map[string]PresenceState  `json:"presence"`
+}
+
+func widgetsJSON(f gadgetFile) widgetsState {
+	w := widgetsState{Stopwatch: f.Stopwatch, Pomodoro: f.Pomodoro, Counter: f.Counter, Presence: f.Presence}
+	if w.Stopwatch == nil {
+		w.Stopwatch = map[string]StopwatchState{}
+	}
+	if w.Pomodoro == nil {
+		w.Pomodoro = map[string]PomodoroState{}
+	}
+	if w.Counter == nil {
+		w.Counter = map[string]CounterState{}
+	}
+	if w.Presence == nil {
+		w.Presence = map[string]PresenceState{}
+	}
+	return w
 }
 
 type todoEvent struct {
@@ -349,6 +403,9 @@ type Controller struct {
 	monitor *Monitor
 	clock   *TimeService
 	texts   *TextService
+	qrs     *TextService   // QR コードのウィジェットの中身
+	gadgets *GadgetService // ストップウォッチ、ポモドーロ、カウンター、在席ランプ
+	battery *BatteryService
 	todos   *TodoService
 	cals    *CalendarService
 	images  *ImageStore
@@ -383,7 +440,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
 				"set_calendar", "get_calendar",
-				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_terminal"},
+				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_terminal",
+				"set_qr", "get_qr", "get_widgets", "set_presence"},
 		})
 	case "get_config":
 		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
@@ -430,7 +488,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
 			"hid":      map[string]bool{"mouse": c.engine.out.mouse.Available(), "switching": c.usb.Switching()},
-			"terminal": c.term.Info()})
+			"terminal": c.term.Info(), "battery": c.battery.Info()})
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)
 		if err != nil {
@@ -464,15 +522,27 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			return errResp(id, errInternal, "setting the system clock failed: "+err.Error(), nil)
 		}
 		if res.Stepped {
-			c.texts.ClockStepped(time.Duration(res.OffsetMS) * time.Millisecond)
+			off := time.Duration(res.OffsetMS) * time.Millisecond
+			c.texts.ClockStepped(off)
+			c.qrs.ClockStepped(off)
+			c.gadgets.ClockStepped(off)
 		} else {
 			c.texts.ClockSynced()
+			c.qrs.ClockSynced()
 		}
 		return ok(res)
 	case "set_text":
-		return c.setText(id, req)
+		return c.setText(id, req, c.texts, widgetText)
 	case "get_text":
 		return ok(map[string]any{"texts": c.texts.List(time.Now()), "ids": textIDs(c.store.Current())})
+	case "set_qr":
+		return c.setText(id, req, c.qrs, widgetQR)
+	case "get_qr":
+		return ok(map[string]any{"texts": c.qrs.List(time.Now()), "ids": gadgetIDs(c.store.Current(), widgetQR)})
+	case "get_widgets":
+		return ok(c.widgets())
+	case "set_presence":
+		return c.setPresence(id, req)
 	case "get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done":
 		return c.todo(id, req)
 	case "set_calendar":
@@ -488,7 +558,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		} else {
 			c.monitor.subscribeData(nil)
 		}
-		return ok(map[string]any{"subscribed": on, "events": []string{notifyTodo}})
+		return ok(map[string]any{"subscribed": on, "events": []string{notifyTodo, notifyWidgets}})
 	case "subscribe_input":
 		on := req.Enable == nil || *req.Enable
 		if on {
@@ -505,10 +575,10 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 	}
 }
 
-// setText は set_text を処理する。保存（SD カードへの書き込み）は待たずに返す。
-func (c *Controller) setText(id json.RawMessage, req request) response {
+// setText は set_text（kind が text）と set_qr（kind が qr）を処理する。保存（SD カードへの書き込み）は待たずに返す。
+func (c *Controller) setText(id json.RawMessage, req request, ts *TextService, kind string) response {
 	if req.Name == "" {
-		return errResp(id, errBadRequest, `"name" (the id of the text cell) is required`, nil)
+		return errResp(id, errBadRequest, fmt.Sprintf(`"name" (the id of the %s cell) is required`, kind), nil)
 	}
 	if req.Text == nil && !req.Clear {
 		return errResp(id, errBadRequest, `"text" (a string) or "clear": true is required`, nil)
@@ -524,20 +594,78 @@ func (c *Controller) setText(id json.RawMessage, req request) response {
 		tr.TTL = time.Duration(*req.TTLSec * float64(time.Second))
 	}
 	now := time.Now()
-	e, set, err := c.texts.Set(tr, now, c.clock.Synced())
+	e, set, err := ts.Set(tr, now, c.clock.Synced())
 	if err != nil {
 		return errResp(id, errBadRequest, err.Error(), nil)
 	}
 	shown := false
-	for _, x := range textIDs(c.store.Current()) {
+	for _, x := range gadgetIDs(c.store.Current(), kind) {
 		shown = shown || x == req.Name
 	}
 	res := map[string]any{"name": req.Name, "cleared": !set, "shown": shown}
 	if set {
 		res["entry"] = TextInfo{TextEntry: e, Expired: e.Expired(now)}
-		vlogf("control: set_text %s (%s, %d chars) by %s", req.Name, e.Style, len([]rune(e.Text)), req.Source)
+		vlogf("control: set_%s %s (%s, %d chars) by %s", kind, req.Name, e.Style, len([]rune(e.Text)), req.Source)
 	}
 	return response{ID: id, OK: true, Result: res}
+}
+
+// widgets は get_widgets の結果。状態と、今の設定で使っている id、在席ランプの状態の並び。
+func (c *Controller) widgets() map[string]any {
+	cfg := c.store.Current()
+	ids := map[string][]string{}
+	for _, k := range []string{widgetStopwatch, widgetPomodoro, widgetCounter, widgetPresence, widgetQR} {
+		ids[k] = gadgetIDs(cfg, k)
+	}
+	states := map[string][]map[string]string{}
+	for _, pid := range ids[widgetPresence] {
+		var l []map[string]string
+		for _, s := range presenceStates(cfg, pid) {
+			l = append(l, map[string]string{"name": s.Name, "color": s.Color.hex()})
+		}
+		states[pid] = l
+	}
+	return map[string]any{"widgets": widgetsJSON(c.gadgets.Snapshot()), "ids": ids, "presence_states": states,
+		"battery": c.battery.Info(), "now": time.Now()}
+}
+
+// setPresence は set_presence を処理する。name は在席ランプの id（省略すると presence）、state か step のどちらかを書く。
+func (c *Controller) setPresence(id json.RawMessage, req request) response {
+	name := req.Name
+	if name == "" {
+		name = widgetPresence
+	}
+	if !validTextID(name) {
+		return errResp(id, errBadRequest, fmt.Sprintf(`"name" must be 1-32 characters of A-Z a-z 0-9 _ . -, got %q`, name), nil)
+	}
+	if (req.State == "") == (req.Step == 0) {
+		return errResp(id, errBadRequest, `write either "state" (a state name) or "step" (1 for the next state, -1 for the previous one)`, nil)
+	}
+	states := presenceStates(c.store.Current(), name)
+	if len(states) == 0 {
+		return errResp(id, errNotFound, fmt.Sprintf("the config has no presence cell with id %q", name), nil)
+	}
+	got := req.State
+	if req.State != "" {
+		if presenceIndex(states, req.State) < 0 {
+			var names []string
+			for _, s := range states {
+				names = append(names, s.Name)
+			}
+			return errResp(id, errBadRequest, fmt.Sprintf("unknown state %q (the presence cells with id %q have %s)", req.State, name, strings.Join(names, ", ")), nil)
+		}
+		c.gadgets.PresenceSet(name, req.State, req.Source)
+	} else {
+		dir := 1
+		if req.Step < 0 {
+			dir = -1
+		}
+		got = c.gadgets.PresenceStep(name, states, dir, req.Source)
+	}
+	i := presenceIndex(states, got)
+	vlogf("control: set_presence %s = %s by %s", name, got, req.Source)
+	return response{ID: id, OK: true, Result: map[string]any{"name": name, "state": got, "color": states[i].Color.hex(),
+		"states": len(states)}}
 }
 
 // setCalendar は set_calendar を処理する。保存（SD カードへの書き込み）は待たずに返す。

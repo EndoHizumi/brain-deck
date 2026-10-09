@@ -355,7 +355,7 @@ func TestCalendarTouchPages(t *testing.T) {
 	if p, _, nav := w.pager.view(now, w.PageReset, l.AutoPage); p != 0 || nav != -1 {
 		t.Fatalf("▲: page %d nav %d", p, nav)
 	}
-	w.touchUp(rt)
+	w.touchUp(rt, false)
 	// 1 分たつと、自動のページに戻る
 	if p, _, _ := w.pager.view(now.Add(defaultPageReset), w.PageReset, l.AutoPage); p != 1 {
 		t.Fatalf("after page_reset: %d", p)
@@ -365,7 +365,7 @@ func TestCalendarTouchPages(t *testing.T) {
 	if _, held, _ := w.pager.view(now, w.PageReset, l.AutoPage); held != "" {
 		t.Errorf("held = %q", held)
 	}
-	w.touchUp(rt)
+	w.touchUp(rt, false)
 }
 
 // カレンダーのセルを描き直す範囲が、全体を描いたものと一致すること。

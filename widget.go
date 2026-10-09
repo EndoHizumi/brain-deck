@@ -16,10 +16,16 @@ import (
 // 入力の処理は、ここを一切待たない。
 
 const (
-	widgetClock = "clock"
-	widgetText  = "text"
-	widgetTodo  = "todo"
-	widgetCal   = "calendar"
+	widgetClock     = "clock"
+	widgetText      = "text"
+	widgetTodo      = "todo"
+	widgetCal       = "calendar"
+	widgetBattery   = "battery"
+	widgetStopwatch = "stopwatch"
+	widgetPomodoro  = "pomodoro"
+	widgetCounter   = "counter"
+	widgetQR        = "qr"
+	widgetPresence  = "presence"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -34,7 +40,8 @@ const (
 	unsyncedText = "時刻未設定"
 )
 
-var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad}
+var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
+	widgetCounter, widgetQR, widgetPresence}
 
 // ページを送るウィジェット（Todo、カレンダー）が、触らなければ最初のページに戻るまでの時間
 const (
@@ -56,13 +63,17 @@ type WidgetDef struct {
 	DateFormat string         // clock：日付の行。空なら出さない
 	Loc        *time.Location // clock：nil なら Brain のタイムゾーン
 	Seconds    bool           // clock：秒を出す（1 秒ごとに描き直す）
-	ID         string         // text：中身の名前
+	ID         string         // text、qr：中身の名前。stopwatch、pomodoro、counter、presence：状態の名前（省略すると種類の名前）
 	Rows       int            // todo、calendar：1 ページの行数。0 なら高さで決める
 	PageReset  time.Duration  // todo、calendar：最後に触ってから、最初のページに戻るまでの時間。0 なら戻らない
 	Stale      time.Duration  // calendar：最終更新がこれより古ければ、古いと出す
 	Calendars  []string       // calendar：出すカレンダーの名前。空ならすべて
 	pager      *pagerState    // todo、calendar：ページと、押している行
 	Pad        *PadParams     // trackpad：判定の設定
+	Work       time.Duration  // pomodoro：作業の時間
+	Break      time.Duration  // pomodoro：休憩の時間
+	States     []PresenceDef  // presence：状態（タップで順に切り替える）
+	tap        *tapState      // stopwatch、pomodoro、counter、presence：タップと長押し
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -73,11 +84,17 @@ type WidgetEnv struct {
 	Todo       TodoList             // todo：一覧（写し）
 	Calendar   *CalendarData        // calendar：予定（写し。書き換えない）。nil なら一度も受け取っていない
 	MouseOff   bool                 // trackpad：USB にマウスがない（キーボードだけの形）
+	Gadgets    gadgetFile           // stopwatch、pomodoro、counter、presence：状態（写し）
+	QR         map[string]TextEntry // qr：id ごとの中身（写し）
+	Battery    *BatteryInfo         // battery：電池の状態。nil なら読めない
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
 func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	if s.Widget == widgetPad {
+		if s.Work != "" || s.Break != "" || s.States != nil {
+			return nil, fmt.Errorf("work, break and states cannot be used with widget: trackpad")
+		}
 		return compilePad(s)
 	}
 	if s.hasPadFields() {
@@ -93,15 +110,33 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	if (s.Stale != "" || s.Calendars != nil) && s.Widget != widgetCal {
 		return nil, fmt.Errorf("stale and calendars are for widget: calendar")
 	}
-	switch s.Widget {
-	case widgetClock:
-		if s.ID != "" {
-			return nil, fmt.Errorf("id is for widget: text")
-		}
-	case widgetTodo, widgetCal:
-		if s.Format != "" || s.DateFormat != "" || s.TZ != "" || s.ID != "" {
+	if (s.Work != "" || s.Break != "") && s.Widget != widgetPomodoro {
+		return nil, fmt.Errorf("work and break are for widget: pomodoro")
+	}
+	if s.States != nil && s.Widget != widgetPresence {
+		return nil, fmt.Errorf("states is for widget: presence")
+	}
+	if isTapWidget(s.Widget) && s.count() > 0 {
+		return nil, fmt.Errorf("widget: %s handles taps itself (%s); remove key, layer_*, mouse, usb_mode and terminal", s.Widget, tapHelp[s.Widget])
+	}
+	if s.Widget != widgetClock && s.Widget != "" && (s.Format != "" || s.DateFormat != "" || s.TZ != "") {
+		if paged {
 			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: %s", s.Widget)
 		}
+		return nil, fmt.Errorf("format, date_format and tz are for widget: clock")
+	}
+	if s.ID != "" && !hasStateID(s.Widget) {
+		switch {
+		case paged:
+			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: %s", s.Widget)
+		case s.Widget == "":
+			return nil, fmt.Errorf("id needs widget: text, qr, stopwatch, pomodoro, counter or presence")
+		}
+		return nil, fmt.Errorf("id is for widget: text, qr, stopwatch, pomodoro, counter and presence")
+	}
+	switch s.Widget {
+	case widgetClock:
+	case widgetTodo, widgetCal:
 		if s.count() > 0 {
 			if s.Widget == widgetTodo {
 				return nil, fmt.Errorf("widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*")
@@ -142,18 +177,37 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 			w.Calendars = s.Calendars
 		}
 		return w, nil
-	case widgetText:
-		if s.Format != "" || s.DateFormat != "" || s.TZ != "" {
-			return nil, fmt.Errorf("format, date_format and tz are for widget: clock")
-		}
+	case widgetText, widgetQR:
 		if !validTextID(s.ID) {
-			return nil, fmt.Errorf("widget: text needs id (1-32 characters of A-Z a-z 0-9 _ . -), got %q", s.ID)
+			return nil, fmt.Errorf("widget: %s needs id (1-32 characters of A-Z a-z 0-9 _ . -), got %q", s.Widget, s.ID)
 		}
-		return &WidgetDef{Kind: widgetText, ID: s.ID}, nil
+		return &WidgetDef{Kind: s.Widget, ID: s.ID}, nil
+	case widgetBattery:
+		return &WidgetDef{Kind: s.Widget}, nil
+	case widgetStopwatch, widgetCounter, widgetPomodoro, widgetPresence:
+		id := widgetStateID(s)
+		if !validTextID(id) {
+			return nil, fmt.Errorf("id must be 1-32 characters of A-Z a-z 0-9 _ . - (omit it to use %q), got %q", s.Widget, s.ID)
+		}
+		w := &WidgetDef{Kind: s.Widget, ID: id, tap: &tapState{}}
+		switch s.Widget {
+		case widgetPomodoro:
+			var err error
+			if w.Work, err = pomoDuration("work", s.Work, defaultWork); err != nil {
+				return nil, err
+			}
+			if w.Break, err = pomoDuration("break", s.Break, defaultBreak); err != nil {
+				return nil, err
+			}
+		case widgetPresence:
+			states, err := compilePresenceStates(s.States)
+			if err != nil {
+				return nil, err
+			}
+			w.States = states
+		}
+		return w, nil
 	case "":
-		if s.ID != "" {
-			return nil, fmt.Errorf("id needs widget: text")
-		}
 		return nil, fmt.Errorf("format, date_format and tz need widget: clock")
 	default:
 		return nil, fmt.Errorf("unknown widget %q (%s)", s.Widget, strings.Join(widgetKinds, ", "))
@@ -243,7 +297,7 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 	case widgetPad:
 		return fmt.Sprintf("trackpad\x00%v", env.MouseOff) // マウスのオンとオフで描き直す
 	}
-	return ""
+	return gadgetKey(v, env)
 }
 
 // widgetNext は、セルの中身が次に変わる時刻を返す。ゼロなら、時間では変わらない。
@@ -265,7 +319,7 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 	case widgetCal:
 		return calNext(v.Widget, env)
 	}
-	return time.Time{}
+	return gadgetNext(v, env)
 }
 
 // drawWidget は、セルの内側 inner にウィジェットを描く。label があれば上に小さく出す。
@@ -296,6 +350,8 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		if b != "" {
 			drawCentered(cv, area, y+fontH*ts+widgetLineGap, b, ds, subInk)
 		}
+	case widgetBattery, widgetStopwatch, widgetPomodoro, widgetCounter, widgetPresence, widgetQR:
+		drawGadget(cv, area, v, env, ink, subInk)
 	case widgetText:
 		e, ok := env.Texts[v.Widget.ID]
 		body, c := textNoneText, subInk

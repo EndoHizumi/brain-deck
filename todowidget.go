@@ -87,11 +87,12 @@ func (s *pagerState) setPage(page int, now time.Time) {
 
 // WidgetRT は、ウィジェットがタップを処理するのに使う、外の状態。
 type WidgetRT struct {
-	mu    sync.Mutex
-	w, h  int // 画面の大きさ（論理）。画面を使わないときは 800x480
-	todos *TodoService
-	envFn func() WidgetEnv // 今の時刻とデータ。nil なら Todo だけ
-	poke  func()           // 画面の描き直し。待たずに返ること
+	mu      sync.Mutex
+	w, h    int // 画面の大きさ（論理）。画面を使わないときは 800x480
+	todos   *TodoService
+	gadgets *GadgetService   // ストップウォッチなどの状態。nil ならタップしても何もしない
+	envFn   func() WidgetEnv // 今の時刻とデータ。nil なら Todo だけ
+	poke    func()           // 画面の描き直し。待たずに返ること
 }
 
 func NewWidgetRT(todos *TodoService) *WidgetRT { return &WidgetRT{w: 800, h: 480, todos: todos} }
@@ -315,6 +316,10 @@ func widgetArea(cell image.Rectangle, caption string) image.Rectangle {
 // touchDown は、Todo かカレンダーのセルを押したとき。入力の goroutine から呼ばれるので、待たずに返る。
 // ▲▼ ならページを送り、Todo の項目なら長押しを始める。どこを押しても「触った」ことにし、PageReset のあいだページを保つ。
 func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
+	if w.tapWidget() && rt != nil {
+		w.tapDown(rt)
+		return
+	}
 	if !w.ownsTouch() || rt == nil || w.pager == nil { // トラックパッドは Pad が処理する
 		return
 	}
@@ -380,8 +385,13 @@ func (s *pagerState) fire(rt *WidgetRT, tok uint64) {
 	vlogf("todo: %s %q done=%v (long press)", it.ID, it.Text, it.Done)
 }
 
-// touchUp は、離したとき（または設定の差し替えで押していたものを捨てたとき）。長押しを取り消す。
-func (w *WidgetDef) touchUp(rt *WidgetRT) {
+// touchUp は、離したとき（cancel なら、設定の差し替えで押していたものを捨てたとき）。長押しを取り消す。
+// タップで操作するウィジェットは、cancel でなく、長押しの働きをしていなければ、タップの働きをする。
+func (w *WidgetDef) touchUp(rt *WidgetRT, cancel bool) {
+	if w.tapWidget() {
+		w.tapUp(rt, cancel)
+		return
+	}
 	if !w.ownsTouch() || w.pager == nil {
 		return
 	}

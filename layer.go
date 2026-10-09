@@ -303,8 +303,8 @@ func (e *Engine) PressTouchAt(x, y int32, t time.Time) TouchHit {
 	} else if v.Cols > 0 {
 		c, r := touchCell(e.km.Touch, v.Cols, v.Rows, x, y)
 		a, h.Col, h.Row = v.at(c, r) // span のセルは、左上のセルとして扱う
-		if a != nil && a.Widget.ownsTouch() {
-			h.Own = true
+		if a != nil && a.Widget.handlesTouch() {
+			h.Own = a.Widget.ownsTouch()
 			W, H := 800, 480
 			if e.widgets != nil {
 				W, H = e.widgets.screen()
@@ -349,7 +349,7 @@ func (e *Engine) Release(id string) {
 		e.removeIf(func(en stackEntry) bool { return en.kind == actHold && en.src == id })
 		e.refresh()
 	case actWidget:
-		a.Widget.touchUp(e.widgets)
+		a.Widget.touchUp(e.widgets, false)
 	case actMouse:
 		e.out.mouse.Release(id)
 	}
@@ -497,7 +497,7 @@ func (e *Engine) Reload(km *Keymap) {
 	e.pad.Cancel()
 	for _, a := range e.down { // 長押しの途中なら取り消す
 		if a != nil && a.Kind == actWidget {
-			a.Widget.touchUp(e.widgets)
+			a.Widget.touchUp(e.widgets, true)
 		}
 	}
 	e.down = map[string]*Action{}
