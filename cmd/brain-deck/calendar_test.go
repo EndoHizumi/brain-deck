@@ -252,7 +252,8 @@ func TestFitCalendars(t *testing.T) {
 			titles = append(titles, e.Title)
 		}
 	}
-	if got := strings.Join(titles, " "); got != "a-5 a-4 a-3 a-2 a-1 a0 a1 a2 a3 a4 b-5 b-4 b-3 b-2 b-1 b0 b1 b2 b3 b4" {
+	// b は祝日のカレンダーなので、遠くてもすべて残す
+	if got := strings.Join(titles, " "); got != "a-4 a-3 a-2 a-1 a0 a1 a2 a3 a4 b-5 b-4 b-3 b-2 b-1 b0 b1 b2 b3 b4 b5" {
 		t.Errorf("kept %s", got)
 	}
 	// 大きさ：JSON が上限に入るまで、遠いものから外す

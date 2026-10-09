@@ -345,9 +345,11 @@ func gatherCalendars(cfgs []calendarCfg, win window, timeout time.Duration, verb
 
 // fitCalendars は、予定が Brain の上限（件数と、送る JSON の大きさ）を超えたら、今日から遠いものを外す。
 // 遠さは、今日の 0 時 today から予定の始まりまで（過ぎた予定は、終わりから today まで）。外したときは、そのことを書いた注意を返す。
+// 祝日のカレンダーの予定は数が少なく、月の表示の赤に使うので、ほかより先に残す。
 func fitCalendars(out []calendarOut, today time.Time, maxEvents, maxBytes int) []string {
 	type ref struct {
 		c, i int
+		hol  bool
 		dist time.Duration
 	}
 	var all []ref
@@ -361,7 +363,7 @@ func fitCalendars(out []calendarOut, today time.Time, maxEvents, maxBytes int) [
 			case s.After(today):
 				d = s.Sub(today)
 			}
-			all = append(all, ref{ci, i, d})
+			all = append(all, ref{ci, i, c.Holiday, d})
 		}
 	}
 	size := func() int {
@@ -372,7 +374,12 @@ func fitCalendars(out []calendarOut, today time.Time, maxEvents, maxBytes int) [
 	if total <= maxEvents && bytes0 <= maxBytes {
 		return nil
 	}
-	sort.SliceStable(all, func(i, j int) bool { return all[i].dist < all[j].dist })
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].hol != all[j].hol {
+			return all[i].hol
+		}
+		return all[i].dist < all[j].dist
+	})
 	orig := make([][]calEvent, len(out))
 	for i := range out {
 		orig[i] = out[i].Events
