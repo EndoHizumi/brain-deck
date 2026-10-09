@@ -468,6 +468,82 @@ describe('Todo', () => {
     expect(t.root.textContent).not.toContain('Todo のセルがない')
   })
 
+  it('ポモドーロ、在席ランプ、QR コード、カウンターなどを選べ、Brain の状態を出す。Brain で変わると通知で描き直す', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.widgets.counter = { counter: { value: 5 } }
+    daemon.qr = { share: { text: 'https://example.com/', style: 'normal', set_at: new Date().toISOString() } }
+    const t = await connected(setup({ daemon }))
+    expect(t.cmds()).toEqual(expect.arrayContaining(['get_widgets', 'get_qr']))
+    expect(t.app.brainBattery?.percent).toBe(87)
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    t.change('#tap', 'key')
+    t.change('#combo-text', 'F5')
+    t.change('#widget', 'pomodoro')
+    const cell = () => t.app.cfg!.layers[0].touch!.cells!['1,0']
+    expect(cell()).toEqual({ widget: 'pomodoro', label: '消しゴム' }) // タップは自分で処理するので、キーは消える
+    expect(t.root.querySelector('#tap')).toBeNull()
+    t.change('#pomo-work', '50m')
+    t.change('#pomo-break', '10m')
+    expect(cell()).toEqual({ widget: 'pomodoro', label: '消しゴム', work: '50m', break: '10m' })
+    expect(t.$('.inspector').textContent).toContain('まだ始めていません')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.change('#pomo-work', '10s')
+    expect(t.$('.inspector').textContent).toContain('1 分から 4 時間')
+    await vi.waitFor(() => expect(t.app.validation).toBe('invalid'))
+
+    // 在席ランプ：状態は 1 行に「名前 #色」
+    t.change('#widget', 'presence')
+    expect(cell()).toEqual({ widget: 'presence', label: '消しゴム' })
+    t.change('#presence-states', '在室 #40C070\n不在\n\n外出 #zz')
+    expect(cell().states).toEqual([{ name: '在室', color: '#40c070' }, { name: '不在' }, { name: '外出', color: '#zz' }])
+    expect(t.$('.inspector').textContent).toContain('#rrggbb の形で書きます：外出')
+    t.change('#presence-states', '在室 #40c070\n不在')
+    t.change('#gadget-id', 'door')
+    expect(t.$('.inspector').textContent).toContain('在室（まだ変えていません）')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    // Brain で変わった（brain-deck presence や、Brain でのタップ）
+    t.app.onNotify({ event: 'widgets', counter: { counter: { value: 5 } }, presence: { door: { state: '不在' } } })
+    expect(t.$('.inspector').textContent).toContain('今：不在')
+    t.change('#presence-states', '')
+    expect(cell()).toEqual({ widget: 'presence', label: '消しゴム', id: 'door' })
+
+    // QR コードは id が要る
+    t.change('#widget', 'qr')
+    expect(cell()).toEqual({ widget: 'qr', label: '消しゴム', id: 'door' })
+    t.change('#gadget-id', 'share')
+    expect(t.$('.inspector').textContent).toContain('今の中身：「https://example.com/」')
+    t.change('#widget', 'counter')
+    expect(cell()).toEqual({ widget: 'counter', label: '消しゴム', id: 'share' })
+    t.change('#gadget-id', '')
+    expect(t.$('.inspector').textContent).toContain('今：5')
+    t.change('#widget', 'battery')
+    expect(cell()).toEqual({ widget: 'battery', label: '消しゴム' })
+    expect(t.$('.inspector').textContent).toContain('今：87%、充電中')
+    expect(t.root.querySelector('#tap')).not.toBeNull() // 電池はタップの動きを書ける
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.change('#widget', 'clock')
+    expect(cell()).toEqual({ widget: 'clock', label: '消しゴム' })
+  })
+
+  it('設定の backlight は、GUI で保存しても残る', async () => {
+    const cfg = sampleConfig()
+    cfg.backlight = { dim_after: '1m', off_after: '5m', dim_level: 1, wake_on_key: false }
+    const daemon = new FakeDaemon(cfg)
+    const t = await connected(setup({ daemon }))
+    t.click('[data-cell="1,0"]')
+    const label = t.$<HTMLTextAreaElement>('#label')
+    label.value = 'けしごむ'
+    label.dispatchEvent(new Event('input'))
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.click('#save')
+    expect(t.$('.modal').textContent).toContain('けしごむ')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect(daemon.config.layers[0].touch!.cells!['1,0'].label).toBe('けしごむ')
+    expect(daemon.config.backlight).toEqual({ dim_after: '1m', off_after: '5m', dim_level: 1, wake_on_key: false })
+  })
+
   it('セルをカレンダーにすると、行数、戻るまでの時間、古いとみなすまで、出すカレンダーを決められる。Brain の予定を出す', async () => {
     const daemon = new FakeDaemon(sampleConfig())
     daemon.calendar = demoCalendar(new Date('2026-10-06T09:41:27+09:00'))

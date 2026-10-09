@@ -16,7 +16,7 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   mouse: 'マウス（ボタン、スクロール）',
   usb_mode: 'USB の形の切り替え（マウスのオンとオフ）',
   terminal: '端末モード（Brain で PC にログインする）',
-  widget: 'ウィジェット（時計、テキスト、Todo、カレンダー、トラックパッド）',
+  widget: 'ウィジェット（時計、テキスト、Todo、カレンダー、トラックパッドなど）',
 }
 
 // マウスの操作と、画面に出す名前（mouse.go の mouseActions）
@@ -40,7 +40,8 @@ export const TERM_LABELS: Record<TermMode, string> = { on: '端末', off: '端�
 export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'usb_mode', 'terminal'] as const
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
-export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド' }
+export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド',
+  battery: '電池', stopwatch: 'ストップウォッチ', pomodoro: 'ポモドーロ', counter: 'カウンター', qr: 'QR コード', presence: '在席ランプ' }
 // トラックパッドの項目（数）
 export const PAD_NUM_FIELDS = ['speed', 'accel', 'scroll_width', 'scroll_step', 'settle_ms', 'smooth', 'deadzone', 'min_pressure', 'tap_ms', 'tap_move', 'drag_ms'] as const
 // トラックパッドの項目
@@ -63,13 +64,21 @@ export const PAD_DEFAULTS = {
 } as const
 // ウィジェットが押した位置で働く（タップしたときのキーやレイヤーを書けない）
 export function ownsTouch(w: WidgetKind | undefined): boolean {
-  return w === 'todo' || w === 'calendar' || w === 'trackpad'
+  return w === 'todo' || w === 'calendar' || w === 'trackpad' || isTapWidget(w)
+}
+// タップと長押しを自分で処理する（タップしたときのキーやレイヤーを書けない。押すと枠が光る）
+export function isTapWidget(w: WidgetKind | undefined): boolean {
+  return w === 'stopwatch' || w === 'pomodoro' || w === 'counter' || w === 'presence'
+}
+// id を書けるウィジェット（text と qr は必須、ほかは省略すると種類の名前）
+export function hasStateId(w: WidgetKind | undefined): boolean {
+  return w === 'text' || w === 'qr' || isTapWidget(w)
 }
 // widget.go の既定の書式
 export const DEFAULT_CLOCK_FORMAT = '15:04'
 export const DEFAULT_DATE_FORMAT = '1月2日({wday})'
 // ウィジェットにだけ書ける項目
-export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars', ...PAD_FIELDS] as const
+export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars', 'work', 'break', 'states', ...PAD_FIELDS] as const
 // ウィジェットの種類ごとの項目
 export const CLOCK_FIELDS = ['format', 'date_format', 'tz'] as const
 
@@ -96,7 +105,7 @@ export function actionKind(a: ActionSpec): ActionKind {
 // isIncomplete は、送るキーや行き先をまだ選んでいない割り当てかどうか。
 export function isIncomplete(a: ActionSpec): boolean {
   const fields = ACTION_FIELDS.filter((k) => a[k] !== undefined)
-  if (a.widget !== undefined) return !a.widget || (a.widget === 'text' && !a.id) || fields.some((k) => a[k] === '')
+  if (a.widget !== undefined) return !a.widget || ((a.widget === 'text' || a.widget === 'qr') && !a.id) || fields.some((k) => a[k] === '')
   return fields.length === 0 || fields.some((k) => a[k] === '')
 }
 
@@ -128,7 +137,8 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   else if (k === 'terminal') s = `terminal: ${a.terminal}`
   else s = `${k}: ${actionTarget(a)}`
   if (a.widget !== undefined) {
-    const opts = (['format', 'date_format', 'tz', 'id', 'rows'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
+    const opts = (['format', 'date_format', 'tz', 'id', 'rows', 'work', 'break'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
+    if (a.states) opts.push(`states=${a.states.map((s) => s.name).join('/')}`)
     const w = `widget: ${a.widget}${opts.length ? `（${opts.join(', ')}）` : ''}`
     s = s ? `${w}、タップで ${s}` : w
   }

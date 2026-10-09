@@ -1,0 +1,15 @@
+{
+  "stopwatch": {
+    "stopwatch": {"elapsed_ms": 3723000, "updated_at": "2026-10-06T00:38:00Z"}
+  },
+  "pomodoro": {
+    "pomodoro": {"running": false, "work_ms": 1500000, "break_ms": 300000, "done": 2, "phase": "break", "remaining_ms": 181500, "updated_at": "2026-10-06T00:20:00Z"}
+  },
+  "counter": {
+    "counter": {"value": 123456789, "updated_at": "2026-10-06T00:30:00Z"}
+  },
+  "presence": {
+    "presence": {"state": "外出", "updated_at": "2026-10-06T00:30:00Z"},
+    "door": {"state": "不在", "updated_at": "2026-10-06T00:30:00Z"}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "stopwatch": {
+    "stopwatch": {"elapsed_ms": 65000, "started_at": "2026-10-06T00:38:00Z", "updated_at": "2026-10-06T00:38:00Z"}
+  },
+  "pomodoro": {
+    "pomodoro": {"running": true, "anchor": "2026-10-06T00:20:00Z", "work_ms": 1500000, "break_ms": 300000, "done": 1, "updated_at": "2026-10-06T00:20:00Z"}
+  },
+  "counter": {
+    "counter": {"value": 12, "updated_at": "2026-10-06T00:30:00Z"},
+    "coffee": {"value": 3, "updated_at": "2026-10-06T00:30:00Z"}
+  },
+  "presence": {
+    "presence": {"state": "会議中", "updated_at": "2026-10-06T00:30:00Z", "source": "brain-deck"}
+  }
+}

@@ -9,7 +9,7 @@ import {
 import defaultKeymap from './keymap-pwsh2.json'
 import {
   CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
-  PAD_NUM_FIELDS, TERM_LABELS, USB_LABELS, WIDGET_FIELDS, ACTION_FIELDS, WIDGET_LABELS, ownsTouch,
+  PAD_NUM_FIELDS, TERM_LABELS, USB_LABELS, WIDGET_FIELDS, ACTION_FIELDS, WIDGET_LABELS, ownsTouch, hasStateId,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
   isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
   resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
@@ -24,12 +24,15 @@ import {
 import { TEXT_ID_PATTERN, TEXT_STYLES, textExpired } from './textwidget'
 import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
+import {
+  DEFAULT_PRESENCE, QR_MAX_BYTES, parseColor, pomoDurations, pomoText, pomodoroView, presenceStates, stateId, stopwatchElapsed, stopwatchText,
+} from './gadgetwidget'
 import { Client, PROTOCOL_VERSION, ProtocolError, type Transport } from './protocol'
 import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './ports'
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
-  ActionSpec, BrainImage, Config, EngineStatus, GetTextResult, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
+  ActionSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetTextResult, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MouseAction, UsbMode, TermInfo, TermMode,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
@@ -147,6 +150,10 @@ export class App {
   previewPress: string | null = null
   // テキストのタイルの中身（接続したときに Brain から読む）。GUI の接続中は brain-deck が書けないので、読み直さない
   texts: Record<string, TextEntry> = {}
+  // QR コードの中身、ストップウォッチなどの状態、電池（接続したときに Brain から読む。状態は Brain で変わると通知が届く）
+  qr: Record<string, TextEntry> = {}
+  widgetsState: WidgetsState = {}
+  brainBattery: BatteryInfo | null = null
   // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
   section: 'config' | 'todo' | 'console' = 'config'
   // コンソールのタブ（Brain の 1 つ目のシリアル。設定のタブとは別のポートで、同時に開いておける）
@@ -432,11 +439,14 @@ export class App {
       this.layer = 0
       this.sel = null
     }
-    const st = await c.request<{ status: EngineStatus; hid?: { mouse: boolean }; terminal?: TermInfo }>('get_status')
+    const st = await c.request<{ status: EngineStatus; hid?: { mouse: boolean }; terminal?: TermInfo; battery?: BatteryInfo | null }>('get_status')
     this.brainStatus = st.status
     this.brainMouse = st.hid ? st.hid.mouse : null
     this.brainTerm = st.terminal ?? null
+    this.brainBattery = st.battery ?? null
     if (this.hello?.commands?.includes('get_text')) this.texts = (await c.request<GetTextResult>('get_text')).texts ?? {}
+    if (this.hello?.commands?.includes('get_qr')) this.qr = (await c.request<GetTextResult>('get_qr')).texts ?? {}
+    if (this.hello?.commands?.includes('get_widgets')) this.widgetsState = (await c.request<GetWidgetsResult>('get_widgets')).widgets ?? {}
     await this.loadTodo()
     this.calendar = this.hello?.commands?.includes('get_calendar') ? await c.request<CalendarData>('get_calendar') : null
     this.render()
@@ -1016,7 +1026,8 @@ export class App {
     if (!cur) return
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
-    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale'] as const) if (a[f] === '') delete a[f]
+    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale', 'work', 'break'] as const) if (a[f] === '') delete a[f]
+    if (a.states && !a.states.length) delete a.states
     for (const f of PAD_NUM_FIELDS) if (a[f] === undefined || !Number.isFinite(a[f])) delete a[f]
     if (!a.scroll_direction) delete a.scroll_direction
     if (!a.long_press) delete a.long_press
@@ -1031,8 +1042,14 @@ export class App {
     if (!cur?.widget || cur.widget === w) return
     const a: ActionSpec = { ...cur, widget: w }
     for (const f of CLOCK_FIELDS) if (w !== 'clock') delete a[f]
-    if (w !== 'text') delete a.id
-    else a.id = cur.id || this.suggestTextId()
+    if (!hasStateId(w) || (hasStateId(cur.widget) && (cur.widget === 'text') !== (w === 'text'))) delete a.id
+    if (w === 'text') a.id = cur.id || this.suggestTextId()
+    if (w === 'qr') a.id = a.id || this.suggestQRId()
+    if (w !== 'pomodoro') {
+      delete a.work
+      delete a.break
+    }
+    if (w !== 'presence') delete a.states
     const paged = w === 'todo' || w === 'calendar'
     if (!paged) {
       delete a.rows
@@ -1054,6 +1071,19 @@ export class App {
     const used = new Set(this.textIdsInConfig())
     for (const id of Object.keys(this.texts).sort()) if (!used.has(id)) return id
     for (let i = 1; ; i++) if (!used.has(`text${i}`)) return `text${i}`
+  }
+
+  // suggestQRId は、まだ使っていない QR コードの id を作る。
+  suggestQRId(): string {
+    const used = new Set(this.widgetIdsInConfig('qr'))
+    for (const id of Object.keys(this.qr).sort()) if (!used.has(id)) return id
+    for (let i = 1; ; i++) if (!used.has(`qr${i}`)) return `qr${i}`
+  }
+
+  widgetIdsInConfig(kind: string): string[] {
+    const ids = new Set<string>()
+    for (const l of this.cfg?.layers ?? []) for (const a of Object.values(l.touch?.cells ?? {})) if (a.widget === kind) ids.add(stateId(a))
+    return [...ids].sort()
   }
 
   textIdsInConfig(): string[] {
@@ -1107,6 +1137,12 @@ export class App {
     if (n.event === 'terminal') {
       const { event: _, ...t } = n
       this.brainTerm = t
+      this.render()
+      return
+    }
+    if (n.event === 'widgets') {
+      const { event: _, ...w } = n
+      this.widgetsState = w
       this.render()
       return
     }
@@ -1723,6 +1759,7 @@ export class App {
         const pressed = new Set(t.kind === 'cell' && e.showPressed ? [cellKey(t.col, t.row)] : [])
         const { pixels } = renderPreview(this.font, { cfg, stack: editStack(t.layer), mode: this.previewMode(t.layer), pressed,
           w: pv.width, h: pv.height, now: new Date(), texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar,
+          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery,
           images: (id) => (id === '__edit__' ? img : this.images.get(id)?.img) })
         pctx.putImageData(new ImageData(pixels as any, pv.width, pv.height), 0, 0)
       }
@@ -2053,7 +2090,7 @@ export class App {
     const now = new Date()
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
       texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img,
-      mouseOff: this.brainMouse === false })
+      mouseOff: this.brainMouse === false, widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
   }
@@ -2078,10 +2115,20 @@ export class App {
     }
     // カレンダーは、予定の始まりと終わりで描き直す（1 分ごとに見直せば十分）
     if (g.cells.some((c) => c?.action.widget === 'calendar')) wait = Math.min(wait, 60000 - (now.getTime() % 60000) + 5)
-    // テキストの有効期限が切れたら、薄く描き直す
+    // テキストと QR コードの有効期限が切れたら、薄く描き直す
     for (const c of g.cells) {
-      const e = c?.action.widget === 'text' && c.action.id ? this.texts[c.action.id] : undefined
+      const a = c?.action
+      const e = a?.widget === 'text' && a.id ? this.texts[a.id] : a?.widget === 'qr' && a.id ? this.qr[a.id] : undefined
       if (e?.expires_at && !textExpired(e, now)) wait = Math.min(wait, Date.parse(e.expires_at) - now.getTime() + 5)
+      // 動いているストップウォッチとポモドーロは、秒が変わるたびに描き直す（gadgetwidget.go の gadgetNext）
+      if (a?.widget === 'stopwatch') {
+        const st = this.widgetsState.stopwatch?.[stateId(a)]
+        if (st?.started_at) wait = Math.min(wait, 1000 - (stopwatchElapsed(st, now.getTime()) % 1000) + 5)
+      }
+      if (a?.widget === 'pomodoro') {
+        const pv = pomodoroView(this.widgetsState.pomodoro?.[stateId(a)], now.getTime(), pomoDurations(a).work)
+        if (pv.running) wait = Math.min(wait, pv.next - now.getTime() + 5)
+      }
     }
     if (wait === Infinity) return
     this.previewTimer = setTimeout(() => this.drawPreview(), Math.min(wait, 2 ** 31 - 1))
@@ -2179,7 +2226,7 @@ export class App {
         (Object.keys(WIDGET_LABELS) as WidgetKind[]).map((w) => h('option', { value: w, selected: own.widget === w }, WIDGET_LABELS[w])))),
       own.widget === 'text' ? this.viewTextEditor(own) : own.widget === 'todo' ? this.viewTodoEditor(own)
         : own.widget === 'calendar' ? this.viewCalendarEditor(own) : own.widget === 'trackpad' ? this.viewPadEditor(own)
-        : this.viewClockEditor(text, missing),
+        : own.widget === 'clock' ? this.viewClockEditor(text, missing) : this.viewGadgetEditor(own),
     )
   }
 
@@ -2205,6 +2252,97 @@ export class App {
     out.push(h('p', { class: 'hint' },
       `中身は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。PC で「brain-deck text ${id || '<id>'} "ビルド成功" --style ok --ttl 10m」のように書き換えます。` +
       '色は通常・成功（ok）・失敗（error）・警告（warn）。有効期限を過ぎると、消さずに薄く表示します。設定 GUI が接続しているあいだは、brain-deck から書き換えられません。'))
+    return out
+  }
+
+  // viewGadgetEditor は、電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプの欄。
+  private viewGadgetEditor(own: ActionSpec): HTMLElement[] {
+    const w = own.widget!
+    const out: HTMLElement[] = []
+    const id = own.id ?? ''
+    const sid = stateId(own)
+    if (hasStateId(w)) {
+      const required = w === 'qr'
+      out.push(h('label', { class: 'row', title: required ? '英数字と _ . -（32 文字まで）。brain-deck qr <id> で中身を書き換えます'
+        : `英数字と _ . -（32 文字まで）。省略すると「${w}」。同じ id のセルは同じ状態を出します` }, 'id ',
+        h('input', { value: id, 'data-focus': 'id', id: 'gadget-id', placeholder: required ? '例：share' : `省略すると ${w}`,
+          onchange: (ev: Event) => this.patchAction({ id: (ev.target as HTMLInputElement).value.trim() }) })))
+      if (id && !TEXT_ID_PATTERN.test(id)) out.push(h('div', { class: 'err' }, 'id は、英数字と _ . - の 32 文字までです'))
+    }
+    const now = Date.now()
+    const live = this.connected && !!this.hello?.commands?.includes('get_widgets')
+    const old = () => out.push(h('div', { class: 'warn' }, 'Brain の lefthand がこのウィジェットに対応していません。lefthand を新しくしてください'))
+    switch (w) {
+      case 'battery': {
+        const b = this.brainBattery
+        if (this.connected) out.push(h('p', { class: 'hint gadget-now' }, b && b.percent >= 0
+          ? `今：${b.percent}%${b.charging ? '、充電中' : b.plugged ? '、USB 給電' : ''}${b.voltage_mv ? `（${(b.voltage_mv / 1000).toFixed(2)} V）` : ''}`
+          : '今：Brain で電池を読めません'))
+        out.push(h('p', { class: 'hint' }, '電池の残りと、USB から給電しているか（充電中）を出します。PW-SH2 では、残りと充電中は電池の電圧からの見積もりで、' +
+          'USB につないでいるあいだは多めに出ます。30 秒ごとに読みます。タップしたときの動き（キーなど）も書けます。'))
+        break
+      }
+      case 'stopwatch': {
+        const st = this.widgetsState.stopwatch?.[sid]
+        if (live) out.push(h('p', { class: 'hint gadget-now' }, `今：${stopwatchText(stopwatchElapsed(st, now))}（${st?.started_at ? '計測中' : '停止中'}）`))
+        else if (this.connected) old()
+        out.push(h('p', { class: 'hint' }, 'Brain でタップすると開始と停止、0.5 秒押し続けると 0 に戻します。Brain を再起動すると止まります（終了した時点までの時間は残ります）。'))
+        break
+      }
+      case 'counter': {
+        if (live) out.push(h('p', { class: 'hint gadget-now' }, `今：${this.widgetsState.counter?.[sid]?.value ?? 0}`))
+        else if (this.connected) old()
+        out.push(h('p', { class: 'hint' }, 'Brain でタップすると 1 増え、0.5 秒押し続けると 0 に戻します。値は Brain に保存し、再起動しても残ります。'))
+        break
+      }
+      case 'pomodoro': {
+        const dur = (f: 'work' | 'break', label: string, def: string) => {
+          const v = own[f] ?? ''
+          const ms = v === '' ? 60000 : parseDuration(v)
+          return [
+            h('label', { class: 'row', title: '1m から 4h まで（25m、90s など）' }, label,
+              h('input', { value: v, placeholder: def, 'data-focus': f, id: `pomo-${f}`, class: 'num',
+                onchange: (e: Event) => this.patchAction({ [f]: (e.target as HTMLInputElement).value.trim() }) })),
+            ...(ms === null || ms < 60000 || ms > 4 * 3600000 || ms % 1000 ? [h('div', { class: 'err' }, `${label.trim()}は、25m のような 1 分から 4 時間の時間です`)] : []),
+          ]
+        }
+        out.push(...dur('work', '作業の時間 ', '25m'), ...dur('break', '休憩の時間 ', '5m'))
+        if (live) {
+          const pv = pomodoroView(this.widgetsState.pomodoro?.[sid], now, pomoDurations(own).work)
+          out.push(h('p', { class: 'hint gadget-now' }, `今：${!pv.started ? 'まだ始めていません' : `${pv.phase === 'break' ? '休憩' : '作業'}${pv.running ? '中' : '（一時停止）'} 残り ${pomoText(pv.remaining)}、終えた作業 ${pv.count} 回`}`))
+        } else if (this.connected) old()
+        out.push(h('p', { class: 'hint' }, 'Brain でタップすると開始と一時停止、0.5 秒押し続けると最初に戻します。作業と休憩をくり返し、切り替わるとセルが 15 秒点滅し、' +
+          '画面が暗ければ明るくします（点滅はタップで止まります）。時間を変えたときは、最初に戻してから始めると反映します。'))
+        break
+      }
+      case 'qr': {
+        const e = id ? this.qr[id] : undefined
+        if (this.connected && this.hello?.commands?.includes('get_qr')) {
+          out.push(h('p', { class: 'hint gadget-now' }, e
+            ? `今の中身：「${e.text.replace(/\n/g, '⏎')}」${e.expires_at ? `（期限 ${new Date(e.expires_at).toLocaleString()}${textExpired(e, new Date()) ? '。切れています。薄く表示' : ''}）` : ''}`
+            : '今の中身：まだありません（Brain では「未設定」と出ます）'))
+        } else if (this.connected) old()
+        out.push(h('p', { class: 'hint' },
+          `中身は設定ファイルには入らず、Brain に別に保存します。PC で「brain-deck qr ${id || '<id>'} "https://..." --ttl 1h」のように送ります（UTF-8 で ${QR_MAX_BYTES} バイトまで）。` +
+          'セルに入らない長さのときは「QR が入りません」と出るので、セルを大きく（span）します。設定 GUI が接続しているあいだは、brain-deck から送れません。'))
+        break
+      }
+      case 'presence': {
+        const lines = (own.states ?? []).map((x) => (x.color ? `${x.name} ${x.color}` : x.name)).join('\n')
+        out.push(h('label', { class: 'row', title: '1 行に 1 つ、「名前 #rrggbb」の形で書きます（色は省略可）。空なら在席、集中、会議中、休憩' }, '状態 ',
+          h('textarea', { rows: 4, 'data-focus': 'states', id: 'presence-states', value: lines,
+            placeholder: DEFAULT_PRESENCE.map((x) => `${x.name} ${x.color}`).join('\n'),
+            onchange: (e: Event) => this.patchAction({ states: parsePresenceLines((e.target as HTMLTextAreaElement).value) }) })))
+        const bad = (own.states ?? []).filter((x) => x.color && !parseColor(x.color)).map((x) => x.name)
+        if (bad.length) out.push(h('div', { class: 'err' }, `色は #rrggbb の形で書きます：${bad.join('、')}`))
+        if (live) {
+          const cur = this.widgetsState.presence?.[sid]?.state
+          out.push(h('p', { class: 'hint gadget-now' }, `今：${cur || `${presenceStates(own.states)[0].name}（まだ変えていません）`}`))
+        } else if (this.connected) old()
+        out.push(h('p', { class: 'hint' }, `Brain でタップすると次の状態、0.5 秒押し続けると前の状態にし、セル全体を状態の色で塗ります。PC から「brain-deck presence 会議中${id ? ` --id ${id}` : ''}」でも変えられます。`))
+        break
+      }
+    }
     return out
   }
 
@@ -2562,4 +2700,16 @@ export function utcOffset(sec: number): string {
   const a = Math.abs(sec)
   const m = Math.floor(a / 60) % 60
   return `UTC${sec < 0 ? '-' : '+'}${Math.floor(a / 3600)}${m ? `:${String(m).padStart(2, '0')}` : ''}`
+}
+
+// parsePresenceLines は、在席ランプの状態の欄（1 行に「名前 #rrggbb」）を読む。
+export function parsePresenceLines(text: string): PresenceSpec[] {
+  const out: PresenceSpec[] = []
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line) continue
+    const m = /^(.*?)\s+(#[0-9A-Za-z]+)$/.exec(line)
+    out.push(m ? { name: m[1].trim(), color: m[2].toLowerCase() } : { name: line })
+  }
+  return out
 }

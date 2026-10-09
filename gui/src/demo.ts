@@ -4,10 +4,11 @@
 
 import { ALL_KEYS, MODIFIERS } from './keys'
 import keymapJSON from './keymap-pwsh2.json'
-import { ACTION_FIELDS, MOUSE_LABELS, PAD_FIELDS, actionKind, actionTarget, parseCellKey, spanOf } from './model'
+import { ACTION_FIELDS, MOUSE_LABELS, PAD_FIELDS, actionKind, actionTarget, hasStateId, isTapWidget, parseCellKey, spanOf } from './model'
 import type { Transport } from './protocol'
 import { TEXT_ID_PATTERN } from './textwidget'
-import type { ActionSpec, CalendarData, Config, KeymapInfo, Problem, TextEntry, TodoItem, TodoList } from './types'
+import { parseDurationMs, presenceStates } from './gadgetwidget'
+import type { ActionSpec, BatteryInfo, CalendarData, Config, KeymapInfo, PresenceSpec, Problem, TextEntry, TodoItem, TodoList, WidgetsState } from './types'
 
 const keymap = keymapJSON as KeymapInfo
 const SOURCE_KEYS = new Set(keymap.keys.flatMap((k) => [k.code, k.symbol]).filter(Boolean) as string[])
@@ -25,6 +26,9 @@ export class FakeDaemon {
   clockOffsetMs = 0 // Brain の時計の遅れ（set_time で 0 になる）
   timeSynced = false
   texts: Record<string, TextEntry> = {} // テキストのタイルの中身
+  qr: Record<string, TextEntry> = {} // QR コードのウィジェットの中身
+  widgets: WidgetsState = { stopwatch: {}, pomodoro: {}, counter: {}, presence: {} } // ストップウォッチなどの状態
+  battery: BatteryInfo | null = { percent: 87, voltage_mv: 4040, plugged: true, charging: true, source: 'demo', estimated: true }
   todo: TodoList = { rev: 0, items: [] } // Todo の一覧
   calendar: CalendarData = { rev: 0, calendars: [] } // カレンダーの予定（brain-deck calendar sync が送るもの）
   // 背景画像（id → 名前と中身）。image_begin〜image_end で受け取る
@@ -72,14 +76,15 @@ export class FakeDaemon {
         return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
           commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
-            'set_calendar', 'get_calendar', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal'] })
+            'set_calendar', 'get_calendar', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal',
+            'set_qr', 'get_qr', 'get_widgets', 'set_presence'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
         return ok(keymap)
       case 'get_status':
         return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress, time: this.timeInfo(), hid: { mouse: this.mouse, switching: false },
-          terminal: this.termInfo() })
+          terminal: this.termInfo(), battery: this.battery, backlight: { enabled: false } })
       case 'set_terminal': {
         const want = req.mode === 'toggle' ? !this.terminal : req.mode === 'on' ? true : req.mode === 'off' ? false : null
         if (want === null) return err('bad_request', 'mode must be "on", "off" or "toggle"')
@@ -110,6 +115,37 @@ export class FakeDaemon {
         else this.texts[req.name] = { text: String(req.text), style: req.style ?? 'normal', set_at: new Date().toISOString(),
           ...(req.ttl_sec ? { expires_at: new Date(Date.now() + req.ttl_sec * 1000).toISOString() } : {}) }
         return ok({ name: req.name, cleared: !!req.clear, shown: true })
+      case 'get_qr':
+        return ok({ texts: this.qr, ids: this.widgetIds('qr') })
+      case 'set_qr':
+        if (!TEXT_ID_PATTERN.test(req.name ?? '')) return err('bad_request', 'bad name')
+        if (req.clear) delete this.qr[req.name]
+        else this.qr[req.name] = { text: String(req.text), style: 'normal', set_at: new Date().toISOString(),
+          ...(req.ttl_sec ? { expires_at: new Date(Date.now() + req.ttl_sec * 1000).toISOString() } : {}) }
+        return ok({ name: req.name, cleared: !!req.clear, shown: this.widgetIds('qr').includes(req.name) })
+      case 'get_widgets': {
+        const ids: Record<string, string[]> = {}
+        for (const k of ['stopwatch', 'pomodoro', 'counter', 'presence', 'qr']) ids[k] = this.widgetIds(k)
+        const presence_states: Record<string, PresenceSpec[]> = {}
+        for (const pid of ids.presence) presence_states[pid] = this.presenceStates(pid)
+        return ok({ widgets: this.widgets, ids, presence_states, battery: this.battery, now: new Date().toISOString() })
+      }
+      case 'set_presence': {
+        const name = req.name || 'presence'
+        const states = this.presenceStates(name)
+        if (!states.length) return err('not_found', `the config has no presence cell with id "${name}"`)
+        let state = req.state as string
+        if (state) {
+          if (!states.some((x) => x.name === state)) return err('bad_request', `unknown state "${state}"`)
+        } else {
+          const cur = states.findIndex((x) => x.name === this.widgets.presence?.[name]?.state)
+          const i = cur < 0 ? (req.step > 0 ? 0 : states.length - 1) : (cur + (req.step > 0 ? 1 : -1) + states.length) % states.length
+          state = states[i].name
+        }
+        ;(this.widgets.presence ??= {})[name] = { state, updated_at: new Date().toISOString(), source: req.source }
+        if (this.dataSubscribed) setTimeout(() => this.emit(JSON.stringify({ event: 'widgets', ...this.widgets })), 0)
+        return ok({ name, state })
+      }
       case 'get_todo':
       case 'todo_add':
       case 'todo_update':
@@ -128,7 +164,7 @@ export class FakeDaemon {
         return ok({ rev: this.calendar.rev, calendars: req.calendars.map((c: any) => ({ name: c.name, events: c.events?.length ?? 0 })) })
       case 'subscribe_data':
         this.dataSubscribed = req.enable !== false
-        return ok({ subscribed: this.dataSubscribed, events: ['todo'] })
+        return ok({ subscribed: this.dataSubscribed, events: ['todo', 'widgets'] })
       case 'validate': {
         const p = validate(req.config)
         return ok({ valid: p.length === 0, errors: p, warnings: [], config: p.length ? undefined : req.config })
@@ -307,6 +343,25 @@ export class FakeDaemon {
     return extra
   }
 
+  // widgetIds は、設定で kind のウィジェットに使われている id（gadgets.go の gadgetIDs）。
+  private widgetIds(kind: string): string[] {
+    return [...new Set(this.config.layers.flatMap((l) => Object.values(l.touch?.cells ?? {})).filter((a) => a.widget === kind).map((a) => a.id || kind))].sort()
+  }
+
+  private presenceStates(id: string): PresenceSpec[] {
+    const out: PresenceSpec[] = []
+    for (const l of this.config.layers) {
+      for (const k of Object.keys(l.touch?.cells ?? {}).sort()) {
+        const a = l.touch!.cells![k]
+        if (a.widget !== 'presence' || (a.id || 'presence') !== id) continue
+        presenceStates(a.states).forEach((d) => {
+          if (!out.some((x) => x.name === d.name)) out.push({ name: d.name, color: '#' + d.color.map((v) => v.toString(16).padStart(2, '0')).join('') })
+        })
+      }
+    }
+    return out
+  }
+
   private emitTodo(): void {
     if (this.dataSubscribed) setTimeout(() => this.emit(JSON.stringify({ event: 'todo', ...this.todo })), 0)
   }
@@ -359,7 +414,16 @@ export function validate(cfg: Config): Problem[] {
     if (!cell && (a.widget || a.span || a.background)) return out.push({ path, message: `${where}: widget, span and background can be used only in touch cells` })
     if (a.background !== undefined && !/^[0-9a-f]{16}$/.test(a.background))
       out.push({ path, message: `${where}: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got "${a.background}"` })
-    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad'].includes(a.widget)) out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad)` })
+    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence'].includes(a.widget))
+      out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad, battery, stopwatch, pomodoro, counter, qr, presence)` })
+    if (isTapWidget(a.widget) && n > 0)
+      out.push({ path, message: `${where}: widget: ${a.widget} handles taps itself; remove key, layer_*, mouse, usb_mode and terminal` })
+    if ((a.work !== undefined || a.break !== undefined) && a.widget !== 'pomodoro') out.push({ path, message: `${where}: work and break are for widget: pomodoro` })
+    for (const f of ['work', 'break'] as const) {
+      const d = a[f] !== undefined ? parseDurationMs(a[f]!) : 60000
+      if (d === null || d < 60000 || d > 4 * 3600000) out.push({ path, message: `${where}: ${f} must be a whole number of seconds from 1m0s to 4h0m0s (such as 25m or 5m)` })
+    }
+    if (a.states !== undefined && a.widget !== 'presence') out.push({ path, message: `${where}: states is for widget: presence` })
     if (a.widget === 'todo' && n > 0) out.push({ path, message: `${where}: widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*` })
     if (a.widget === 'calendar' && n > 0) out.push({ path, message: `${where}: widget: calendar handles taps itself (▲▼ to turn pages); remove key and layer_*` })
     const paged = a.widget === 'todo' || a.widget === 'calendar'
@@ -367,8 +431,9 @@ export function validate(cfg: Config): Problem[] {
     if (a.page_reset !== undefined && !paged) out.push({ path, message: `${where}: page_reset is for widget: todo and calendar` })
     if ((a.stale !== undefined || a.calendars !== undefined) && a.widget !== 'calendar') out.push({ path, message: `${where}: stale and calendars are for widget: calendar` })
     if (a.rows !== undefined && !(Number.isInteger(a.rows) && a.rows >= 1 && a.rows <= 20)) out.push({ path, message: `${where}: rows must be 1..20 (omit it to fit the cell height)` })
-    if (a.widget === 'text' && !TEXT_ID_PATTERN.test(a.id ?? '')) out.push({ path, message: `${where}: widget: text needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
-    if (a.widget !== 'text' && a.id) out.push({ path, message: `${where}: id is for widget: text` })
+    if ((a.widget === 'text' || a.widget === 'qr') && !TEXT_ID_PATTERN.test(a.id ?? ''))
+      out.push({ path, message: `${where}: widget: ${a.widget} needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
+    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, stopwatch, pomodoro, counter and presence` })
     if (!a.widget && (a.format || a.date_format || a.tz)) out.push({ path, message: `${where}: format, date_format and tz need widget: clock` })
     if (a.tz) {
       try {

@@ -23,6 +23,9 @@ export interface ActionSpec {
   page_reset?: string // todo、calendar：触らなければ最初のページに戻るまでの時間（30s、2m など）。off で戻らない
   stale?: string // calendar：最終更新がこれより古ければ、古いと出す（3h など）
   calendars?: string[] // calendar：出すカレンダーの名前。省略するとすべて
+  work?: string // pomodoro：作業の時間（25m など）
+  break?: string // pomodoro：休憩の時間（5m など）
+  states?: PresenceSpec[] // presence：タップで順に切り替える状態。省略すると在席、集中、会議中、休憩
   // trackpad：トラックパッド（trackpad.go）。省略すると既定値
   speed?: number // 感度（画面の 1 ドットを、PC のマウスの何カウントにするか）
   accel?: number // 加速（0 で加速しない）
@@ -39,7 +42,13 @@ export interface ActionSpec {
   long_press?: 'none' | 'right' // 長押しで右クリック
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence'
+
+// 在席ランプの状態 1 つ（gadgetwidget.go の PresenceSpec）
+export interface PresenceSpec {
+  name: string
+  color?: string // #rrggbb。省略すると順に決まった色
+}
 
 export type UsbMode = 'keyboard' | 'mouse' | 'toggle'
 
@@ -145,6 +154,73 @@ export interface Config {
   layers: LayerConfig[]
   display?: DisplayConfig
   terminal?: TerminalConfig
+  backlight?: BacklightConfig
+}
+
+// 設定の backlight（backlight.go の BacklightConfig）。GUI では編集せず、そのまま残す
+export interface BacklightConfig {
+  device?: string
+  dim_after?: string
+  off_after?: string
+  level?: number
+  dim_level?: number
+  wake_on_key?: boolean
+  in_terminal?: boolean
+}
+
+// ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（get_widgets、widgets の通知。gadgets.go）
+export interface StopwatchState {
+  elapsed_ms: number
+  started_at?: string
+  updated_at?: string
+}
+
+export interface PomodoroState {
+  running?: boolean
+  anchor?: string
+  work_ms?: number
+  break_ms?: number
+  done?: number
+  phase?: 'work' | 'break'
+  remaining_ms?: number
+  ack_at?: string
+  updated_at?: string
+}
+
+export interface CounterState {
+  value: number
+  updated_at?: string
+}
+
+export interface PresenceState {
+  state: string
+  updated_at?: string
+  source?: string
+}
+
+export interface WidgetsState {
+  stopwatch?: Record<string, StopwatchState>
+  pomodoro?: Record<string, PomodoroState>
+  counter?: Record<string, CounterState>
+  presence?: Record<string, PresenceState>
+}
+
+// 電池の状態（get_status の battery。battery.go の BatteryInfo）
+export interface BatteryInfo {
+  percent: number
+  voltage_mv?: number
+  plugged: boolean
+  charging: boolean
+  source?: string
+  estimated?: boolean
+}
+
+export interface GetWidgetsResult {
+  widgets: WidgetsState
+  ids: Record<string, string[]>
+  presence_states: Record<string, PresenceSpec[]>
+  battery: BatteryInfo | null
+  now?: string
 }
 
 // 検証の誤り。path は JSON Pointer（例：/layers/0/keys/KEY_Q）
@@ -311,4 +387,9 @@ export interface TerminalEvent extends TermInfo {
   event: 'terminal'
 }
 
-export type Notification = InputEvent | LayerEvent | TodoEvent | TerminalEvent
+// Brain でストップウォッチなどの状態が変わったとき（subscribe_data のあと）
+export interface WidgetsEvent extends WidgetsState {
+  event: 'widgets'
+}
+
+export type Notification = InputEvent | LayerEvent | TodoEvent | TerminalEvent | WidgetsEvent

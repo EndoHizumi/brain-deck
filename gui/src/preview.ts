@@ -8,7 +8,13 @@ import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
 import { unpack565, type Image565 } from './image'
-import type { ActionSpec, CalendarData, Config, PressStyle, TextEntry, TodoItem, TodoList } from './types'
+import { encodeQR } from './qr'
+import {
+  GAUGE_H, QR_NONE, QR_TOO_BIG, STOPWATCH_IDLE, batteryLines, colInkWarn, colQRDark, colQRDarkOld, colQRLight, colQRLitOld,
+  contrastInk, pomoDurations, pomoInk, pomoText, pomodoroView, presenceStates, presenceView, qrFit, stateId, stopwatchElapsed,
+  stopwatchText, type PresenceDef,
+} from './gadgetwidget'
+import type { ActionSpec, BatteryInfo, CalendarData, Config, PressStyle, TextEntry, TodoItem, TodoList, WidgetsState } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
 type RGB = [number, number, number]
@@ -70,6 +76,15 @@ export interface CellView {
   cal?: CalWidget // カレンダーのウィジェット
   padScroll?: number // トラックパッドのスクロールの帯の幅（0 なら帯なし）
   background?: string // セルの背景画像の id
+  gadget?: Gadget // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ
+}
+
+// Gadget は、新しいウィジェットの描き方に要る設定（gadgetwidget.go）。
+export interface Gadget {
+  kind: 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence'
+  id: string
+  work: number // pomodoro：作業の時間（ミリ秒）
+  states: PresenceDef[] // presence
 }
 
 interface Rect {
@@ -102,6 +117,9 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'todo') v.todoRows = typeof a.rows === 'number' ? a.rows : 0
     if (a.widget === 'calendar') v.cal = calWidgetOf(a)
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
+    if (['battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence'].includes(a.widget)) {
+      v.gadget = { kind: a.widget as Gadget['kind'], id: stateId(a), work: pomoDurations(a).work, states: presenceStates(a.states) }
+    }
     return v
   }
   if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'usb_mode' && k !== 'terminal') {
@@ -248,6 +266,9 @@ export interface PreviewParams {
   calendarPage?: number // カレンダーのセルに出すページ（0 から）。省略すると、触っていないときのページ
   images?: (id: string) => Image565 | undefined // 背景画像。ない id は背景なしで描く（Brain と同じ）
   mouseOff?: boolean // USB にマウスがない（キーボードだけの形）。トラックパッドに「マウスはオフ」と出す
+  widgets?: WidgetsState // ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（Brain の get_widgets）
+  qr?: Record<string, TextEntry> // QR コードのウィジェットの中身（Brain の get_qr）
+  battery?: BatteryInfo | null // 電池（Brain の get_status）。省略すると読めないとき
 }
 
 export interface WidgetEnv {
@@ -259,6 +280,9 @@ export interface WidgetEnv {
   calendar: CalendarData | null
   calendarPage?: number
   mouseOff: boolean
+  widgets: WidgetsState
+  qr: Record<string, TextEntry>
+  battery: BatteryInfo | null
 }
 
 export interface PreviewLayout {
@@ -280,7 +304,8 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   const fill = (p.pressStyle ?? p.cfg.display?.press_style) === 'fill'
   const px = new Pixels(W, H)
   const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {}, todo: p.todo?.items ?? [],
-    todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage, mouseOff: p.mouseOff ?? false }
+    todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage, mouseOff: p.mouseOff ?? false,
+    widgets: p.widgets ?? {}, qr: p.qr ?? {}, battery: p.battery ?? null }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -327,8 +352,16 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
   let fillC = v.layer ? colLayerCell : colCell
   let textC = colText
   let subC = colSub
+  const wf = widgetFill(v, env)
   if (pressed && pressFill) {
     ;[fillC, textC, subC] = [colPressed, colPressedText, colPressedSub]
+    px.fill(box, fillC)
+    hasImg = false
+  } else if (wf) {
+    // 在席ランプ、点滅しているポモドーロ：ウィジェットが決めた色で塗る（display.go の drawCell）
+    fillC = wf
+    textC = contrastInk(wf)
+    subC = textC
     px.fill(box, fillC)
     hasImg = false
   } else px.paintBack(box, fillC, wall, own)
@@ -440,6 +473,10 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
     drawCalendar(font, px, area, v.cal, env, subInk)
     return
   }
+  if (v.gadget) {
+    drawGadget(font, px, area, v.gadget, env, ink, subInk)
+    return
+  }
   if (v.textId !== undefined) {
     const e = Object.hasOwn(env.texts, v.textId) ? env.texts[v.textId] : undefined
     let body = TEXT_NONE
@@ -474,6 +511,135 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
   drawCentered(font, px, area, y, time, ts, ink)
   if (date) drawCentered(font, px, area, y + FONT_H * ts + widgetLineGap, date, ds, subInk)
 }
+
+// widgetFill は gadgetwidget.go の widgetFill と同じ。セルの塗りをウィジェットが決めるとき、その色。
+function widgetFill(v: CellView, env: WidgetEnv): RGB | null {
+  const g = v.gadget
+  if (!g) return null
+  if (g.kind === 'presence') return presenceView(g.states, env.widgets, g.id).color
+  if (g.kind === 'pomodoro') {
+    const pv = pomodoroView(env.widgets.pomodoro?.[g.id], env.now.getTime(), g.work)
+    if (pv.alert && pv.blinkOn) return pomoInk(pv.phase)
+  }
+  return null
+}
+
+// drawTwoLines は gadgetwidget.go の drawTwoLines と同じ（時計と同じ配置の 2 行）。
+function drawTwoLines(font: BitmapFont, px: Pixels, area: Rect, a: string, b: string, inkA: RGB, inkB: RGB): void {
+  const aw = area.x1 - area.x0
+  const ah = area.y1 - area.y0
+  let bh = 0
+  let ds = 0
+  if (b) {
+    ds = Math.min(fitScale(font, [b], aw, FONT_H * dateMaxScale, dateMaxScale), dateMaxScale)
+    bh = FONT_H * ds + widgetLineGap
+  }
+  const ts = fitScale(font, [a], aw, ah - bh, clockMaxScale)
+  const y = area.y0 + Math.trunc((ah - FONT_H * ts - bh) / 2)
+  drawCentered(font, px, area, y, a, ts, inkA)
+  if (b) drawCentered(font, px, area, y + FONT_H * ts + widgetLineGap, b, ds, inkB)
+}
+
+// drawGadget は gadgetwidget.go の drawGadget と同じ。
+function drawGadget(font: BitmapFont, px: Pixels, area: Rect, g: Gadget, env: WidgetEnv, ink: RGB, subInk: RGB): void {
+  const now = env.now.getTime()
+  const pressed = !sameRGB(ink, colText)
+  const aw = area.x1 - area.x0
+  const ah = area.y1 - area.y0
+  const message = (s: string, c: RGB) => {
+    const sc = Math.min(fitScale(font, [s], aw, ah), 2)
+    drawCentered(font, px, area, area.y0 + Math.trunc((ah - FONT_H * sc) / 2), s, sc, c)
+  }
+  switch (g.kind) {
+    case 'battery': {
+      const b = batteryLines(env.battery, ink, colSub)
+      let c = pressed ? ink : b.c
+      if (b.pct >= 0 && ah > GAUGE_H * 3) {
+        const gr = { x0: area.x0, y0: area.y1 - GAUGE_H, x1: area.x1, y1: area.y1 }
+        px.frame(gr, 1, subInk)
+        const inn = inset(gr, 2)
+        const fw = Math.trunc(((inn.x1 - inn.x0) * b.pct) / 100)
+        if (fw > 0) px.fill({ ...inn, x1: inn.x0 + fw }, pressed ? subInk : c)
+        area = { ...area, y1: area.y1 - (GAUGE_H + widgetLineGap) }
+      }
+      drawTwoLines(font, px, area, b.main, b.sub, c, subInk)
+      return
+    }
+    case 'stopwatch': {
+      const st = env.widgets.stopwatch?.[g.id]
+      const el = stopwatchElapsed(st, now)
+      const running = !!st?.started_at
+      let c = ink
+      let sub = '計測中'
+      if (!running && el < 1000) [c, sub] = [subInk, STOPWATCH_IDLE]
+      else if (!running) [c, sub] = [colInkWarn, '停止中']
+      if (pressed) c = ink
+      drawTwoLines(font, px, area, stopwatchText(el), sub, c, subInk)
+      return
+    }
+    case 'pomodoro': {
+      const pv = pomodoroView(env.widgets.pomodoro?.[g.id], now, g.work)
+      const phase = pv.phase === 'break' ? '休憩' : '作業'
+      let c: RGB
+      let sub: string
+      if (!pv.started) [c, sub] = [ink, STOPWATCH_IDLE]
+      else if (pv.running) [c, sub] = [pomoInk(pv.phase), phase + '中']
+      else [c, sub] = [subInk, '一時停止 ' + phase]
+      if (pv.count > 0) sub += ` ${pv.count}回`
+      if (pressed) c = ink
+      if (pv.alert && pv.blinkOn && !pressed) {
+        c = contrastInk(pomoInk(pv.phase))
+        subInk = c
+      }
+      drawTwoLines(font, px, area, pomoText(pv.remaining), sub, c, subInk)
+      return
+    }
+    case 'counter':
+      drawTwoLines(font, px, area, String(env.widgets.counter?.[g.id]?.value ?? 0), '', ink, subInk)
+      return
+    case 'presence': {
+      const { name } = presenceView(g.states, env.widgets, g.id)
+      const s = Math.min(fitScale(font, [name], aw, ah, TEXT_MAX_SCALE), TEXT_MAX_SCALE)
+      drawCentered(font, px, area, area.y0 + Math.trunc((ah - FONT_H * s) / 2), name, s, ink)
+      return
+    }
+    case 'qr': {
+      const e = Object.hasOwn(env.qr, g.id) ? env.qr[g.id] : undefined
+      if (!e) {
+        message(QR_NONE, subInk)
+        return
+      }
+      const old = textExpired(e, env.now)
+      if (!drawQR(px, area, e.text, old ? colQRDarkOld : colQRDark, old ? colQRLitOld : colQRLight)) message(QR_TOO_BIG, colInkWarn)
+    }
+  }
+}
+
+// drawQR は gadgetwidget.go の drawQR と同じ。入らなければ false。
+function drawQR(px: Pixels, area: Rect, text: string, dark: RGB, light: RGB): boolean {
+  const q = encodeQR(text)
+  if (!q) return false
+  const aw = area.x1 - area.x0
+  const ah = area.y1 - area.y0
+  const { px: m, quiet } = qrFit(q.size, aw, ah)
+  if (!m) return false
+  const total = (q.size + 2 * quiet) * m
+  const x0 = area.x0 + Math.trunc((aw - total) / 2)
+  const y0 = area.y0 + Math.trunc((ah - total) / 2)
+  px.fill({ x0, y0, x1: x0 + total, y1: y0 + total }, light)
+  const ox = x0 + quiet * m
+  const oy = y0 + quiet * m
+  for (let y = 0; y < q.size; y++) {
+    for (let x = 0; x < q.size; x++) if (q.dark(x, y)) px.fill({ x0: ox + x * m, y0: oy + y * m, x1: ox + (x + 1) * m, y1: oy + (y + 1) * m }, dark)
+  }
+  return true
+}
+
+function sameRGB(a: RGB, b: RGB): boolean {
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2]
+}
+
+const TEXT_MAX_SCALE = 6 // widget.go の textMaxScale
 
 function drawCentered(font: BitmapFont, px: Pixels, area: Rect, y: number, s: string, scale: number, c: RGB): void {
   const x = area.x0 + Math.trunc((area.x1 - area.x0 - font.textWidth(s) * scale) / 2)

@@ -146,6 +146,33 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ。config/gadgets-example.yaml の「道具」「共有」レイヤー
+  // 状態は fixtures/widgets-state*.json（-render-widgets）、QR コードは fixtures/qr*.json（-render-qr）、電池は -render-battery
+  const gcfg = parseConfigText(repoFile('config/gadgets-example.yaml').toString('utf8'))
+  const glayer = (n: string) => gcfg.layers.findIndex((l) => l.name === n)
+  const fx = (f: string) => JSON.parse(repoFile(`gui/test/fixtures/${f}`).toString('utf8'))
+  const gcases: { file: string; layer: string; widgets?: string; qr?: string; battery?: any; pressed?: string[]; pressStyle?: PressStyle }[] = [
+    { file: 'gadgets-tools.png', layer: 'tools', widgets: 'widgets-state.json', battery: { percent: 87, plugged: true, charging: true } },
+    { file: 'gadgets-tools-paused.png', layer: 'tools', widgets: 'widgets-state-paused.json', battery: { percent: 12, plugged: false, charging: false } },
+    { file: 'gadgets-tools-alert.png', layer: 'tools', widgets: 'widgets-state-alert.json', pressed: ['3,0', '3,1'] },
+    { file: 'gadgets-tools-alert-fill.png', layer: 'tools', widgets: 'widgets-state-alert.json', battery: { percent: 50, plugged: true, charging: false },
+      pressed: ['0,1', '3,1', '2,0'], pressStyle: 'fill' },
+    { file: 'gadgets-share.png', layer: 'share', widgets: 'widgets-state.json', qr: 'qr.json' },
+    { file: 'gadgets-share-none.png', layer: 'share', pressed: ['2,0'] },
+    { file: 'gadgets-share-expired.png', layer: 'share', widgets: 'widgets-state-paused.json', qr: 'qr-expired.json' },
+  ]
+  for (const c of gcases) {
+    it(`電池やストップウォッチなども lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: gcfg, stack: [0, glayer(c.layer)], mode: 'latched', now, pressed: new Set(c.pressed),
+        pressStyle: c.pressStyle, widgets: c.widgets ? fx(c.widgets) : undefined, qr: c.qr ? fx(c.qr).texts : undefined, battery: c.battery })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   it('Brain にない背景画像は、背景なしで描く（Brain と同じ）', () => {
     const none = renderPreview(font, { cfg: bcfg, stack: [0], mode: 'base', images: () => undefined }).pixels
     const plain = parseConfigText(repoFile('config/current.yaml').toString('utf8'))
