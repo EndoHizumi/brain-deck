@@ -474,8 +474,6 @@ type todoEllipsisCase struct {
 	Out  string `json:"out"`
 }
 
-func rect4(r image.Rectangle) [4]int { return [4]int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} }
-
 func todoLayoutTable() map[string]any {
 	var layout []todoLayoutCase
 	areas := []image.Rectangle{image.Rect(12, 40, 388, 468), image.Rect(12, 12, 388, 148), image.Rect(212, 172, 588, 308),

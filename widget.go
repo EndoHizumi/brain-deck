@@ -26,6 +26,7 @@ const (
 	widgetCounter   = "counter"
 	widgetQR        = "qr"
 	widgetPresence  = "presence"
+	widgetMonth     = "month"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -41,9 +42,9 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth}
 
-// ページを送るウィジェット（Todo、カレンダー）が、触らなければ最初のページに戻るまでの時間
+// ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
 	defaultPageReset = time.Minute
 	minPageReset     = 5 * time.Second
@@ -63,11 +64,15 @@ type WidgetDef struct {
 	DateFormat string         // clock：日付の行。空なら出さない
 	Loc        *time.Location // clock：nil なら Brain のタイムゾーン
 	Seconds    bool           // clock：秒を出す（1 秒ごとに描き直す）
-	ID         string         // text、qr：中身の名前。stopwatch、pomodoro、counter、presence：状態の名前（省略すると種類の名前）
+	ID         string         // text、qr：中身の名前。stopwatch、pomodoro、counter、presence：状態の名前（省略すると種類の名前）。month：follow で指す名前
 	Rows       int            // todo、calendar：1 ページの行数。0 なら高さで決める
-	PageReset  time.Duration  // todo、calendar：最後に触ってから、最初のページに戻るまでの時間。0 なら戻らない
+	PageReset  time.Duration  // todo、calendar、month：最後に触ってから、最初のページ（今月と今日）に戻るまでの時間。0 なら戻らない
 	Stale      time.Duration  // calendar：最終更新がこれより古ければ、古いと出す
-	Calendars  []string       // calendar：出すカレンダーの名前。空ならすべて
+	Calendars  []string       // calendar：出すカレンダーの名前。month：印を付けるカレンダー。空ならすべて
+	Follow     string         // calendar：選んだ日を見る月の表示の id。空なら今日
+	follow     *WidgetDef     // calendar：Follow の月の表示（compileKeymap が同じレイヤーから探して結ぶ）
+	WeekStart  time.Weekday   // month：週の始まり（日曜か月曜）
+	month      *monthState    // month：出している月と、選んだ日
 	pager      *pagerState    // todo、calendar：ページと、押している行
 	Pad        *PadParams     // trackpad：判定の設定
 	Work       time.Duration  // pomodoro：作業の時間
@@ -104,11 +109,20 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	if s.Rows != 0 && !paged {
 		return nil, fmt.Errorf("rows is for widget: todo and calendar")
 	}
-	if s.PageReset != "" && !paged {
-		return nil, fmt.Errorf("page_reset is for widget: todo and calendar")
+	if s.PageReset != "" && !paged && s.Widget != widgetMonth {
+		return nil, fmt.Errorf("page_reset is for widget: todo, calendar and month")
 	}
-	if (s.Stale != "" || s.Calendars != nil) && s.Widget != widgetCal {
-		return nil, fmt.Errorf("stale and calendars are for widget: calendar")
+	if s.Stale != "" && s.Widget != widgetCal {
+		return nil, fmt.Errorf("stale is for widget: calendar")
+	}
+	if s.Calendars != nil && s.Widget != widgetCal && s.Widget != widgetMonth {
+		return nil, fmt.Errorf("calendars is for widget: calendar and month")
+	}
+	if s.Follow != "" && s.Widget != widgetCal {
+		return nil, fmt.Errorf("follow is for widget: calendar (the id of a widget: month cell in the same layer)")
+	}
+	if s.WeekStart != "" && s.Widget != widgetMonth {
+		return nil, fmt.Errorf("week_start is for widget: month")
 	}
 	if (s.Work != "" || s.Break != "") && s.Widget != widgetPomodoro {
 		return nil, fmt.Errorf("work and break are for widget: pomodoro")
@@ -125,17 +139,19 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		}
 		return nil, fmt.Errorf("format, date_format and tz are for widget: clock")
 	}
-	if s.ID != "" && !hasStateID(s.Widget) {
+	if s.ID != "" && !hasStateID(s.Widget) && s.Widget != widgetMonth {
 		switch {
 		case paged:
 			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: %s", s.Widget)
 		case s.Widget == "":
-			return nil, fmt.Errorf("id needs widget: text, qr, stopwatch, pomodoro, counter or presence")
+			return nil, fmt.Errorf("id needs widget: text, qr, stopwatch, pomodoro, counter, presence or month")
 		}
-		return nil, fmt.Errorf("id is for widget: text, qr, stopwatch, pomodoro, counter and presence")
+		return nil, fmt.Errorf("id is for widget: text, qr, stopwatch, pomodoro, counter, presence and month")
 	}
 	switch s.Widget {
 	case widgetClock:
+	case widgetMonth:
+		return compileMonth(s)
 	case widgetTodo, widgetCal:
 		if s.count() > 0 {
 			if s.Widget == widgetTodo {
@@ -146,17 +162,10 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		if s.Rows < 0 || s.Rows > todoMaxRows {
 			return nil, fmt.Errorf("rows must be 1..%d (omit it to fit the cell height)", todoMaxRows)
 		}
-		w := &WidgetDef{Kind: s.Widget, Rows: s.Rows, PageReset: defaultPageReset, pager: &pagerState{}}
-		switch s.PageReset {
-		case "":
-		case pageResetOff:
-			w.PageReset = 0
-		default:
-			d, err := time.ParseDuration(s.PageReset)
-			if err != nil || d < minPageReset || d > maxPageReset {
-				return nil, fmt.Errorf("page_reset must be a duration from %v to %v (such as 30s or 2m), or off", minPageReset, maxPageReset)
-			}
-			w.PageReset = d
+		w := &WidgetDef{Kind: s.Widget, Rows: s.Rows, pager: &pagerState{}}
+		var err error
+		if w.PageReset, err = parsePageReset(s.PageReset); err != nil {
+			return nil, err
 		}
 		if s.Widget == widgetCal {
 			w.Stale = defaultCalStale
@@ -167,14 +176,14 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 				}
 				w.Stale = d
 			}
-			seen := map[string]bool{}
-			for _, n := range s.Calendars {
-				if n == "" || seen[n] {
-					return nil, fmt.Errorf("calendars must be a list of distinct calendar names, got %q", s.Calendars)
-				}
-				seen[n] = true
+			if err := checkCalNames(s.Calendars); err != nil {
+				return nil, err
 			}
 			w.Calendars = s.Calendars
+			if s.Follow != "" && !validTextID(s.Follow) {
+				return nil, fmt.Errorf("follow must be the id of a widget: month cell (1-32 characters of A-Z a-z 0-9 _ . -), got %q", s.Follow)
+			}
+			w.Follow = s.Follow
 		}
 		return w, nil
 	case widgetText, widgetQR:
@@ -236,6 +245,33 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	return w, nil
 }
 
+// parsePageReset は page_reset を読む。空なら既定の 1 分、off なら 0（戻らない）。
+func parsePageReset(s string) (time.Duration, error) {
+	switch s {
+	case "":
+		return defaultPageReset, nil
+	case pageResetOff:
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < minPageReset || d > maxPageReset {
+		return 0, fmt.Errorf("page_reset must be a duration from %v to %v (such as 30s or 2m), or off", minPageReset, maxPageReset)
+	}
+	return d, nil
+}
+
+// checkCalNames は、calendars に同じ名前や空の名前がないことを確かめる。
+func checkCalNames(names []string) error {
+	seen := map[string]bool{}
+	for _, n := range names {
+		if n == "" || seen[n] {
+			return fmt.Errorf("calendars must be a list of distinct calendar names, got %q", names)
+		}
+		seen[n] = true
+	}
+	return nil
+}
+
 // changesWithin は、書式の結果が 1 分の中で変わるか（秒を出すか）を調べる。
 // "05"、"5"、".000" など、秒の書き方によらず分かる。
 func changesWithin(layout string) bool {
@@ -294,6 +330,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return todoKey(w, env)
 	case widgetCal:
 		return calKey(w, env)
+	case widgetMonth:
+		return monthKey(w, env)
 	case widgetPad:
 		return fmt.Sprintf("trackpad\x00%v", env.MouseOff) // マウスのオンとオフで描き直す
 	}
@@ -318,6 +356,8 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		return v.Widget.pager.resetAt(v.Widget.PageReset, now) // 最初のページに戻す
 	case widgetCal:
 		return calNext(v.Widget, env)
+	case widgetMonth:
+		return monthNext(v.Widget, env)
 	}
 	return gadgetNext(v, env)
 }
@@ -334,6 +374,8 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		drawTodo(cv, area, v.Widget, env, subInk)
 	case widgetCal:
 		drawCalendar(cv, area, v.Widget, env, subInk)
+	case widgetMonth:
+		drawMonth(cv, area, v.Widget, env)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {
@@ -371,9 +413,15 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 }
 
 // widgetLabel は、セルの上に出す見出し。Todo は、設定の label に残りの件数を足す。
+// 月の表示で選んだ日の予定を出しているカレンダーは、label にその日付を足す。
 func widgetLabel(w *WidgetDef, label string, env WidgetEnv) string {
-	if w.Kind == widgetTodo {
+	switch w.Kind {
+	case widgetTodo:
 		return todoCaption(label, env.Todo.Items)
+	case widgetCal:
+		if d, ok := calFollowDay(w, env); ok {
+			return strings.TrimSpace(label + " " + calDate(d))
+		}
 	}
 	return label
 }

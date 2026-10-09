@@ -17,6 +17,7 @@ import (
 // 入りきらなければ Todo と同じくページに分け、セルの下の ▲▼ で送る。触っていないときは、
 // 今か、これからの予定がある最初のページを出す（しばらく触らなければ、そのページに戻る）。
 // 時刻と日付は Brain のタイムゾーンで決める。
+// follow で月の表示を指していて、そこで今日でない日を選んでいれば、今日の代わりにその日の予定を並べる（calDayRows）。
 // gui/src/calwidget.ts の calLayout、描き方と同じ結果にする。
 
 // 行の種類
@@ -32,6 +33,7 @@ const (
 const (
 	calNoData      = "予定を受け取っていません"
 	calNoneToday   = "今日の予定はありません"
+	calNoneDay     = "この日の予定はありません"
 	calNoTitle     = "（名前なし）"
 	calFooterBig   = 240 // 見出しの下の範囲の幅と高さがこれ以上なら、最終更新を 2 倍で描く
 	calScaleWidth  = 88  // 文字の倍率 s には、幅が calScaleWidth*s 以上要る
@@ -193,6 +195,79 @@ func calRows(cals []*Calendar, now time.Time) []calRow {
 	return rows
 }
 
+// calFollowDay は、follow の月の表示で選んでいる日（その日の 0 時）。選んでいない、今日を選んでいるときは false。
+func calFollowDay(w *WidgetDef, env WidgetEnv) (time.Time, bool) {
+	if w.follow == nil {
+		return time.Time{}, false
+	}
+	_, sel, _ := w.follow.month.view(env.Now, w.follow.PageReset)
+	if sel == "" {
+		return time.Time{}, false
+	}
+	d, err := parseCalDay(sel)
+	if err != nil || d.Equal(dayStart(env.Now.In(time.Local))) {
+		return time.Time{}, false
+	}
+	return d, true
+}
+
+// calDayRows は、今日でない日 day（0 時）の予定の行を作る。終日、始まりの時刻の順。
+// 過ぎた日はすべて薄く描き、今の予定と次の予定は出さない。
+func calDayRows(cals []*Calendar, day, now time.Time) []calRow {
+	t0, t1 := day, day.AddDate(0, 0, 1)
+	past := !t1.After(dayStart(now.In(time.Local)))
+	var items []calItem
+	for ci, c := range cals {
+		for i := range c.Events {
+			ev := &c.Events[i]
+			if ev.s.Before(t1) && (ev.e.After(t0) || (ev.e.Equal(ev.s) && !ev.s.Before(t0))) {
+				items = append(items, calItem{ev, c, ci})
+			}
+		}
+	}
+	whole := func(ev *CalEvent) bool { return ev.AllDay() || (!ev.s.After(t0) && !ev.e.Before(t1)) }
+	sort.SliceStable(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		if wa, wb := whole(a.ev), whole(b.ev); wa != wb {
+			return wa
+		}
+		if !a.ev.s.Equal(b.ev.s) {
+			return a.ev.s.Before(b.ev.s)
+		}
+		if !a.ev.e.Equal(b.ev.e) {
+			return a.ev.e.Before(b.ev.e)
+		}
+		if a.order != b.order {
+			return a.order < b.order
+		}
+		return a.ev.Title < b.ev.Title
+	})
+	var rows []calRow
+	for _, it := range items {
+		ev := it.ev
+		r := calRow{Title: ev.Title, Color: it.cal.Color, State: calFuture}
+		if r.Title == "" {
+			r.Title = calNoTitle
+		}
+		switch {
+		case whole(ev):
+			r.Label, r.State = "終日", calAllDay
+		case ev.s.Before(t0):
+			r.Label = "〜" + calHM(ev.e.In(time.Local))
+		default:
+			r.Label = calHM(ev.s.In(time.Local))
+		}
+		if past {
+			r.State = calPast
+		}
+		rows = append(rows, r)
+	}
+	if len(rows) == 0 {
+		rows = append(rows, calRow{Title: calNoneDay, State: calInfo})
+	}
+	return rows
+}
+
 // calFooter は、最終更新の行の文と、橙色で出すかどうか。
 func calFooter(w *WidgetDef, cals []*Calendar, env WidgetEnv) (string, bool) {
 	if !env.TimeSynced {
@@ -245,7 +320,12 @@ func calLayout(area image.Rectangle, w *WidgetDef, env WidgetEnv) calLay {
 	body := area
 	body.Max.Y -= fontH*l.FooterS + widgetLineGap
 	l.footerY = body.Max.Y + widgetLineGap
-	l.Rows = calRows(cals, env.Now)
+	day, follow := calFollowDay(w, env)
+	if follow {
+		l.Rows = calDayRows(cals, day, env.Now)
+	} else {
+		l.Rows = calRows(cals, env.Now)
+	}
 	l.geom = todoGeometry(body, len(l.Rows), w.Rows)
 	l.Scale = l.geom.scale
 	for l.Scale > 1 && calScaleWidth*l.Scale > area.Dx() {
@@ -254,7 +334,7 @@ func calLayout(area image.Rectangle, w *WidgetDef, env WidgetEnv) calLay {
 	// 触っていないときは、今かこれからの予定（なければ次の予定）がある最初のページ
 	first := 0
 	for i, r := range l.Rows {
-		if r.State != calPast && r.State != calAllDay {
+		if r.State != calPast && r.State != calAllDay && !follow {
 			first = i
 			break
 		}
@@ -274,7 +354,10 @@ func calKey(w *WidgetDef, env WidgetEnv) string {
 	}
 	f, warn := calFooter(w, cals, env)
 	fmt.Fprintf(&b, "%d\x00%d\x00%d\x00%s\x00%v\x00%s", rev, page, nav, f, warn, dayStart(env.Now.In(time.Local)).Format(calDayLayout))
-	if len(cals) > 0 {
+	day, follow := calFollowDay(w, env)
+	if follow {
+		b.WriteString("\x00follow " + day.Format(calDayLayout)) // 中身は日付と rev で決まる
+	} else if len(cals) > 0 {
 		for _, r := range calRows(cals, env.Now) {
 			fmt.Fprintf(&b, "\x00%d%s", r.State, r.Label)
 		}
@@ -302,6 +385,11 @@ func calNext(w *WidgetDef, env WidgetEnv) time.Time {
 	}
 	if t := w.pager.resetAt(w.PageReset, now); !t.IsZero() {
 		consider(t)
+	}
+	if f := w.follow; f != nil { // 月の表示が今日に戻ったら、今日の予定に戻す
+		if t := f.month.resetAt(f.PageReset, now); !t.IsZero() {
+			consider(t)
+		}
 	}
 	return next
 }

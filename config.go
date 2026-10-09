@@ -108,7 +108,9 @@ type ActionSpec struct {
 	Rows       int      `yaml:"rows,omitempty" json:"rows,omitempty"`               // todo、calendar：1 ページの行数
 	PageReset  string   `yaml:"page_reset,omitempty" json:"page_reset,omitempty"`   // todo、calendar：触らなければ最初のページに戻るまでの時間。off で戻らない
 	Stale      string   `yaml:"stale,omitempty" json:"stale,omitempty"`             // calendar：最終更新がこれより古ければ、古いと分かるように出す
-	Calendars  []string `yaml:"calendars,omitempty" json:"calendars,omitempty"`     // calendar：出すカレンダーの名前。省略するとすべて
+	Calendars  []string `yaml:"calendars,omitempty" json:"calendars,omitempty"`     // calendar：出すカレンダーの名前。month：印を付けるカレンダー。省略するとすべて
+	Follow     string   `yaml:"follow,omitempty" json:"follow,omitempty"`           // calendar：同じレイヤーの月の表示（その id）で選んだ日の予定を出す
+	WeekStart  string   `yaml:"week_start,omitempty" json:"week_start,omitempty"`   // month：週の始まり（sunday か monday）
 	Work       string   `yaml:"work,omitempty" json:"work,omitempty"`               // pomodoro：作業の時間（25m など）
 	Break      string   `yaml:"break,omitempty" json:"break,omitempty"`             // pomodoro：休憩の時間（5m など）
 	// States は presence：タップで順に切り替える状態（名前と色）。省略すると在席、集中、会議中、休憩
@@ -148,7 +150,7 @@ func (s Span) MarshalYAML() (any, error) {
 var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
-	"page_reset": true, "stale": true, "calendars": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
+	"page_reset": true, "stale": true, "calendars": true, "follow": true, "week_start": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
 	"terminal": true, "work": true, "break": true, "states": true,
 	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
@@ -165,7 +167,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, work, break, states, background, and the trackpad fields)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -577,6 +579,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	}
 
 	var baseGrid *Grid
+	var monthWarns []string
 	for li, lc := range cfg.Layers {
 		lp := fmt.Sprintf("/layers/%d", li)
 		l := &Layer{Name: lc.Name, Label: lc.Label, Keys: map[evdev.EvCode]*Action{}, Soft: map[string]*Action{}}
@@ -629,6 +632,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 				g.Cells[p] = a
 			}
 			checkOverlaps(g, tp, lc.Name, fail)
+			monthWarns = append(monthWarns, linkFollows(g, tp, lc.Name, fail)...)
 			l.Grid = g
 			if li == 0 {
 				baseGrid = g
@@ -654,7 +658,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	if err := km.checkWayBack(); err != nil {
 		return nil, nil, err
 	}
-	warns = km.unreachable()
+	warns = append(km.unreachable(), monthWarns...)
 	return km, warns, nil
 }
 
@@ -814,7 +818,7 @@ func (km *Keymap) unreachable() []string {
 // hasWidgetFields は、ウィジェットにだけ書ける項目があるか。
 func (a ActionSpec) hasWidgetFields() bool {
 	return a.Format != "" || a.DateFormat != "" || a.TZ != "" || a.ID != "" || a.Rows != 0 ||
-		a.PageReset != "" || a.Stale != "" || a.Calendars != nil || a.Work != "" || a.Break != "" || a.States != nil || a.hasPadFields()
+		a.PageReset != "" || a.Stale != "" || a.Calendars != nil || a.Follow != "" || a.WeekStart != "" || a.Work != "" || a.Break != "" || a.States != nil || a.hasPadFields()
 }
 
 // hasPadFields は、トラックパッドにだけ書ける項目があるか。

@@ -144,7 +144,7 @@ type widgetTouch struct {
 
 // ownsTouch は、ウィジェットがタップを自分で処理し、押した位置で働くか（セル全体を光らせない）。
 func (w *WidgetDef) ownsTouch() bool {
-	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad)
+	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth)
 }
 
 // todoGeom は、Todo のセルの中の配置。
@@ -320,6 +320,10 @@ func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
 		w.tapDown(rt)
 		return
 	}
+	if w != nil && w.Kind == widgetMonth && rt != nil {
+		w.monthTouch(rt, t, label)
+		return
+	}
 	if !w.ownsTouch() || rt == nil || w.pager == nil { // トラックパッドは Pad が処理する
 		return
 	}
@@ -336,7 +340,7 @@ func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
 		g = todoGeometry(widgetArea(t.cell, todoCaption(label, items)), len(items), w.Rows)
 		empty = len(items) == 0
 	case widgetCal:
-		cl := calLayout(widgetArea(t.cell, label), w, env)
+		cl := calLayout(widgetArea(t.cell, widgetLabel(w, label, env)), w, env)
 		g, def, empty = cl.geom, cl.AutoPage, cl.Message != ""
 	}
 	s := w.pager
@@ -390,6 +394,10 @@ func (s *pagerState) fire(rt *WidgetRT, tok uint64) {
 func (w *WidgetDef) touchUp(rt *WidgetRT, cancel bool) {
 	if w.tapWidget() {
 		w.tapUp(rt, cancel)
+		return
+	}
+	if w != nil && w.Kind == widgetMonth {
+		w.monthRelease(rt)
 		return
 	}
 	if !w.ownsTouch() || w.pager == nil {

@@ -801,6 +801,8 @@ func main() {
 	pngTodoPage := flag.Int("render-todo-page", 1, "-render-png で、Todo のセルに出すページ（1 から）")
 	pngCal := flag.String("render-calendar", "", "-render-png で、カレンダーのセルに出す予定（calendar.json の形のファイル）")
 	pngCalPage := flag.Int("render-calendar-page", 0, "-render-png で、カレンダーのセルに出すページ（1 から。0 なら触っていないときのページ）")
+	pngMonthOffset := flag.Int("render-month-offset", 0, "-render-png で、月の表示に出す月（今月からいくつ送ったか。-1 で先月）")
+	pngMonthSelect := flag.String("render-month-select", "", "-render-png で、月の表示で選んだ日（YYYY-MM-DD）。follow のカレンダーにもその日の予定が出る")
 	pngImages := flag.String("render-images", "", "-render-png と -check で、背景画像を探すディレクトリ（省略すると -data-dir の images）")
 	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータ、背景画像、時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
@@ -1010,6 +1012,11 @@ func main() {
 				case a.Widget.Kind == widgetCal && *pngCalPage > 0:
 					a.Widget.pager.setPage(*pngCalPage-1, env.Now)
 				}
+			}
+		}
+		if *pngMonthOffset != 0 || *pngMonthSelect != "" {
+			if err := monthRenderState(km, *pngMonthOffset, *pngMonthSelect, env.Now); err != nil {
+				log.Fatal(err)
 			}
 		}
 		images := NewImageStore(imagesDir)

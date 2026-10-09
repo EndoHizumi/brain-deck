@@ -56,6 +56,7 @@ func (ev *CalEvent) AllDay() bool { return ev.Start == nil }
 type Calendar struct {
 	Name      string     `json:"name"`
 	Color     string     `json:"color"`                // #rrggbb
+	Holiday   bool       `json:"holiday,omitempty"`    // 祝日のカレンダー。月の表示では日付を赤くし、予定の印は付けない
 	FetchedAt *time.Time `json:"fetched_at,omitempty"` // 予定を取ってきた時刻（PC の時刻）。nil なら一度も取れていない
 	Error     string     `json:"error,omitempty"`      // 最後の取得の失敗。前に取れた予定を残している
 	Events    []CalEvent `json:"events"`
@@ -315,13 +316,21 @@ func (cs *CalendarService) Set(req CalendarRequest, now time.Time) ([]CalendarSe
 	return res, d, nil
 }
 
+// calSaveSlow は、calendar.json の保存がこれより長くかかったら、-v でなくてもログに出す時間。
+const calSaveSlow = time.Second
+
 // saver は、変わるたびに calendar.json を書く。書いているあいだの変更は、次の 1 回にまとめる。
 func (cs *CalendarService) saver() {
 	for range cs.dirty {
 		d := cs.Snapshot()
 		if d != nil {
+			t0 := time.Now()
 			if err := cs.store.Save(calStoreName, d); err != nil {
 				log.Printf("calendar: save %s: %v", calStoreName, err)
+			} else if el := time.Since(t0); el >= calSaveSlow {
+				log.Printf("calendar: saving %s took %v (%d events)", calStoreName, el.Round(time.Millisecond), d.events())
+			} else {
+				vlogf("calendar: saved %s in %v (%d events)", calStoreName, el.Round(time.Millisecond), d.events())
 			}
 		}
 		if cs.saved != nil {
@@ -330,14 +339,36 @@ func (cs *CalendarService) saver() {
 	}
 }
 
-// calendarShown は、設定のどこかにカレンダーのセルがあるか。
+// events は、すべてのカレンダーの予定の数。
+func (d *CalendarData) events() int {
+	n := 0
+	for _, c := range d.Calendars {
+		n += len(c.Events)
+	}
+	return n
+}
+
+// covers は、送られてきた範囲 [From, From+Days] に day（その日の 0 時）が入るか。
+// From がない（範囲の分からない）データは、入るとみなす。
+func (d *CalendarData) covers(day time.Time) bool {
+	if d == nil || d.From == "" {
+		return true
+	}
+	a, err := parseCalDay(d.From)
+	if err != nil {
+		return true
+	}
+	return !day.Before(a) && day.Before(a.AddDate(0, 0, d.Days+1))
+}
+
+// calendarShown は、設定のどこかにカレンダーのセル（予定か、月の表示）があるか。
 func calendarShown(cfg *Config) bool {
 	for _, l := range cfg.Layers {
 		if l.Touch == nil {
 			continue
 		}
 		for _, a := range l.Touch.Cells {
-			if a.Widget == widgetCal {
+			if a.Widget == widgetCal || a.Widget == widgetMonth {
 				return true
 			}
 		}
