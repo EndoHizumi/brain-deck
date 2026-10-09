@@ -6,7 +6,8 @@
 //	go run ./tools/mkupdate                       # ARMv5 向けにビルドして lefthand-<版>.update.tar.gz を作る
 //	go run ./tools/mkupdate -bin lefthand -o x.tar.gz   # ビルド済みの lefthand を使う
 //
-// 版は、lefthand に埋め込まれた git のリビジョン（-ldflags の -X main.version があればそちら）から読む。
+// 版は、lefthand に埋め込まれた git のリビジョンから読む。-ldflags "-X main.version=…" でビルドしたときは、
+// -trimpath だと -ldflags が実行ファイルに残らないので、-version で同じ版を渡す。
 // Brain のデーモンは、新しい lefthand を -version で実行し、ここに書いた版と同じかを確かめる。
 package main
 
@@ -44,14 +45,15 @@ func main() {
 	gadget := flag.String("gadget", "gadget-setup.sh", "gadget-setup.sh")
 	out := flag.String("o", "", "書き出すファイル（省略すると lefthand-<版>.update.tar.gz）")
 	src := flag.String("src", ".", "-bin を省略したときに、ビルドするディレクトリ（lefthand のリポジトリ）")
+	ver := flag.String("version", "", "lefthand の版（-X main.version でビルドしたとき。Brain は -version の答えと比べる）")
 	flag.Parse()
-	if err := run(*bin, *gadget, *out, *src); err != nil {
+	if err := run(*bin, *gadget, *out, *src, *ver); err != nil {
 		fmt.Fprintln(os.Stderr, "mkupdate:", err)
 		os.Exit(1)
 	}
 }
 
-func run(bin, gadget, out, src string) error {
+func run(bin, gadget, out, src, ver string) error {
 	if bin == "" {
 		tmp, err := os.MkdirTemp("", "mkupdate")
 		if err != nil {
@@ -59,7 +61,11 @@ func run(bin, gadget, out, src string) error {
 		}
 		defer os.RemoveAll(tmp)
 		bin = filepath.Join(tmp, "lefthand")
-		cmd := exec.Command("go", "build", "-trimpath", "-o", bin, ".")
+		args := []string{"build", "-trimpath", "-o", bin}
+		if ver != "" {
+			args = append(args, "-ldflags", "-X main.version="+ver)
+		}
+		cmd := exec.Command("go", append(args, ".")...)
 		cmd.Dir = src
 		cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=arm", "GOARM=5", "CGO_ENABLED=0")
 		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
@@ -68,9 +74,12 @@ func run(bin, gadget, out, src string) error {
 			return fmt.Errorf("go build: %w", err)
 		}
 	}
-	ver, err := binaryVersion(bin)
-	if err != nil {
-		return err
+	if ver == "" {
+		v, err := binaryVersion(bin)
+		if err != nil {
+			return err
+		}
+		ver = v
 	}
 	if out == "" {
 		out = "lefthand-" + strings.ReplaceAll(ver, "+", "-") + ".update.tar.gz"
