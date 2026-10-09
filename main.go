@@ -335,7 +335,7 @@ func evString(ev *evdev.InputEvent) string {
 	return fmt.Sprintf("%s %s %d", ev.TypeName(), ev.CodeName(), ev.Value)
 }
 
-func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor) {
+func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor, dim *Dimmer) {
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
@@ -352,6 +352,7 @@ func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor) {
 		switch ev.Value {
 		case 1:
 			vlogf("kbd: %s", evString(ev))
+			dim.Key() // キーは暗いときもそのまま PC に送る（明るくするかは設定の wake_on_key）
 			if mon.KeyPressed(e, ev.Code) {
 				continue // 学習モード：設定 GUI に知らせるだけで、PC には送らない
 			}
@@ -399,8 +400,8 @@ func evTime(ev *evdev.InputEvent) time.Time {
 	return time.Unix(int64(ev.Time.Sec), int64(ev.Time.Usec)*1000)
 }
 
-func runTouch(dev *evdev.InputDevice, e *Engine, disp *Display, mon *Monitor) {
-	tp := &touchProc{e: e, disp: disp, mon: mon}
+func runTouch(dev *evdev.InputDevice, e *Engine, disp *Display, mon *Monitor, dim *Dimmer) {
+	tp := &touchProc{e: e, disp: disp, mon: mon, dim: dim}
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
@@ -417,11 +418,13 @@ type touchProc struct {
 	e    *Engine
 	disp *Display
 	mon  *Monitor
+	dim  *Dimmer // 自動減光。nil なら使わない
 
 	x, y, p       int32
 	down, pressed bool
 	pad           bool      // トラックパッドのセルを押している
 	lit           *TouchHit // ハイライト中のセル
+	swallowed     bool      // 暗いときに触れたので、明るくしただけ。離すまで何もしない
 }
 
 func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
@@ -436,7 +439,13 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 	case ev.Type == evdev.EV_KEY && ev.Code == evdev.BTN_TOUCH:
 		vlogf("touch: %s", evString(ev))
 		tp.down = ev.Value == 1
+		if !tp.down && tp.pressed && tp.swallowed {
+			tp.pressed, tp.swallowed = false, false
+			tp.dim.TouchUp()
+			return
+		}
 		if !tp.down && tp.pressed {
+			tp.dim.TouchUp()
 			if tp.pad {
 				e.pad.Up(t)
 				tp.pad = false
@@ -456,6 +465,12 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 		// 触れた瞬間のセルで確定（スライドしても変えない）
 		if tp.down && !tp.pressed {
 			x, y := tp.x, tp.y
+			if tp.dim.TouchDown() {
+				// 暗かった：明るくするだけで、セルもソフトキーも押さない（設定 GUI の学習モードにも知らせない）
+				vlogf("touch: x=%d y=%d -> woke the backlight only", x, y)
+				tp.pressed, tp.swallowed = true, true
+				return
+			}
 			if tp.mon.TouchPressed(e, x, y) {
 				// 学習モード：設定 GUI に知らせるだけ。離したときもエンジンには何も残っていない
 				vlogf("touch: x=%d y=%d -> settings GUI only", x, y)
@@ -800,6 +815,7 @@ func main() {
 
 	if *restore {
 		restoreConsole()
+		restoreBacklight()
 		restoreTerminal(*gadgetSetup)
 		return
 	}
@@ -1025,6 +1041,10 @@ func main() {
 	gadgets := NewGadgetService(store)
 	addAtExit(gadgets.Shutdown)
 	battery := NewBatteryService("/sys")
+	dimP, _ := cfg.Backlight.compile() // 検証済み
+	dim := NewDimmer(dimP)
+	addAtExit(dim.Close)
+	gadgets.SetOnAlert(dim.Wake)
 	images := OpenImageStore(imagesDir)
 	if ps := imageProblems(km, images, 800, 480); len(ps) > 0 {
 		for _, p := range ps {
@@ -1102,7 +1122,10 @@ func main() {
 	// 設定 GUI（USB シリアル）。通信が止まっても、入力の処理は待たない
 	mon := &Monitor{}
 	e.SetOnStatus(mon.LayerChanged)
-	term.OnChange(func() { mon.TerminalChanged(term.Info()) })
+	term.OnChange(func() {
+		mon.TerminalChanged(term.Info())
+		dim.SetTerminal(term.Active())
+	})
 	if *serialPath != "" {
 		ctl := &Controller{
 			store: &configStore{path: cfgPath, cfg: cfg, km: km, apply: func(c *Config, k *Keymap) error {
@@ -1111,6 +1134,8 @@ func main() {
 				}
 				curCfg.Store(c)
 				images.Preload(preloadOrder(c)) // 新しい設定で使う画像を先に読む
+				p, _ := c.Backlight.compile()   // 検証済み
+				dim.Apply(p)
 				return nil
 			}},
 			engine:  e,
@@ -1120,6 +1145,7 @@ func main() {
 			qrs:     qrs,
 			gadgets: gadgets,
 			battery: battery,
+			dim:     dim,
 			todos:   todos,
 			cals:    cals,
 			images:  images,
@@ -1133,9 +1159,9 @@ func main() {
 	}
 
 	if touch != nil {
-		go runTouch(touch, e, disp, mon)
+		go runTouch(touch, e, disp, mon, dim)
 	}
-	runKeyboard(kbd, e, mon)
+	runKeyboard(kbd, e, mon, dim)
 }
 
 // runReplay は、記録を再生して結果を書く（-replay-touch）。

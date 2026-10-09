@@ -406,6 +406,7 @@ type Controller struct {
 	qrs     *TextService   // QR コードのウィジェットの中身
 	gadgets *GadgetService // ストップウォッチ、ポモドーロ、カウンター、在席ランプ
 	battery *BatteryService
+	dim     *Dimmer
 	todos   *TodoService
 	cals    *CalendarService
 	images  *ImageStore
@@ -488,7 +489,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
 			"hid":      map[string]bool{"mouse": c.engine.out.mouse.Available(), "switching": c.usb.Switching()},
-			"terminal": c.term.Info(), "battery": c.battery.Info()})
+			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info()})
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)
 		if err != nil {

@@ -25,7 +25,8 @@ type Config struct {
 	Touch     *TouchConfig          `yaml:"touch,omitempty" json:"touch,omitempty"`
 	Layers    []LayerConfig         `yaml:"layers,omitempty" json:"layers,omitempty"`
 	Display   *DisplayConfig        `yaml:"display,omitempty" json:"display,omitempty"`
-	Terminal  *TerminalConfig       `yaml:"terminal,omitempty" json:"terminal,omitempty"` // 端末モード（termmode.go）。省略すると既定値
+	Terminal  *TerminalConfig       `yaml:"terminal,omitempty" json:"terminal,omitempty"`   // 端末モード（termmode.go）。省略すると既定値
+	Backlight *BacklightConfig      `yaml:"backlight,omitempty" json:"backlight,omitempty"` // 自動減光（backlight.go）。省略すると減光しない
 }
 
 // TouchConfig はタッチパネルそのものの設定（どのレイヤーでも共通）。
@@ -479,6 +480,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		errs = append(errs, Problem{Path: path, Message: fmt.Sprintf(format, args...)})
 	}
 	cfg.Terminal.validate(fail)
+	cfg.Backlight.validate(fail)
 
 	action := func(path, where string, self int, s ActionSpec, cell bool) *Action {
 		a := &Action{Spec: s, SpanW: 1, SpanH: 1}

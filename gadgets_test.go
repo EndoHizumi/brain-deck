@@ -609,6 +609,9 @@ func TestProtocolWidgets(t *testing.T) {
 	if _, ok := st["battery"]; !ok {
 		t.Errorf("get_status has no battery: %v", st)
 	}
+	if bl, _ := st["backlight"].(map[string]any); bl == nil || bl["enabled"] != false {
+		t.Errorf("get_status backlight = %v", st["backlight"])
+	}
 }
 
 // readMsgTimeout は次の 1 行を読む。d 以内に来なければ nil。
