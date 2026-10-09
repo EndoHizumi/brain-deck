@@ -6,6 +6,95 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ B　メディアキー、F13〜F24、スリープ解除（2026-10-09）
+
+USB の HID を広げた。メディアキー（`media:`。HID の Consumer Control）、F13〜F24、Brain のキーでスリープ中の PC を起こす（USB のリモートウェイクアップ）。
+HID のファンクションは増やしていない（IN のエンドポイントに空きがない）。起動したときのブートキーボードの形と、マウスへの切り替えの仕組みはそのまま。
+
+### 実機で調べたこと
+
+| 調べたもの | 結果 |
+| --- | --- |
+| ブートキーボードのディスクリプタ | キーの番号の上限（Logical Maximum、Usage Maximum）が 0x65。F13（0x68）〜F24（0x73）は PC が捨てていた。PC の `/proc/bus/input/devices` の KEY に、F13〜F24 のビットがなかった |
+| USB コントローラとドライバ（カーネル 6.1.70） | ChipIdea の `ci_udc_wakeup`（drivers/usb/chipidea/udc.c）がリモートウェイクアップに対応している。PC が SET_FEATURE(DEVICE_REMOTE_WAKEUP) を送っていて、ポートがサスペンドのときだけ、PORTSC の FPR でレジュームを送る。ユーザー空間からは `/sys/class/udc/ci_hdrc.0/srp`（書くだけ。`usb_gadget_wakeup` を呼ぶが、結果は返さない）で起こせる。サスペンドは `/sys/class/udc/ci_hdrc.0/state` が `suspended` になる |
+| f_hid（6.1） | 書いても自分では PC を起こさない。SET_PROTOCOL はブートのサブクラスのときに値を覚えるだけで、レポートの形は変えない（BIOS が読む 8 バイトは、ディスクリプタによらず同じ） |
+| 構成の bmAttributes | 0x80（リモートウェイクアップの印なし）。PC の `power/wakeup` のファイル自体がなかった |
+| PC（Linux）の power/wakeup | 印を立てたあと、ブートキーボードの形では `enabled`（usbhid が自分で有効にする）。キーボードとマウスの形では `disabled` のまま |
+| PC のほかの設定（読むだけ） | `/proc/acpi/wakeup` の XHCI は `*enabled`、ルートハブ（usb3）の `power/wakeup` は `disabled`、`/sys/power/mem_sleep` は `deep`、Brain の `power/control` は `on` |
+| PC の X11 での F13〜F24 の名前 | xkb の既定（symbols/inet の evdev）で、F13 は XF86Tools、F14〜F18 は XF86Launch5〜9、F20 は XF86AudioMicMute、F21〜F23 は XF86TouchpadToggle、On、Off。F19 と F24 は名前なし |
+| Linux でのメディアキー | Consumer Control は、別の入力デバイスではなく「SHARP Brain Keyboard」に入る |
+
+### 決めたこと
+
+| 項目 | 決めたこと | 理由 |
+| --- | --- | --- |
+| メディアキーの場所 | キーボードとマウスの形の HID に、レポート ID 3 で Consumer Control を足す（16 ビットの番号 2 つ、5 バイト）。ブートキーボードの形は標準のまま | HID のファンクションは増やせない。ブートキーボードの形に ID 付きのレポートを足すと、BIOS や UEFI で使えなくなる（フェーズ A のあとで決めたとおり） |
+| ブートキーボードの形で押したとき | 何も送らず、`-v` のログに `media: ... not sent` と出す。画面では、セルの下の小さな文字を「マウスオフでは無効」にし、文字を暗くする。USB の形を切り替えたら全体を描き直す | 押したあとではなく、押す前に分かるように。設定 GUI のプレビューも同じ |
+| 書き方 | `media: play_pause` など 14 種（再生、停止、曲送り、早送り、巻き戻し、音量、ミュート、PC の画面の明るさ、電卓、ブラウザ、メール）。`mouse:` と同じく、押しているあいだ押したまま | 名前と表示名は Go と GUI で同じ表（`gui/test/fixtures/keynames.json`）と比べる |
+| キーの番号の上限 | 0x73（F24）。0x7f 以下なので、1 バイトの符号付き（`0x25`）で書ける | 上限を必要以上に上げない。BIOS が読む 8 バイトは同じ |
+| 前の版のディスクリプタ | デーモンは前の版（上限 0x65、メディアキーなし）も見分け、レポートの形を間違えない。F13〜F24 とメディアキーは使えないとログに出す | デーモンだけを新しくして、ガジェットを作り直していないとき |
+| リモートウェイクアップの印 | gadget-setup.sh が bmAttributes を 0xa0 にする（既定）。`/etc/lefthand/gadget.env` の `USB_WAKEUP=0` で 0x80。違えば UDC から切り離して書き換える | 起こすかどうかは PC が決める（印は「できる」と知らせるだけ） |
+| 起こすとき | 押したとき（キー、セルのキー、マウスのボタンと移動とスクロール、メディアキー）に、USB がサスペンドなら srp に 1 を書く。離したとき、送り直し、起動したときの空のレポートでは起こさない。1 秒あけ、起きたか（state）を確かめてログに出す。USB がつながっていない（`not attached`）ときもログに出す | デーモンの再起動で PC を起こさないため。srp は結果を返さないので、起きなかった理由を分かるように |
+| 押したキー | いつものとおり送る（f_hid が転送に積み、PC が起きてから届く） | 自動サスペンドで止まっているとき（PC が起きている）に、押したキーを落とさないため |
+| PC の設定 | README に手順を書き、udev の規則の例（`contrib/udev/72-brain-wakeup.rules`）を置いた。PC には入れていない | PC の設定はユーザーが行う |
+
+### 実機での確認（2026-10-09）
+
+USB の付け直しは 3 回（新しい gadget-setup.sh、マウスの形へ、キーボードの形へ）。どれも数秒で SSH とシリアルが戻った。
+
+- **新しい gadget-setup.sh**：`HID を keyboard の形にします`、`bmAttributes: 0xa0 (remote wakeup on)`。lefthand.service を止めて付け直し、再開した。
+- **PC で、F13〜F24**：`/proc/bus/input/devices` の KEY に、F13〜F24 の 12 個のビットが入った（前はなかった）。
+- **PC で、リモートウェイクアップ**：`lsusb -v` の構成に `Remote Wakeup` が出た。`power/wakeup` が出て、`enabled` になった。
+- **新しいデーモン（`config/media-example.yaml`、時間制限 100 秒）**：ブートキーボードの形を見分け（`keyboard only (boot keyboard; usb_mode switches the mouse and the media keys on)`）、メディアキーを送れないことを起動時に知らせた。`brain-deck status` は「キーボードだけ（ブートキーボード。メディアキーは送れない）」。
+- **マウスの形に切り替え**（`brain-deck usb-mode mouse`、2.6 秒）：PC に「SHARP Brain Keyboard」と「SHARP Brain Mouse」が出て、Keyboard のほうに KEY_PLAYPAUSE、KEY_STOPCD、KEY_NEXTSONG、KEY_PREVIOUSSONG、KEY_VOLUMEUP、KEY_VOLUMEDOWN、KEY_MUTE、KEY_BRIGHTNESSUP、KEY_BRIGHTNESSDOWN、KEY_CALC、KEY_WWW、KEY_MAIL、KEY_FASTFORWARD、KEY_REWIND、KEY_F13、KEY_F24 が入った。`brain-deck status` は「キーボードとマウスとメディアキー」。この形では PC の `power/wakeup` は `disabled`。
+- **キーボードの形に戻す**：`power/wakeup` は `enabled` に戻った。
+- **画面**：fbshot で、本番の画面（base）が描けていることを確かめた。
+- **最終の版**：反映の前に、本番の設定と別の `-data-dir`（/tmp/lh-hw-data）で、`systemd-run` で 30 秒動かした。
+
+確かめていないこと：
+
+- **PC が実際にキーを受け取ること**：evtest は root が要り、PC にキーを送ると、デスクトップ（Enlightenment）でフォーカスのある窓（端末など）に入ってしまう。そのため、PC にはキーを送らず、PC がキーの種類を受け付けたこと（KEY のビット）までを確かめた。
+- **スリープ中の PC を起こすこと**：PC をスリープさせることと、PC の設定を変えることはしない約束なので、試していない。Brain 側の処理はホストのテスト（偽の sysfs）で確かめた。
+- **BIOS や UEFI での入力**、udev の規則、macOS と Windows。
+- **作業の誤り**：最初の時間制限つきの試験で、`-data-dir` を付け忘れた（本番の `/var/lib/lefthand` を読んだ）。更新時刻を見て、どのファイルも書き換わっていないことを確かめた（いちばん新しいものでも 10 月 8 日 18:33 の clock.json）。最終の版の試験は /tmp/lh-hw-data で行った。
+
+### 確認（ホスト）
+
+- Go：`go test ./...` がすべて通る。新しく、ディスクリプタ（gadget-setup.sh と同じ、レポートの大きさ、キーの番号の上限が送れるキーをすべて含む、前の版を見分ける）、メディアキー（2 つまで同時、新しく押したものが先、16 ビットの番号、送り直し、ブートキーボードの形では送らない、設定の検証、セルの表示）、スリープ解除（偽の sysfs で、サスペンドのときだけ起こす、起きたか確かめる、許されていないときは一度だけログ、`not attached`、押したときだけ頼む）、brain-deck の USB の表示。
+- 自動減光のテストが、まれに失敗するのを直した（明るさを書いた直後に、状態のファイルが消えたか確かめていた）。
+- 設定 GUI：`npm test` の 158 件が通る。新しく、送れるキーの名前とメディアキーの名前が Go と同じ（keynames.json）、プレビュー 4 枚（メディア、マウスオフ、マウスオフで押したとき fill、F13〜F24）が `-render-png` と画素単位で同じ。`npm run build` が通る。
+- 例の設定 `config/media-example.yaml` は `lefthand -check` を通る。
+
+### 反映
+
+- Brain：`/usr/local/bin/lefthand` を 4081a07 の版にした（`brain-deck status` の版に `+dirty` と付くのは、リポジトリの直下に前からある、追跡していないスクリーンショット 3 枚のため。コードはコミットと同じ）。前の版は `/usr/local/bin/lefthand.prev`（0e27fc1、フェーズ A）。
+- `/usr/local/sbin/lefthand-gadget-setup` を新しい版にした（リポジトリの gadget-setup.sh と同じハッシュ）。前の版は `.prev`（2026-10-08、端末モードの版）。今のガジェットは、新しいディスクリプタと bmAttributes 0xa0 になっている（付け直したため。次に Brain を起動したときも同じになる）。
+- `/etc/lefthand/config.yaml` のハッシュは前後で同じ（809cafb2…）。`/var/lib/lefthand/` は書き換えていない。`/etc/lefthand/gadget.env` は作っていない（ないまま）。
+- 本番の設定にはメディアキーも F13〜F24 もないので、見た目と動きは前と同じ。違いは、PC がスリープ中に Brain のキーを押すと PC を起こそうとすること（PC が許していれば起きる）。
+- PC：`~/.local/bin/brain-deck` を新しい版にした（前の版は `brain-deck.prev`）。`gui/dist/` を作り直した。
+- 戻すとき：`ssh brain 'sudo cp /usr/local/bin/lefthand.prev /usr/local/bin/lefthand && sudo cp /usr/local/sbin/lefthand-gadget-setup.prev /usr/local/sbin/lefthand-gadget-setup && sudo /usr/local/sbin/lefthand-gadget-setup'`（最後のコマンドで USB を付け直す。数秒切れる）。
+
+### 目で確かめる手順
+
+1. **例の設定を開く**：設定 GUI で `config/media-example.yaml` を開き、「Brain に保存…」で保存する（戻すときは `config/current.yaml` を開いて保存）。
+2. **メニュー →「メディア」**：起動したときの形なので、どのメディアキーのセルも、下に「マウスオフでは無効」と出て、文字が灰色。押しても PC の音量は変わらない。
+3. **右下の「マウス オン/オフ」を押す**：2〜3 秒 USB が切れたあと、「マウスオフでは無効」が消え、文字が白になる。「音量+」「音量-」「ミュート」で PC の音量が変わる。音楽を流して「再生/停止」「次の曲」を試す。
+4. **メニュー →「F13〜F24」**：PC で `sudo evtest` を実行して「SHARP Brain」（マウスの形なら「SHARP Brain Keyboard」）を選び、F13〜F24 のセルを押すと `KEY_F13`〜`KEY_F24` が出る。xev では F13 が `XF86Tools` になる。F20〜F23 は、デスクトップによってはマイクやタッチパッドを切り替えるので、evtest で見るのがよい。
+5. **スリープ解除**（ブートキーボードの形で）：`cat /sys/bus/usb/devices/3-2/power/wakeup` が `enabled` を確かめ、`systemctl suspend` で PC をスリープさせる。数秒後に Brain の本体のキーを押して、PC が起きることを確かめる。起きたら `ssh brain sudo journalctl -u lefthand --since -10min | grep wakeup` で `woke the PC` が出ているか見る。起きなければ README の「それでも起きないとき」。
+6. **BIOS**：README の「BIOS や UEFI で確かめる」。
+7. **元に戻す**：`brain-deck usb-mode keyboard` で起動したときの形に戻し、設定 GUI で `config/current.yaml` を開いて保存する。
+
+### 次のフェーズに進む前に決めておくこと
+
+- **メディアキーを起動したときから使うか**：使うなら `/etc/lefthand/gadget.env` に `HID_MOUSE=1`（BIOS では Brain のキーが使えなくなる）。使わないなら、メディアキーのセルの近くに `usb_mode` のセルを置く。
+- **キーボードとマウスの形でのスリープ解除**：使うなら、PC に `contrib/udev/72-brain-wakeup.rules` を入れる。PC を Brain で起こしたくなければ、`USB_WAKEUP=0` か、PC の `power/wakeup` を disabled に。
+- **フェーズ C（脱 SSH）**：
+  - `brain-deck update` で置き換えるのは、デーモンだけか、gadget-setup.sh も組で置き換えるか。今回のように、ディスクリプタを変えたときは組で入れて、USB を付け直す（か再起動する）必要がある。
+  - 置き換えたあとの USB の付け直しと、Brain の再起動を、brain-deck から行うか（付け直すとシリアルも切れるので、brain-deck は接続し直して結果を確かめる必要がある）。
+  - Brain の画面に出す確認の形（どのセルが「許可」か、待ち時間の上限、確認のあいだ他のセルを効かなくするか）。
+- **フェーズ D（コマンドのショートカット）**：F20〜F23 は Linux のデスクトップでマイクとタッチパッドの機能に当たっている。F19 と F24 は X11 で名前がない。F13〜F18 を先に使い、足りない分は修飾キーとの組み合わせにする方向でよいか。
+- **フェーズ A から残っていること**：本番のデーモンは、この起動で時刻を合わせていないので、時計のウィジェットは「時刻未設定」と出る（設定 GUI をつなぐか `brain-deck time sync`。本番のデータを書くので、作業では行っていない）。
+
 ## 追記：フェーズ A　ウィジェットの追加と自動減光（2026-10-09）
 
 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプのウィジェットと、自動減光（設定の `backlight`）を足した。brain-deck に `qr` と `presence` を足し、`status` に電池と画面の明るさを出すようにした。設定 GUI は、新しいウィジェットの編集とプレビュー（`-render-png` と画素単位で同じ）に対応した。
