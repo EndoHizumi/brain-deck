@@ -6,6 +6,113 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ C と D　脱 SSH 化、コマンドのショートカット（2026-10-09）
+
+フェーズ C：lefthand を一度入れたあとは、USB のシリアルと brain-deck だけで、更新（デーモンと gadget-setup.sh を組で）、前の版に戻す、再起動、USB の付け直し、reboot、poweroff、ログ、設定の読み書きができるようにした。最初の一度も、`install.sh --root` で SD カードに直接入れれば ssh は要らない（README の「Brain の保守」）。
+フェーズ D：`brain-deck exec` と、例の設定 `config/shortcuts-example.yaml`、OS ごとのショートカットの手順（README の「コマンドのショートカット」）。
+
+### 作ったもの
+
+| もの | 内容 |
+| --- | --- |
+| 分割の受け取り（transfer.go） | `Receiver`（一時ファイル、順番、SHA-256、時間切れ）と、種類を選べる `upload_*`（kind: `update`、`image`）。背景画像の `image_*` も同じ `Receiver` を使うように書き直した（プロトコルは変えていない） |
+| 更新（update.go、updatehelper.go） | 受け取った tar.gz を展開し、manifest の SHA-256、新しい lefthand の `-version`、`-check-gadget`、`-check`（今の設定）、`bash -n`、`GADGET_CHECK=1`（付け直しが要るか）で確かめる。入れ替えは、デーモンが systemd-run で起動する「係」（`lefthand -update-apply`、ユニット `lefthand-update`）が行う：止める → `.prev` に残して入れ替える → gadget-setup.sh が変われば実行 → 起動 → 起動の知らせ（`-ready-file`、45 秒）と brain-deck の `update_confirm`（90 秒）を待つ。来なければ前の版と前の `.prev` に戻して起動し直す |
+| そのほかのコマンド | `update_rollback`（`.prev` を同じ手順で入れる）、`update_status`、`restart`（`usb` で付け直しも）、`power`（reboot、poweroff）、`get_logs`（journalctl、cursor で追いかける）、`get_config_text`、`put_config_text`（コメントを残したまま置き換え、`.prev`、すぐ反映。再起動が要る項目は `restart` を付けたときだけ書いて再起動し、起動しなければ設定を戻す） |
+| gadget-setup.sh | `GADGET_CHECK=1`：何も変えずに、付け直しが要るかと理由を出す（終了コード 10 か 0） |
+| tools/mkupdate | 更新のファイル（manifest.json、lefthand、gadget-setup.sh）を作る。版は実行ファイルの build info から読む（`-X main.version` でビルドしたときは `-version` で渡す） |
+| brain-deck | `update`（`--rollback`、`--status`、`--dry-run`）、`restart`（`--usb`）、`reboot`、`poweroff`（`--no-wait`）、`logs`（`-n`、`-f`）、`config get`（`--prev`）、`put`（`--restart`、`--dry-run`）、`check`、`exec`。切れたらロックを持ったままつなぎ直し、係の `phase` を見ながら結果を確かめる。新しい終了コード 8（更新・再起動の失敗） |
+| install.sh `--root` | PC で SD カードのルートに直接置き、lefthand.service を有効にする（systemctl を使わずにリンクを作る） |
+| brain-deck exec | タイルに「実行中」→「成功」（緑）か「失敗(終了コード)」「時間切れ」「実行不可」（赤）と、時刻、時間、出力の最後の行。`--limit`（既定 10 分、過ぎたら SIGTERM、5 秒後 SIGKILL、終了コード 124）、同じ id で実行中なら 75、タイルに書けなくてもコマンドは実行してその終了コードを返す。タイルに書く一瞬だけポートを開く |
+| 例 | `config/shortcuts-example.yaml`（メニュー →「コマンド」。F14〜F18、Ctrl + F14〜F16 と結果のタイル 7 つ）、`contrib/shortcuts/build.sh`、`restart-service.sh` |
+
+### 決めたこと
+
+| 項目 | 決めたこと | 理由 |
+| --- | --- | --- |
+| 入れ替える人 | デーモンではなく、別のユニットの「係」 | デーモンは自分を止めると続きができない。systemd-run のユニットなら、デーモンが止まっても動き続ける |
+| 係の実行ファイル | 動いているデーモン自身（`/proc/self/exe` が消されていれば、写して使う） | 入れ替える前の版の手順で動かす。新しい版の係に問題があっても、戻す手順は動く |
+| 成功の判断 | 新しいデーモンの起動の知らせ（版と PID）と、PC からの `update_confirm`（受けた PID が新しいデーモンのもの） | 起動しても PC と話せない版（シリアルが壊れたなど）を残さない。PC が戻ってこなければ、前の版に戻す |
+| `update_confirm` を送る時 | `state.phase` が `waiting_confirm` のときだけ | 同じ版を入れ直すとき、止まる前の古いデーモンに確認を送ってしまわない |
+| `.prev` | 入れ替えのたびに「直前の版」にする。戻すときは前の `.prev` を係の作業場所に移しておき、元に戻す。`--rollback` も同じ手順で、今の版が `.prev` になる | もう一度 `--rollback` で戻せる |
+| USB の形 | 付け直すときも、今の形（マウスのあり・なし）を保つ。端末モードのあいだは更新しない | 更新でマウスが消えないように。端末モードは ttyGS0 を握っている |
+| 確認の画面 | 作らない（フェーズ B のあとで決めたとおり） | 戻せることを優先した |
+| exec のタイルの文 | 1 行目は短い状態（`成功 18:14 2.0秒`）、2 行目は出力の最後の行。どちらも半角 19 文字の幅に切る | 長い行があると、タイルの文字が全部小さくなる（-render-png で確かめた） |
+| 例の設定のキー | 修飾なしの F13 は使わない。F14〜F18 と Ctrl + F14〜F16 | 下の「実機で調べたこと」 |
+
+### 実機で調べたこと
+
+| 調べたもの | 結果 |
+| --- | --- |
+| Brain の空き | SD カード（/）の空き 93〜101 MB、/tmp（tmpfs）57 MB、メモリ 112 MB。更新のファイルは 4.3 MB、展開した lefthand は 8.2 MB |
+| GADGET_CHECK | 本番のガジェットで `up to date: HID = keyboard`（何も変えない）。試験の gadget-setup.sh（コメントだけ違う）でも「付け直しは要りません」になり、係は実行したが付け直さなかった |
+| 起動の知らせまでの時間 | 試験のユニット（背景画像なし）で約 3 秒、本番（背景画像あり）で約 13 秒。係の待ち時間（45 秒）に収まる |
+| X11 のキー（この PC：Ubuntu 22.04、Enlightenment） | F13〜F18 は X のキーコード 191〜196（`XF86Tools`、`XF86Launch5`〜`9`）。`XF86Tools` にはキーコード 179 も割り当てられていて、`XKeysymToKeycode` は 179 を返す（最初の試験ではこれで違うキーを待っていた） |
+| ショートカットとして取れるか | F13〜F18 × 修飾 8 通り（なし、Ctrl、Alt、Shift、Ctrl+Alt、Ctrl+Shift、Alt+Shift、Ctrl+Alt+Shift）の 48 通りすべて、`XGrabKey` で取れた（Enlightenment は使っていない）。調べ方は、Enlightenment が使う Alt+Tab と Alt+Shift+Tab が「使用中」になることで確かめた |
+| GNOME、KDE の既定 | GNOME は `org.gnome.settings-daemon.plugins.media-keys` の `control-center-static` が `['XF86Tools']`（F13 で「設定」）。KDE Plasma も 5.19 から Tools キーで「システム設定」。`XF86Launch5`〜`9` には、どちらも既定の割り当てがない（GNOME のスキーマを読んだ。KDE は変更の記録による。どちらの実機でも試していない） |
+| macOS | F13〜F19 は既定の働きがなく、「システム設定」のショートカットや「ショートカット」アプリに使える。外付けのキーボードでは F14、F15 が画面の明るさになっていることがある（Apple のコミュニティなどの情報。実機では試していない） |
+
+確かめられなかったこと：**Brain から送った F13〜F18 が、PC のショートカットに届くこと**。Brain の `/dev/hidg0` に 36 通りの組み合わせを書き、PC で `XGrabKey` で待ったが、何も届かなかった。PC の画面がロックされていて（Enlightenment のロック画面が `XGrabKeyboard` で入力を全部取っていた。`XGrabKeyboard` が `AlreadyGrabbed` を返した）、キーはロック画面に入った。F キーは文字を打たないので、ロック画面には何も入力されていない。ユーザーに確かめてもらう（下の手順 2）。
+
+### 実機での確認（2026-10-09）
+
+試験は、本番と別の場所（/tmp/lhu の lefthand、gadget-setup.sh、設定の写し、`-data-dir`）を使う /run のユニット `lefthand-hwtest.service`（`Conflicts=lefthand.service`、`RuntimeMaxSec=1200`、20 分後に本番を起動し直すタイマー付き）で行った。版を `-X main.version` で変えた 3 つ（hwtest-a、b、c）と、最後に HEAD の版で確かめた。
+
+| 試したこと | 結果 |
+| --- | --- |
+| logs、config get | 通った。config get の中身は Brain のファイルと同じ |
+| config put（先頭にコメントを足したもの） | コメントが残り、`.prev` は前の版、すぐ反映 |
+| config put（hid_device を `/dev/./hidg0` に） | `--restart` なしでは何も書かずに終了コード 5。`--restart` で書いて再起動（16 秒） |
+| config check（知らないキー） | `/layers/0/keys/KEY_Q：…unknown key "NOPE"` と出て終了コード 5 |
+| restart | 11 秒。restart --usb は 15.5 秒で、付け直したあと PC の NCM（enx…）、SSH、シリアルが戻った |
+| update（gadget-setup.sh が同じ） | hwtest-a → b、41 秒（送るのに 6.8 秒） |
+| update（gadget-setup.sh がコメントだけ違う） | b → c、37 秒。係は gadget-setup.sh を実行したが、ガジェットは変えなかった |
+| update --rollback | c → b、23 秒。`.prev` が c になった |
+| 自動で戻す | b → a の入れ替えのあと、brain-deck を止めて（kill -9）`update_confirm` を送らなかった。係は 90 秒待って `rolled_back`、lefthand は b、`.prev` は c に戻り、サービスは動いていた |
+| update --status、logs -f、exec | 通った。exec はタイル build に緑の「成功」、deploy に赤の「失敗」と最後の行が出た（get_text で確かめた） |
+| 最後の版（HEAD） | 同じ手順で update（41 秒）、--rollback（23 秒）、exec が通った。「USB を付け直しました」は、ガジェットを変えたときだけ出る（直したあと） |
+
+実機で見つけて直したこと：
+
+- 空きの確かめが厳しすぎた（tar.gz の 4 倍と 32 MiB を残す）。/tmp（57 MB）では断っていた。実際の使い方（受け取ったものと展開したもので約 2.9 倍）に合わせ、3 倍と「16 MiB かファイルシステムの 10%」にした。
+- gadget-setup.sh を実行しただけで「USB を付け直しました」と出ていた。スクリプトがガジェットを変えた（`updated:`、`configuration:` などを書いた）ときだけにした。
+- mkupdate が `-X main.version` の版を読めなかった（`-trimpath` では build info に `-ldflags` が残らない）。`-version` で渡せるようにした（違えば Brain が断るので、誤って入れることはない）。
+
+確かめていないこと：`reboot` と `poweroff`（再起動は許可を得てから、電源断は電源ボタンを押す人が要るので、ホストのテストで、ポートが消えるのを待つところまで）、`install.sh --root` を本物の SD カードに（偽のルートのディレクトリで確かめた）、macOS、GNOME、KDE の実機。
+
+### 確認（ホスト）
+
+- Go：`go test ./...` と、新しい部分の `go test -race` が通る。新しく、gadget-setup.sh のディスクリプタを Go で読む（bash の printf と同じ）、組の確かめ（1 バイト違えば断る）、更新のファイルの確かめ（版、SHA-256、余計なファイル、gadget-setup.sh がない、設定が読めない、組が違う、gzip でない）、係（偽の systemd で、成功、確認が来ないので戻す、起動しないので戻す、版が違うので戻す、gadget-setup.sh の実行と戻したあとの実行し直し、rollback と古い版、restart と --usb、設定を戻す）、設定のテキスト、restart、power、ログ、kind: image。
+- brain-deck：PTY の偽の Brain で、update（成功、失敗、--dry-run、--rollback、--status）、restart、logs、config（誤りの場所、再起動が要る、--dry-run、--restart）、poweroff でポートが消えるのを待つ、exec（成功、失敗、時間切れ、コマンドがない、Brain がない、実行中なら重ねない、最後の行、幅で切る）。
+- 設定 GUI：`npm test` の 160 件が通る（新しく、「コマンド」のレイヤーのプレビュー 2 枚が `-render-png` と画素単位で同じ）。`npm run build` が通る。
+- 例の設定は、どれも `lefthand -check` を通る。
+
+### 反映
+
+- Brain：`/usr/local/bin/lefthand` と `/usr/local/sbin/lefthand-gadget-setup` を 2afadfb の版にした（この仕組みが入る前の版からなので、最初の一度だけ ssh で入れた）。前の版は `.prev`（4081a07、フェーズ B）。gadget-setup.sh の違いは `GADGET_CHECK` だけで、入れる前に新しいスクリプトの `GADGET_CHECK=1` で「付け直しは要らない」ことを確かめた（USB は付け直していない）。
+- 反映したあと、本番のサービスで `brain-deck update --status`、`update --dry-run`（送って確かめて消す）、`logs`、`config get` が通った。
+- `/etc/lefthand/config.yaml` のハッシュは前後で同じ（809cafb2…）。`/var/lib/lefthand/` のファイルは変わっていない（--dry-run で作られた空の `update/` は消した）。試験のユニット、/tmp/lhu、/run のユニットのファイルは消した。
+- 本番の設定には新しいセルがないので、見た目と動きは前と同じ。
+- PC：`~/.local/bin/brain-deck` を新しい版にした（前の版は `brain-deck.prev`）。`gui/dist/` を作り直した。
+- 戻すとき：`brain-deck update --rollback`（フェーズ B の版は `-version` を知らないので、10 秒動き続けるかだけを確かめる。戻したあとは brain-deck update が使えない）。または `ssh brain 'sudo cp /usr/local/bin/lefthand.prev /usr/local/bin/lefthand && sudo cp /usr/local/sbin/lefthand-gadget-setup.prev /usr/local/sbin/lefthand-gadget-setup && sudo systemctl restart lefthand.service'`。
+
+### 目で確かめる手順
+
+1. **更新**：`go run ./tools/mkupdate` で今の版の更新のファイルを作り、`brain-deck update lefthand-<版>.update.tar.gz`。Brain の画面が一度消えて（lefthand が止まる）戻り、「更新しました」と出ることを確かめる。`brain-deck update --rollback` でもう一度戻り（今の版が `.prev` になる）、もう一度 `--rollback` で元に戻る。
+2. **キーがショートカットに届くこと**（画面のロックを外してから）：設定 GUI で `config/shortcuts-example.yaml` を開いて保存し、メニュー →「コマンド」。PC で `xev -event keyboard` を開き、「ビルド」で `XF86Launch5`、「lint」で `Control_L` と `XF86Launch5` が出ることを確かめる。
+3. **ショートカットとタイル**：Enlightenment の「キー割り当て」で、F14（Brain の「ビルド」を押して決める）に「起動」→「コマンド」で `sh -c 'brain-deck exec --result build -- sh -c "sleep 3; echo ok"'` を割り当てる。Brain の「ビルド」を押し、下のタイルが「実行中」→ 緑の「成功」と `ok` になることを確かめる。続けて 2 回押しても、2 つ目は動かない（`brain-deck exec` が終了コード 75 で終わる）。
+4. **失敗の表示**：同じように `false` を割り当てて、赤の「失敗(1)」になることを確かめる。
+5. **ログ**：`brain-deck logs -f` を動かしたまま、Brain のセルをいくつか押す（`-v` ではないので、ふつうはレイヤーの切り替えなどだけ）。`brain-deck restart` を別の端末で実行しても、`logs -f` が続く。
+6. **元に戻す**：設定 GUI で `config/current.yaml` を開いて保存（または `brain-deck config put config/current.yaml`。ただしこれはコメントが current.yaml のものになる）。割り当てたショートカットを消す。
+
+### 残っている課題
+
+- Brain から送った F13〜F18 が、PC のショートカットに届くことは、ロック画面のため実機で確かめていない（上の手順 2、3）。GNOME、KDE、macOS の実機は試していない。
+- `reboot`、`poweroff` は実機で試していない（再起動は許可を得てから）。`install.sh --root` は本物の SD カードで試していない。
+- 本番のフェーズ B の版（`.prev`）に `--rollback` で戻すと、そのあとは `brain-deck update` が使えない（そのときは ssh か `install.sh --root`）。次の更新から、`.prev` もこの仕組みを持つ版になる。
+- `gadget.env`、systemd のユニット、カーネルは、まだ ssh（か Brain 本体でのログイン）が要る。更新のファイルに、ユニットなどを足すことはできる（今は lefthand と gadget-setup.sh だけ）。
+- `brain-deck config put` は送ったファイルをそのまま書くので、設定 GUI で保存すると、コメントはまた消える（GUI の保存の仕様は変えていない）。
+- 背景画像の受け取りは `upload_*`（kind: image）でもできるが、設定 GUI と brain-deck は今までの `image_*` を使っている。
+
 ## 追記：フェーズ B　メディアキー、F13〜F24、スリープ解除（2026-10-09）
 
 USB の HID を広げた。メディアキー（`media:`。HID の Consumer Control）、F13〜F24、Brain のキーでスリープ中の PC を起こす（USB のリモートウェイクアップ）。
