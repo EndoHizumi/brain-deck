@@ -67,6 +67,10 @@ const usage = `使い方：
   brain-deck text <id> -              テキストを標準入力から読む
   brain-deck text <id> --clear        テキストを消す（「未設定」に戻す）
   brain-deck text --list              Brain にあるテキストの一覧
+  brain-deck qr <id> <文字列> [--ttl 1h]   QR コードのセル（widget: qr）に出す文字列を送る（UTF-8 で 400 バイトまで）
+  brain-deck qr <id> -                文字列を標準入力から読む。qr <id> --clear で消す。qr --list で一覧
+  brain-deck presence                 在席ランプ（widget: presence）の今の状態と、選べる状態
+  brain-deck presence <状態>|next|prev [--id <id>]   在席ランプの状態を変える（id を省略すると presence）
   brain-deck todo [list] [--json]     Todo の一覧（番号は Brain の画面と同じ順）
   brain-deck todo add <項目> [--top]  Todo を足す（- なら標準入力の 1 行ごとに足す。--top で先頭に）
   brain-deck todo done <番号|ID>...   完了にする（undo で未完了に戻す）
@@ -93,7 +97,8 @@ const usage = `使い方：
   --port <パス>      ポートを指定する（例：/dev/serial/by-id/usb-SHARP_Brain_0123456789-if05、/dev/cu.usbmodem01234567895）。
                      環境変数 BRAIN_DECK_PORT でも指定できる。省略すると探す
   --timeout <時間>   全体の時間の上限（既定 5s）
-  --no-time-sync     text と calendar sync の前に、Brain の時刻を合わせない
+  --no-time-sync     text、qr、calendar sync の前に、Brain の時刻を合わせない
+  --id <id>          presence で、在席ランプの id（省略すると presence）
   --config <パス>    calendar sync の設定ファイル（既定 ~/.config/brain-deck/calendars.yaml）
   --fetch-timeout <時間>  calendar sync で予定を取ってくる時間の上限（既定 30s。--timeout とは別）
   -q, --quiet        成功したときに何も出さない
@@ -112,8 +117,9 @@ type options struct {
 	clear      bool
 	list       bool
 	noTimeSync bool
-	top        bool // todo add：先頭に足す
-	json       bool // todo list、calendar list：JSON で出す
+	id         string // presence：在席ランプの id
+	top        bool   // todo add：先頭に足す
+	json       bool   // todo list、calendar list：JSON で出す
 	// calendar sync
 	ics          []string // --ics（何度でも）
 	days         int
@@ -133,7 +139,7 @@ func (e usageError) Error() string { return string(e) }
 // `--` のあとは、すべてふつうの引数にする（`-` で始まるテキストを渡すとき）。
 func parseArgs(argv []string) (*options, error) {
 	o := &options{timeout: defaultTimeout, port: os.Getenv("BRAIN_DECK_PORT"), fetchTimeout: defaultFetchTimeout}
-	withValue := map[string]bool{"port": true, "timeout": true, "style": true, "ttl": true, "ics": true, "days": true, "config": true, "fetch-timeout": true}
+	withValue := map[string]bool{"port": true, "timeout": true, "style": true, "ttl": true, "ics": true, "days": true, "config": true, "fetch-timeout": true, "id": true}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--" {
@@ -173,6 +179,8 @@ func parseArgs(argv []string) (*options, error) {
 			o.list = true
 		case "no-time-sync":
 			o.noTimeSync = true
+		case "id":
+			o.id = val
 		case "ics":
 			o.ics = append(o.ics, val)
 		case "days":
@@ -248,17 +256,26 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo、calendar、images で使います"+hint)
 		return exitUsage
 	}
+	if o.id != "" && o.args[0] != "presence" {
+		fmt.Fprintln(stderr, "brain-deck: --id は presence で使います"+hint)
+		return exitUsage
+	}
 	if o.args[0] != "calendar" && (len(o.ics) > 0 || o.days != 0 || o.config != "" || (o.dryRun && o.args[0] != "images")) {
 		fmt.Fprintln(stderr, "brain-deck: --ics、--days、--config、--dry-run は calendar sync で使います"+hint)
 		return exitUsage
 	}
 	var cmd func(*Client) (string, error)
+	runningCmd, warnOut = o.args[0], stderr
 	switch o.args[0] {
 	case "version":
 		fmt.Fprintln(stdout, "brain-deck", versionString())
 		return exitOK
 	case "text":
-		cmd, err = textCommand(o, stdin)
+		cmd, err = textCommand(o, stdin, kindText)
+	case "qr":
+		cmd, err = textCommand(o, stdin, kindQR)
+	case "presence":
+		cmd, err = presenceCommand(o)
 	case "todo":
 		cmd, err = todoCommand(o, stdin)
 	case "calendar":
@@ -305,6 +322,12 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
+// runningCmd は、実行しているコマンドの名前（エラーの説明を変える）。
+var runningCmd string
+
+// warnOut は、成功したときの注意を書く先（run の stderr）。
+var warnOut io.Writer = os.Stderr
+
 // callTimeout は、残りの時間（全体の --timeout まで）。
 var callTimeout = func() time.Duration { return defaultTimeout }
 
@@ -331,7 +354,7 @@ func report(w io.Writer, err error) int {
 		return exitNoBrain
 	case errors.As(err, &br):
 		fmt.Fprintf(w, "brain-deck: Brain がエラーを返しました：%s（%s）\n", br.Message, br.Code)
-		if br.Code == "conflict" || br.Code == "not_found" {
+		if (br.Code == "conflict" || br.Code == "not_found") && runningCmd == "todo" {
 			fmt.Fprintln(w, "読んだあとに Brain で項目が変わりました。brain-deck todo list で確かめてから、もう一度実行してください")
 		}
 		return exitBrainError
@@ -351,22 +374,39 @@ func need(c *Client, cmd string) error {
 
 // ---------- text ----------
 
-func textCommand(o *options, stdin io.Reader) (func(*Client) (string, error), error) {
+// textKind は、テキストのタイル（text）と QR コード（qr）の違い。どちらも同じ形のコマンドで中身を書く。
+type textKind struct {
+	name     string // コマンドの名前
+	set, get string // プロトコルのコマンド
+	widget   string // セルの widget
+	example  string
+	styles   bool // --style を使える
+}
+
+var (
+	kindText = textKind{name: "text", set: "set_text", get: "get_text", widget: "text", example: `brain-deck text build "ビルド成功"`, styles: true}
+	kindQR   = textKind{name: "qr", set: "set_qr", get: "get_qr", widget: "qr", example: `brain-deck qr share "https://example.com/"`}
+)
+
+func textCommand(o *options, stdin io.Reader, k textKind) (func(*Client) (string, error), error) {
 	a := o.args[1:]
+	if o.style != "" && !k.styles {
+		return nil, usageError("--style は text で使います")
+	}
 	if o.list {
 		if len(a) != 0 || o.clear {
-			return nil, usageError("text --list は、ほかの引数を取りません")
+			return nil, usageError(k.name + " --list は、ほかの引数を取りません")
 		}
-		return listTexts, nil
+		return func(c *Client) (string, error) { return listTexts(c, k) }, nil
 	}
 	if len(a) == 0 {
-		return nil, usageError("text のあとに id を書きます（brain-deck text build \"ビルド成功\"）")
+		return nil, usageError(k.name + " のあとに id を書きます（" + k.example + "）")
 	}
 	params := map[string]any{"name": a[0], "source": "brain-deck"}
 	switch {
 	case o.clear:
 		if len(a) != 1 || o.style != "" || o.ttl != 0 {
-			return nil, usageError("text <id> --clear は、テキストや --style、--ttl を取りません")
+			return nil, usageError(k.name + " <id> --clear は、テキストや --style、--ttl を取りません")
 		}
 		params["clear"] = true
 	case len(a) == 2:
@@ -391,7 +431,7 @@ func textCommand(o *options, stdin io.Reader) (func(*Client) (string, error), er
 		return nil, usageError("テキストは 1 つの引数にします（空白を含むときは \"\" で囲む）")
 	}
 	return func(c *Client) (string, error) {
-		if err := need(c, "set_text"); err != nil {
+		if err := need(c, k.set); err != nil {
 			return "", err
 		}
 		if !o.noTimeSync {
@@ -399,7 +439,7 @@ func textCommand(o *options, stdin io.Reader) (func(*Client) (string, error), er
 				return "", err
 			}
 		}
-		raw, err := c.Call("set_text", params, callTimeout())
+		raw, err := c.Call(k.set, params, callTimeout())
 		if err != nil {
 			return "", err
 		}
@@ -411,7 +451,7 @@ func textCommand(o *options, stdin io.Reader) (func(*Client) (string, error), er
 		json.Unmarshal(raw, &r)
 		id := a[0]
 		if !r.Shown {
-			fmt.Fprintf(os.Stderr, "brain-deck: 注意：今の設定には、id が %s のテキストのセル（widget: text）がありません。中身は Brain に保存しました\n", id)
+			fmt.Fprintf(warnOut, "brain-deck: 注意：今の設定には、id が %s の %s のセル（widget: %s）がありません。中身は Brain に保存しました\n", id, k.name, k.widget)
 		}
 		if r.Cleared {
 			return id + ": 消しました", nil
@@ -440,11 +480,11 @@ type textInfo struct {
 	Expired   bool       `json:"expired"`
 }
 
-func listTexts(c *Client) (string, error) {
-	if err := need(c, "get_text"); err != nil {
+func listTexts(c *Client, k textKind) (string, error) {
+	if err := need(c, k.get); err != nil {
 		return "", err
 	}
-	raw, err := c.Call("get_text", nil, callTimeout())
+	raw, err := c.Call(k.get, nil, callTimeout())
 	if err != nil {
 		return "", err
 	}
@@ -468,7 +508,11 @@ func listTexts(c *Client) (string, error) {
 	}
 	sort.Strings(ids)
 	var b strings.Builder
-	b.WriteString("id\t色\t状態\t書いた時刻\tテキスト\n")
+	if k.styles {
+		b.WriteString("id\t色\t状態\t書いた時刻\tテキスト\n")
+	} else {
+		b.WriteString("id\t状態\t書いた時刻\t文字列\n")
+	}
 	for _, id := range ids {
 		t := r.Texts[id]
 		state := "表示中"
@@ -487,7 +531,12 @@ func listTexts(c *Client) (string, error) {
 		if !t.SetAt.IsZero() {
 			at = t.SetAt.Local().Format("01/02 15:04")
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\n", id, t.Style, state, at, strings.ReplaceAll(t.Text, "\n", "⏎"))
+		if k.styles {
+			fmt.Fprintf(&b, "%s\t%s\t", id, t.Style)
+		} else {
+			fmt.Fprintf(&b, "%s\t", id)
+		}
+		fmt.Fprintf(&b, "%s\t%s\t%s\n", state, at, strings.ReplaceAll(t.Text, "\n", "⏎"))
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }
@@ -566,6 +615,8 @@ func status(c *Client) (string, error) {
 		Time   timeInfo  `json:"time"`
 		HID    *usbHID   `json:"hid"`
 		Term   *termInfo `json:"terminal"`
+		Bat    *battery  `json:"battery"`
+		Light  *dimInfo  `json:"backlight"`
 	}
 	json.Unmarshal(raw, &st)
 	sync := "合わせてある"
@@ -582,7 +633,59 @@ func status(c *Client) (string, error) {
 	if st.Term != nil {
 		out += "\n端末モード\t" + st.Term.describe()
 	}
+	if st.Bat != nil {
+		out += "\n電池\t" + st.Bat.describe()
+	}
+	if st.Light != nil {
+		out += "\n画面の明るさ\t" + st.Light.describe()
+	}
 	return out, nil
+}
+
+// battery は get_status の battery（lefthand の battery.go の BatteryInfo）。
+type battery struct {
+	Percent   int    `json:"percent"`
+	VoltageMV int    `json:"voltage_mv"`
+	Plugged   bool   `json:"plugged"`
+	Charging  bool   `json:"charging"`
+	Estimated bool   `json:"estimated"`
+	Source    string `json:"source"`
+}
+
+func (b battery) describe() string {
+	if b.Percent < 0 {
+		return "読めません"
+	}
+	s := fmt.Sprintf("%d%%", b.Percent)
+	switch {
+	case b.Charging:
+		s += "、充電中"
+	case b.Plugged:
+		s += "、USB 給電"
+	}
+	if b.VoltageMV > 0 {
+		s += fmt.Sprintf("（%.2f V", float64(b.VoltageMV)/1000)
+		if b.Estimated {
+			s += "。残りと充電中は電圧からの見積もり"
+		}
+		s += "）"
+	}
+	return s
+}
+
+// dimInfo は get_status の backlight（lefthand の backlight.go の DimInfo）。
+type dimInfo struct {
+	Enabled bool   `json:"enabled"`
+	State   string `json:"state"`
+	Level   int    `json:"level"`
+	Max     int    `json:"max"`
+}
+
+func (d dimInfo) describe() string {
+	if !d.Enabled {
+		return "自動減光なし（設定の backlight）"
+	}
+	return fmt.Sprintf("%s（%d/%d）", map[string]string{"bright": "明るい", "dim": "暗くしている", "off": "消している"}[d.State], d.Level, d.Max)
 }
 
 // termInfo は get_status の terminal（lefthand の termmode.go の TermInfo）。
@@ -735,5 +838,88 @@ func usbModeCommand(o *options) (func(*Client) (string, error), error) {
 			return "USB はすでに " + h.describe() + " の形です", nil
 		}
 		return "USB を " + h.describe() + " の形に切り替えます。2〜3 秒、キー入力、SSH、シリアルが切れます", nil
+	}, nil
+}
+
+// ---------- presence ----------
+
+// presenceCommand は presence。引数がなければ今の状態を出し、あれば変える。
+func presenceCommand(o *options) (func(*Client) (string, error), error) {
+	if len(o.args) > 2 {
+		return nil, usageError("presence の引数は、状態の名前か next、prev のどれか 1 つです（空白を含む名前は \"\" で囲む）")
+	}
+	old := func(c *Client, cmd string) error { return need(c, cmd) }
+	if len(o.args) == 1 {
+		if o.id != "" {
+			return nil, usageError("--id は、状態を変えるときに使います")
+		}
+		return func(c *Client) (string, error) {
+			if err := old(c, "get_widgets"); err != nil {
+				return "", err
+			}
+			raw, err := c.Call("get_widgets", nil, callTimeout())
+			if err != nil {
+				return "", err
+			}
+			var r struct {
+				Widgets struct {
+					Presence map[string]struct {
+						State string `json:"state"`
+					} `json:"presence"`
+				} `json:"widgets"`
+				IDs    map[string][]string `json:"ids"`
+				States map[string][]struct {
+					Name  string `json:"name"`
+					Color string `json:"color"`
+				} `json:"presence_states"`
+			}
+			if err := json.Unmarshal(raw, &r); err != nil {
+				return "", err
+			}
+			if len(r.IDs["presence"]) == 0 {
+				return "", errors.New("今の設定に、在席ランプのセル（widget: presence）がありません")
+			}
+			var b strings.Builder
+			b.WriteString("id\t今の状態\t選べる状態\n")
+			for _, id := range r.IDs["presence"] {
+				var names []string
+				for _, s := range r.States[id] {
+					names = append(names, s.Name)
+				}
+				cur := r.Widgets.Presence[id].State
+				if cur == "" && len(names) > 0 {
+					cur = names[0] + "（まだ変えていない）"
+				}
+				fmt.Fprintf(&b, "%s\t%s\t%s\n", id, cur, strings.Join(names, "、"))
+			}
+			return strings.TrimRight(b.String(), "\n"), nil
+		}, nil
+	}
+	params := map[string]any{"source": "brain-deck"}
+	if o.id != "" {
+		params["name"] = o.id
+	}
+	switch arg := o.args[1]; arg {
+	case "next":
+		params["step"] = 1
+	case "prev":
+		params["step"] = -1
+	default:
+		params["state"] = arg
+	}
+	return func(c *Client) (string, error) {
+		if err := old(c, "set_presence"); err != nil {
+			return "", err
+		}
+		raw, err := c.Call("set_presence", params, callTimeout())
+		if err != nil {
+			return "", err
+		}
+		var r struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+		}
+		json.Unmarshal(raw, &r)
+		return fmt.Sprintf("%s: %s", r.Name, r.State), nil
 	}, nil
 }

@@ -170,6 +170,30 @@ func (f *fakeBrain) serve(commands []string) {
 			if req["cmd"] == "todo_clear_done" {
 				res = map[string]any{"rev": f.todo.Rev, "items": f.todo.Items, "removed": f.removed}
 			}
+		case "set_qr":
+			res = map[string]any{"name": req["name"], "cleared": req["clear"] == true, "shown": req["name"] == "share"}
+		case "get_qr":
+			res = map[string]any{"texts": map[string]any{"share": map[string]any{"text": "https://example.com/", "set_at": "2026-10-06T00:00:00Z"}}, "ids": []string{"share"}}
+		case "get_widgets":
+			res = map[string]any{"widgets": map[string]any{"presence": map[string]any{"presence": map[string]any{"state": "集中"}}},
+				"ids":             map[string]any{"presence": []string{"door", "presence"}},
+				"presence_states": map[string]any{"presence": []any{map[string]any{"name": "在席"}, map[string]any{"name": "集中"}}, "door": []any{map[string]any{"name": "在室"}, map[string]any{"name": "不在"}}}}
+		case "set_presence":
+			if req["state"] == "外出" || req["name"] == "nope" {
+				code := map[bool]string{true: "bad_request", false: "not_found"}[req["state"] == "外出"]
+				b, _ := json.Marshal(map[string]any{"id": req["id"], "ok": false, "error": map[string]any{"code": code, "message": "no such state"}})
+				f.master.Write(append(b, '\n'))
+				continue
+			}
+			name, _ := req["name"].(string)
+			if name == "" {
+				name = "presence"
+			}
+			state, _ := req["state"].(string)
+			if state == "" {
+				state = fmt.Sprintf("step%v", req["step"])
+			}
+			res = map[string]any{"name": name, "state": state}
 		case "set_calendar":
 			f.cals = req["calendars"]
 			res = map[string]any{"rev": 1, "shown": true}
@@ -558,5 +582,49 @@ func TestImagesAgainstFakeBrain(t *testing.T) {
 	}
 	if code, _, _ = runCLI(t, "images", "--dry-run", "list"); code != exitUsage {
 		t.Fatalf("--dry-run with list: %d", code)
+	}
+}
+
+func TestQRAndPresenceAgainstFakeBrain(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := newFakeBrain(t)
+	go f.serve([]string{"hello", "get_status", "set_time", "set_qr", "get_qr", "get_widgets", "set_presence"})
+	code, out, errs := runCLI(t, "--port", f.slave, "qr", "share", "https://example.com/a b", "--ttl", "1h")
+	if code != exitOK || !strings.Contains(out, "share: https://example.com/a b") {
+		t.Fatalf("qr: %d %q %q", code, out, errs)
+	}
+	var set map[string]any
+	for set == nil {
+		if r := <-f.got; r["cmd"] == "set_qr" {
+			set = r
+		}
+	}
+	if set["text"] != "https://example.com/a b" || set["ttl_sec"] != float64(3600) || set["style"] != nil {
+		t.Errorf("set_qr = %v", set)
+	}
+	if code, _, errs := runCLI(t, "--port", f.slave, "qr", "other", "x"); code != exitOK || !strings.Contains(errs, "widget: qr") {
+		t.Errorf("qr without a cell: %d %q", code, errs)
+	}
+	if code, _, _ := runCLI(t, "--port", f.slave, "qr", "share", "x", "--style", "ok"); code != exitUsage {
+		t.Errorf("qr --style: exit %d", code)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "qr", "--list"); code != exitOK || !strings.Contains(out, "share\t表示中") {
+		t.Errorf("qr --list: %d %q", code, out)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "presence"); code != exitOK || !strings.Contains(out, "presence\t集中\t在席、集中") ||
+		!strings.Contains(out, "door\t在室（まだ変えていない）") {
+		t.Errorf("presence: %d %q", code, out)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "presence", "会議中"); code != exitOK || out != "presence: 会議中\n" {
+		t.Errorf("presence 会議中: %d %q", code, out)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "presence", "next", "--id", "door"); code != exitOK || out != "door: step1\n" {
+		t.Errorf("presence next: %d %q", code, out)
+	}
+	if code, _, errs := runCLI(t, "--port", f.slave, "presence", "外出"); code != exitBrainError || strings.Contains(errs, "todo") {
+		t.Errorf("presence unknown state: %d %q", code, errs)
+	}
+	if code, _, _ := runCLI(t, "--port", f.slave, "text", "x", "y", "--id", "door"); code != exitUsage {
+		t.Errorf("--id with text: exit %d", code)
 	}
 }
