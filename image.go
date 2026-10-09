@@ -1,14 +1,12 @@
 package main
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"log"
 	"os"
 	"path/filepath"
@@ -46,7 +44,6 @@ const (
 	imageMaxBytes  = imageHeader + imageMaxPixels*2 // 1 枚の上限 768,008 バイト
 	imageChunkMax  = 96 << 10                       // image_chunk の 1 回の大きさ（base64 で 128 KiB。1 行の上限に収まる）
 	imageIndexFile = "index.json"                   //
-	imagePartGlob  = ".upload-*.part"               // 受け取っている途中のファイル
 	imageNameMax   = 100                            // 名前の長さ（文字）
 )
 
@@ -65,12 +62,12 @@ func validImageID(s string) bool { return imageIDRE.MatchString(s) }
 
 // エラーの種類。control.go で、プロトコルのエラーの code にする
 var (
-	errImageBad      = errors.New("bad image request")
+	errImageBad      = errTransferBad // 分割の受け取り（transfer.go）と同じ
 	errImageNotFound = errors.New("image not found")
 	errImageQuota    = errors.New("image quota exceeded")
 	errImageNoSpace  = errors.New("not enough free space")
-	errImageHash     = errors.New("image hash mismatch")
-	errImageUpload   = errors.New("no such upload")
+	errImageHash     = errTransferHash
+	errImageUpload   = errTransferUpload
 )
 
 func imageErr(kind error, format string, args ...any) error {
@@ -168,9 +165,7 @@ func OpenImageStore(dir string) *ImageStore {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("images: %v (background images cannot be saved)", err)
 	}
-	parts, _ := filepath.Glob(filepath.Join(dir, imagePartGlob))
-	for _, p := range parts {
-		os.Remove(p)
+	for _, p := range removeParts(dir) {
 		log.Printf("images: removed an incomplete upload %s", filepath.Base(p))
 	}
 	return s
@@ -525,15 +520,8 @@ func (s *ImageStore) Prune(keep map[string]bool, dry bool) (removed []string, fr
 // デーモンの再起動）は、一時ファイルを消す。受け取りは同時に 1 つだけ。
 
 type imageUpload struct {
-	token string
-	f     *os.File
-	path  string
-	want  int64
-	got   int64
-	sum   string // 送る側が言った SHA-256
-	h     hash.Hash
-	meta  imageMeta
-	timer *time.Timer
+	r    *Receiver
+	meta imageMeta
 }
 
 // ImageBegin は image_begin の引数。
@@ -565,15 +553,7 @@ func (s *ImageStore) Begin(b ImageBegin, now time.Time) (BeginResult, error) {
 	if want := int64(imageHeader + b.W*b.H*2); b.Bytes != want {
 		return BeginResult{}, imageErr(errImageBad, `"bytes" must be %d for a %dx%d image (8-byte header + 2 bytes per pixel), got %d`, want, b.W, b.H, b.Bytes)
 	}
-	name := strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, strings.TrimSpace(b.Name))
-	if r := []rune(name); len(r) > imageNameMax {
-		name = string(r[:imageNameMax])
-	}
+	name := cleanImageName(b.Name)
 	id := b.SHA256[:imageIDLen]
 
 	s.mu.Lock()
@@ -589,45 +569,60 @@ func (s *ImageStore) Begin(b ImageBegin, now time.Time) (BeginResult, error) {
 		}
 		return BeginResult{ID: id, Exists: true}, nil
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := s.roomLocked(b.Bytes); err != nil {
 		return BeginResult{}, err
+	}
+	r, err := newReceiver(s.dir, b.Bytes, b.SHA256, imageChunkMax, imageUploadIdle, s.expire)
+	if err != nil {
+		return BeginResult{}, err
+	}
+	s.up = &imageUpload{r: r, meta: imageMeta{Name: name, W: b.W, H: b.H, Bytes: b.Bytes, SHA256: b.SHA256, Added: now.UTC(), Source: b.Source}}
+	vlogf("images: receiving %s %dx%d (%d bytes) %q", id, b.W, b.H, b.Bytes, name)
+	return BeginResult{ID: id, Upload: r.Token, ChunkBytes: imageChunkMax}, nil
+}
+
+// cleanImageName は、表示用の名前の制御文字を空白にし、長さを切る。
+func cleanImageName(n string) string {
+	name := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(n))
+	if r := []rune(name); len(r) > imageNameMax {
+		name = string(r[:imageNameMax])
+	}
+	return name
+}
+
+// roomLocked は、bytes の画像を足しても、合計の上限と SD カードの空きに収まるかを確かめる。
+func (s *ImageStore) roomLocked(bytes int64) error {
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		return err
 	}
 	files, err := s.files()
 	if err != nil {
-		return BeginResult{}, err
+		return err
 	}
 	var total int64
 	for _, n := range files {
 		total += n
 	}
-	if total+b.Bytes > imageQuota {
-		return BeginResult{}, imageErr(errImageQuota,
+	if total+bytes > imageQuota {
+		return imageErr(errImageQuota,
 			"the images would take %s, over the limit of %s (now %s in %d images). Remove unused images first (prune_images)",
-			kib(total+b.Bytes), kib(imageQuota), kib(total), len(files))
+			kib(total+bytes), kib(imageQuota), kib(total), len(files))
 	}
 	free, size, err := imageFreeSpace(s.dir)
 	if err != nil {
-		return BeginResult{}, fmt.Errorf("checking free space: %w", err)
+		return fmt.Errorf("checking free space: %w", err)
 	}
-	if reserve := reserveFor(size); free-b.Bytes < reserve {
-		return BeginResult{}, imageErr(errImageNoSpace,
+	if reserve := reserveFor(size); free-bytes < reserve {
+		return imageErr(errImageNoSpace,
 			"the SD card has %s free; saving %s would leave less than %s, which is kept for the system",
-			kib(free), kib(b.Bytes), kib(reserve))
+			kib(free), kib(bytes), kib(reserve))
 	}
-	var rnd [6]byte
-	rand.Read(rnd[:])
-	token := hex.EncodeToString(rnd[:])
-	path := filepath.Join(s.dir, ".upload-"+token+".part")
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return BeginResult{}, err
-	}
-	u := &imageUpload{token: token, f: f, path: path, want: b.Bytes, sum: b.SHA256, h: sha256.New(),
-		meta: imageMeta{Name: name, W: b.W, H: b.H, Bytes: b.Bytes, SHA256: b.SHA256, Added: now.UTC(), Source: b.Source}}
-	u.timer = time.AfterFunc(imageUploadIdle, func() { s.expire(token) })
-	s.up = u
-	vlogf("images: receiving %s %dx%d (%d bytes) %q", id, b.W, b.H, b.Bytes, name)
-	return BeginResult{ID: id, Upload: token, ChunkBytes: imageChunkMax}, nil
+	return nil
 }
 
 func kib(n int64) string {
@@ -640,15 +635,15 @@ func kib(n int64) string {
 func (s *ImageStore) expire(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.up != nil && s.up.token == token {
-		log.Printf("images: no data for %v; gave up the upload of %s", imageUploadIdle, s.up.sum[:imageIDLen])
+	if s.up != nil && s.up.r.Token == token {
+		log.Printf("images: no data for %v; gave up the upload of %s", imageUploadIdle, s.up.r.Sum()[:imageIDLen])
 		s.abortLocked("")
 	}
 }
 
 // uploadLocked は token の受け取りを返す。
 func (s *ImageStore) uploadLocked(token string) (*imageUpload, error) {
-	if s.up == nil || s.up.token != token || token == "" {
+	if s.up == nil || s.up.r.Token != token || token == "" {
 		return nil, imageErr(errImageUpload, "upload %q is not in progress (it was finished, aborted, timed out, or replaced by another image_begin); start again with image_begin", token)
 	}
 	return s.up, nil
@@ -662,23 +657,11 @@ func (s *ImageStore) Chunk(token string, offset int64, data []byte) (int64, erro
 	if err != nil {
 		return 0, err
 	}
-	switch {
-	case offset != u.got:
-		return u.got, imageErr(errImageBad, "offset %d: expected %d (send the chunks in order)", offset, u.got)
-	case len(data) == 0 || len(data) > imageChunkMax:
-		return u.got, imageErr(errImageBad, "a chunk must be 1..%d bytes, got %d", imageChunkMax, len(data))
-	case u.got+int64(len(data)) > u.want:
-		s.abortLocked("")
-		return 0, imageErr(errImageBad, "the data exceeds the announced %d bytes; the upload was discarded", u.want)
+	got, discarded, err := u.r.Write(offset, data)
+	if discarded {
+		s.up = nil
 	}
-	if _, err := u.f.Write(data); err != nil {
-		s.abortLocked("")
-		return 0, fmt.Errorf("writing the image: %w (the upload was discarded)", err)
-	}
-	u.h.Write(data)
-	u.got += int64(len(data))
-	u.timer.Reset(imageUploadIdle)
-	return u.got, nil
+	return got, err
 }
 
 // End は受け取りを終える。大きさ、SHA-256、ヘッダを確かめてから、<id>.565 にする。
@@ -691,37 +674,38 @@ func (s *ImageStore) End(token string) (string, error) {
 		return "", err
 	}
 	s.up = nil
-	u.timer.Stop()
-	fail := func(err error) (string, error) {
-		u.f.Close()
-		os.Remove(u.path)
+	f, part, err := u.r.Finish()
+	if err != nil {
 		s.mu.Unlock()
 		return "", err
 	}
-	if u.got != u.want {
-		return fail(imageErr(errImageBad, "received %d of %d bytes; the upload was discarded", u.got, u.want))
-	}
-	if got := hex.EncodeToString(u.h.Sum(nil)); got != u.sum {
-		return fail(imageErr(errImageHash, "the received data has SHA-256 %s, not %s; the upload was discarded", got[:imageIDLen], u.sum[:imageIDLen]))
+	return s.adoptLocked(f, part, u.meta)
+}
+
+// adoptLocked は、大きさと SHA-256 を確かめた一時ファイル（f、part）のヘッダを確かめ、<id>.565 にする。
+// s.mu を持って呼び、返るときに離す。
+func (s *ImageStore) adoptLocked(f *os.File, part string, meta imageMeta) (string, error) {
+	fail := func(err error) (string, error) {
+		f.Close()
+		os.Remove(part)
+		s.mu.Unlock()
+		return "", err
 	}
 	var hd [imageHeader]byte
-	if _, err := u.f.ReadAt(hd[:], 0); err != nil {
+	if _, err := f.ReadAt(hd[:], 0); err != nil {
 		return fail(err)
 	}
-	if string(hd[:4]) != imageMagic || int(binary.LittleEndian.Uint16(hd[4:])) != u.meta.W || int(binary.LittleEndian.Uint16(hd[6:])) != u.meta.H {
-		return fail(imageErr(errImageBad, "the file header is not LHI1 %dx%d; the upload was discarded", u.meta.W, u.meta.H))
+	if string(hd[:4]) != imageMagic || int(binary.LittleEndian.Uint16(hd[4:])) != meta.W || int(binary.LittleEndian.Uint16(hd[6:])) != meta.H {
+		return fail(imageErr(errImageBad, "the file header is not LHI1 %dx%d; the upload was discarded", meta.W, meta.H))
 	}
-	if err := u.f.Sync(); err != nil {
-		return fail(err)
-	}
-	if err := u.f.Close(); err != nil {
-		os.Remove(u.path)
+	if err := f.Close(); err != nil {
+		os.Remove(part)
 		s.mu.Unlock()
 		return "", err
 	}
-	id := u.sum[:imageIDLen]
-	if err := os.Rename(u.path, s.path(id)); err != nil {
-		os.Remove(u.path)
+	id := meta.SHA256[:imageIDLen]
+	if err := os.Rename(part, s.path(id)); err != nil {
+		os.Remove(part)
 		s.mu.Unlock()
 		return "", err
 	}
@@ -730,18 +714,52 @@ func (s *ImageStore) End(token string) (string, error) {
 		d.Close()
 	}
 	x := s.loadIndexLocked()
-	x.Images[id] = u.meta
+	x.Images[id] = meta
 	if err := s.saveIndexLocked(x); err != nil {
 		log.Printf("images: index: %v (the image itself was saved)", err)
 	}
 	delete(s.missing, id)
-	f := s.onChange
+	onChange := s.onChange
 	s.mu.Unlock()
-	log.Printf("images: saved %s %dx%d %q from %s", id, u.meta.W, u.meta.H, u.meta.Name, u.meta.Source)
-	if f != nil {
-		f()
+	log.Printf("images: saved %s %dx%d %q from %s", id, meta.W, meta.H, meta.Name, meta.Source)
+	if onChange != nil {
+		onChange()
 	}
 	return id, nil
+}
+
+// UploadKind は、upload_* の kind: image（image_begin などと同じものを、共通の形で受け取る）。
+// 幅と高さは、受け取ったファイルのヘッダから読む。
+func (s *ImageStore) UploadKind() UploadKind {
+	return UploadKind{Dir: s.dir, MaxBytes: imageMaxBytes,
+		Check: func(b UploadBegin) error {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.roomLocked(b.Bytes)
+		},
+		Done: func(b UploadBegin, f *os.File, part string) (any, error) {
+			var hd [imageHeader]byte
+			_, err := f.ReadAt(hd[:], 0)
+			w, h := int(binary.LittleEndian.Uint16(hd[4:])), int(binary.LittleEndian.Uint16(hd[6:]))
+			if err == nil {
+				err = checkImageSize(w, h)
+			}
+			if err == nil && (string(hd[:4]) != imageMagic || b.Bytes != int64(imageHeader+w*h*2)) {
+				err = fmt.Errorf("not an LHI1 image of %d bytes", b.Bytes)
+			}
+			if err != nil {
+				f.Close()
+				os.Remove(part)
+				return nil, imageErr(errImageBad, "%v; the upload was discarded", err)
+			}
+			s.mu.Lock()
+			res, err := s.adoptLocked(f, part, imageMeta{Name: cleanImageName(b.Name), W: w, H: h, Bytes: b.Bytes, SHA256: b.SHA256,
+				Added: time.Now().UTC(), Source: b.Source})
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"id": res}, nil
+		}}
 }
 
 // Abort は受け取りをやめて、一時ファイルを消す。token が空なら、どの受け取りでもやめる。
@@ -753,14 +771,12 @@ func (s *ImageStore) Abort(token string) bool {
 
 func (s *ImageStore) abortLocked(token string) bool {
 	u := s.up
-	if u == nil || (token != "" && u.token != token) {
+	if u == nil || (token != "" && u.r.Token != token) {
 		return false
 	}
 	s.up = nil
-	u.timer.Stop()
-	u.f.Close()
-	os.Remove(u.path)
-	vlogf("images: upload of %s aborted (%d of %d bytes)", u.sum[:imageIDLen], u.got, u.want)
+	u.r.Abort()
+	vlogf("images: upload of %s aborted (%d of %d bytes)", u.r.Sum()[:imageIDLen], u.r.Got(), u.r.Want())
 	return true
 }
 

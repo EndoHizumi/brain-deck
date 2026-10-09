@@ -71,7 +71,7 @@ func (d *testDaemon) upload(b []byte, name string) string {
 // parts は、受け取りの途中のファイルの数。
 func parts(t *testing.T, dir string) int {
 	t.Helper()
-	m, _ := filepath.Glob(filepath.Join(dir, imagePartGlob))
+	m, _ := filepath.Glob(filepath.Join(dir, transferPartGlob))
 	return len(m)
 }
 
