@@ -1,0 +1,10 @@
+# PC（Linux）用。Brain（1d6b:0104、製品名 Brain）のキーで、スリープ中の PC を起こせるようにする（USB のリモートウェイクアップ）。
+# Linux は、ブートキーボードの形（Brain が起動したときの形）なら、自分で power/wakeup を enabled にする。
+# キーボードとマウスの形（usb_mode: mouse、gadget.env の HID_MOUSE=1）では disabled のままなので、この規則で enabled にする。
+# Brain は USB の形を切り替えるたびに付け直す（add が来る）ので、そのたびに当てる。
+#   sudo install -m 0644 72-brain-wakeup.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+# そのあと、Brain のケーブルを抜き差しする（か、brain-deck usb-mode で付け直す）。
+# 確かめ方：cat /sys/bus/usb/devices/<Brain の番号>/power/wakeup が enabled（README の「スリープ解除」）。
+# 1d6b:0104 は Linux の USB ガジェットの汎用の ID なので、製品名（Brain）でも絞る。
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1d6b", ATTR{idProduct}=="0104", ATTR{product}=="Brain", TEST=="power/wakeup", ATTR{power/wakeup}="enabled"

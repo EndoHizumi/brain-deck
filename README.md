@@ -26,17 +26,18 @@ USB HID のキーボードとマウスとして PC に送る。タッチパネ�
 5. [PC との接続](#pc-との接続)
 6. [設定](#設定)
 7. [マウスとトラックパッド](#マウスとトラックパッド)
-8. [設定 GUI](#設定-gui)
-9. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
-10. [時刻合わせ](#時刻合わせ)
-11. [タッチのキャリブレーション](#タッチのキャリブレーション)
-12. [日常の操作](#日常の操作)
-13. [シリアルコンソール](#シリアルコンソール)
-14. [端末モード](#端末モード)
-15. [画面とコンソール](#画面とコンソール)
-16. [困ったとき](#困ったとき)
-17. [開発](#開発)
-18. [フォントとライセンス](#フォントとライセンス)
+8. [メディアキー、F13〜F24、スリープ解除](#メディアキーf13f24スリープ解除)
+9. [設定 GUI](#設定-gui)
+10. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
+11. [時刻合わせ](#時刻合わせ)
+12. [タッチのキャリブレーション](#タッチのキャリブレーション)
+13. [日常の操作](#日常の操作)
+14. [シリアルコンソール](#シリアルコンソール)
+15. [端末モード](#端末モード)
+16. [画面とコンソール](#画面とコンソール)
+17. [困ったとき](#困ったとき)
+18. [開発](#開発)
+19. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -476,6 +477,7 @@ Brain は起動したとき、USB の HID をキーボードだけ（ブート�
 - **起動したときからマウスを使う**：`/etc/lefthand/gadget.env` に `HID_MOUSE=1` と書く。
 - **仕組み**：lefthand が /dev/hidg0 を閉じ、`HID_MOUSE=1`（か 0）と `LEFTHAND_SELF=1` を付けて `/usr/local/sbin/lefthand-gadget-setup` を実行し（lefthand.service は止めない）、付け直したあとに HID の形を読み直す（`journalctl -u lefthand` の `usb: ... keyboard + mouse`）。gadget-setup.sh は、HID と、そのあとの ACM 2 つのリンクを外し、HID の属性を書いて、同じ順でリンクし直す。インターフェイスの番号は変わらない。
 - **新しくするとき**：デーモンと gadget-setup.sh は組で入れる。古いデーモンは、キーボードとマウスの形を正しく扱えない。
+- **メディアキー**：キーボードとマウスの形には、メディアキー（`media:`）も入る（[メディアキー、F13〜F24、スリープ解除](#メディアキーf13f24スリープ解除)）。
 
 ### トラックパッドの調整（タッチの記録と再生）
 
@@ -516,6 +518,114 @@ ssh brain sudo systemctl stop lefthand-try    # 早く終えるとき（本番�
 
 `-replay-touch` は、タッチごとに長さ、サンプル数、最初と最後の位置、押す強さの範囲、最初の 1 歩の距離（触れた瞬間の跳ね）、いちばん大きな 1 歩を出し、最後に判定の結果（タップ、クリック、ドラッグ、動いた量、ホイール）をまとめる。
 記録のファイルの形は record.go の先頭に書いてある。
+
+## メディアキー、F13〜F24、スリープ解除
+
+USB の HID でできること。例は [config/media-example.yaml](config/media-example.yaml)（メニュー →「メディア」か「F13〜F24」で入る）。
+
+| 機能 | ブートキーボードの形（起動したとき） | キーボードとマウスの形（`usb_mode: mouse`） |
+| --- | --- | --- |
+| メディアキー（`media:`） | 使えない（押しても何も送らない） | 使える |
+| F13〜F24 | 使える | 使える |
+| スリープ解除 | 使える（Linux は設定なしで許す） | 使える（Linux は PC の設定が要る） |
+| BIOS や UEFI の画面での入力 | 使える | 使えない |
+
+### 仕組みと、ブートキーボードでメディアキーを使えない理由
+
+Brain の USB コントローラ（ci_hdrc）は IN のエンドポイントが 7 本で、NCM、HID、ACM 2 つですべて使っている。HID のファンクションは増やせないので、メディアキー（HID の Consumer Control）は、今の HID（`/dev/hidg0`）の中にレポート ID 3 で入れた。
+ところが、ブートキーボードの形（レポートに ID を付けない、決まった 8 バイト）には、別のレポートを入れられない。入れると、BIOS や UEFI の画面で使えなくなる。そのため、メディアキーは**キーボードとマウスの形（`usb_mode: mouse`）のときだけ**使える。
+
+- **ブートキーボードの形で押したとき**：何も送らない。`-v` のログに `media: ... not sent: the USB is the boot keyboard` と出る。画面では、メディアキーのセルの下の小さな文字が「マウスオフでは無効」になり、文字が暗くなる。マウスをオンにすると、ふつうの表示に戻る。
+- **切り替え方**：「マウスとトラックパッド」の [USB の形の切り替え](#usb-の形の切り替えマウスのオンとオフ)（`usb_mode` のセル、`brain-deck usb-mode mouse`）。
+- **起動したときからメディアキーを使う**：Brain の `/etc/lefthand/gadget.env` に `HID_MOUSE=1` と書き、Brain を再起動する（か `sudo /usr/local/sbin/lefthand-gadget-setup` を実行する。USB を付け直すので数秒切れる）。そのかわり、BIOS や UEFI の画面では Brain のキーが使えなくなる。使うときは `brain-deck usb-mode keyboard` で戻す。
+
+  ```sh
+  ssh brain 'echo HID_MOUSE=1 | sudo tee -a /etc/lefthand/gadget.env'
+  ```
+
+- **書き方**：`{ media: play_pause }` など。名前の一覧は [docs/config.md](docs/config.md) の「メディアキー」。
+
+### F13〜F24
+
+F13〜F24 は、PC のキーボードにないファンクションキー。ほかのキーと重ならないので、PC の OS のショートカットにコマンドを割り当てて使う（`key: F13`、`key: LCTRL+F13` など）。どちらの USB の形でも送れる。
+
+- **ディスクリプタ**：前の版のブートキーボードのレポートディスクリプタは、キーの番号の上限が 0x65 だった。F13（0x68）〜F24（0x73）は上限を超えるので、PC が捨てていた（Linux の hid-input は上限を超えた値を無視する）。上限を 0x73 に上げた（`hid.go` の `hidKeyMax`、`gadget-setup.sh` の `KBD_DESC`）。
+- **BIOS や UEFI**：BIOS や UEFI はブートプロトコル（決まった 8 バイト）でキーを読み、レポートディスクリプタは読まない。上限を上げても、送る 8 バイトの形は同じなので、BIOS や UEFI での入力は変わらない（はず）。実機の BIOS では、まだ確かめていない。確かめ方は下の「BIOS や UEFI で確かめる」。
+- **Linux でのキーの名前**：X11（xkb の既定）では、F13 は `XF86Tools`、F14〜F18 は `XF86Launch5`〜`XF86Launch9`、F20 は `XF86AudioMicMute`（マイクのミュート）、F21〜F23 は `XF86TouchpadToggle`、`XF86TouchpadOn`、`XF86TouchpadOff` になり、F19 と F24 には名前がない（`/usr/share/X11/xkb/symbols/inet` の evdev）。**F20〜F23 は、デスクトップによっては押すだけでマイクやタッチパッドを切り替える**ので、ショートカットには F13〜F18 を先に使う。デスクトップごとの割り当て方は、コマンドのショートカット（次のフェーズ）で調べて書く。
+- **ガジェットを作り直すまで**：デーモンだけを新しくして、Brain を再起動していない（ガジェットが前の版のディスクリプタのまま）ときは、F13〜F24 が PC に届かない。`journalctl -u lefthand` の `hid:` の行に `old descriptor` と出る。`sudo /usr/local/sbin/lefthand-gadget-setup` を実行するか、Brain を再起動する。
+
+### スリープ解除（USB のリモートウェイクアップ）
+
+PC がスリープしているときに Brain のキー（本体のキー、セル、マウスのボタン、トラックパッド、メディアキー）を押すと、PC を起こす。
+
+- **Brain 側**：gadget-setup.sh が、USB の構成に「リモートウェイクアップできる」印（bmAttributes の 0x20。`0xa0`）を立てる。lefthand は、USB がサスペンド（`/sys/class/udc/ci_hdrc.0/state` が `suspended`）のときにキーを押すと、`/sys/class/udc/ci_hdrc.0/srp` に 1 を書いて起こす（カーネルの `usb_gadget_wakeup`。ChipIdea のドライバが対応している）。押したキーはいつものとおり送り、PC が起きてから届く。
+- **起きたかのログ**：`journalctl -u lefthand` に `wakeup: woke the PC` か、`wakeup: the PC did not wake up`（PC が許していない）か、`wakeup: the USB is not attached`（PC がスリープ中に USB の電源を切った）と出る。`brain-deck status` の USB の行に、スリープ中なら「PC はスリープ中」と出る。
+- **やめる**：Brain の `/etc/lefthand/gadget.env` に `USB_WAKEUP=0` と書き、Brain を再起動する（印を立てないので、PC はスリープ解除を許さない）。PC 側で `power/wakeup` を disabled にしてもよい。
+
+**PC（Linux）の設定**（PC の設定はユーザーが行う）：
+
+1. Brain の USB デバイスの番号を調べる（下の例では `3-2`）。
+
+   ```sh
+   grep -l Brain /sys/bus/usb/devices/*/product    # /sys/bus/usb/devices/3-2/product
+   cat /sys/bus/usb/devices/3-2/power/wakeup        # enabled なら、そのままで起こせる
+   ```
+
+2. **ブートキーボードの形（起動したとき）**：Linux の usbhid が、ブートキーボードには自分で `enabled` にするので、設定は要らない（2026-10-09 にこの PC で確かめた）。
+3. **キーボードとマウスの形**：`disabled` のまま（2026-10-09 にこの PC で確かめた）。その場で許すなら次のとおり。USB の形を切り替えるたびに戻るので、続けて使うなら udev の規則（[contrib/udev/72-brain-wakeup.rules](contrib/udev/72-brain-wakeup.rules)）を入れる（規則は書いただけで、まだ試していない）。
+
+   ```sh
+   echo enabled | sudo tee /sys/bus/usb/devices/3-2/power/wakeup
+   # 続けて使う
+   sudo install -m 0644 contrib/udev/72-brain-wakeup.rules /etc/udev/rules.d/
+   sudo udevadm control --reload
+   ```
+
+4. **それでも起きないとき**：
+   - USB のホストコントローラが、スリープ中の USB からの起動を許しているか：`cat /proc/acpi/wakeup` の `XHCI`（か `XHC`）が `*enabled`（この PC は enabled）。
+   - ルートハブ：`cat /sys/bus/usb/devices/usb3/power/wakeup`（3 は Brain の番号の最初の数字）。この PC は `disabled`。起きないときは `echo enabled | sudo tee /sys/bus/usb/devices/usb3/power/wakeup` を試す。
+   - BIOS や UEFI の「USB からの起動（USB Wake Support など）」の設定。
+   - **スリープ中に USB の電源が切れる PC**：Brain から見ると、サスペンドではなく、抜いたのと同じ（`/sys/class/udc/ci_hdrc.0/state` が `not attached`）になり、起こせない。そのときにキーを押すと、`journalctl -u lefthand` に `wakeup: the USB is not attached` と出る（PC が起きてから `ssh brain sudo journalctl -u lefthand --since -10min | grep wakeup` で見る）。
+   - スリープの種類：`cat /sys/power/mem_sleep`（この PC は `deep`、S3）。
+
+macOS と Windows では、キーボードからのスリープ解除は、ふつうは設定なしで許される（試していない）。
+
+### PC で確かめる
+
+**Linux**：
+
+```sh
+# Brain の入力デバイスを見る（root でなくてよい）。キーボードとマウスの形では「SHARP Brain Keyboard」と「SHARP Brain Mouse」
+grep -A8 'SHARP Brain' /proc/bus/input/devices
+# 押したキーを見る（evtest。sudo apt install evtest）。一覧から SHARP Brain（Keyboard）を選び、Brain のセルを押す
+sudo evtest
+#   F13 → KEY_F13 (183)、F24 → KEY_F24 (194)
+#   メディアキー → KEY_PLAYPAUSE (164)、KEY_VOLUMEUP (115)、KEY_MUTE (113) など（キーボードとマウスの形のとき。
+#   Linux では、メディアキーは「SHARP Brain Keyboard」のデバイスに出る）
+# X11 のキーの名前を見る（xev。開いた窓にフォーカスを置いて押す）
+xev -event keyboard | grep -A2 KeyPress
+#   F13 → keycode 191 (keysym 0x1008ff81, XF86Tools)、F14 → keycode 192 (XF86Launch5) など
+# Wayland では、xev の代わりに wev か、sudo libinput debug-events
+```
+
+ブートキーボードの形でメディアキーを押しても、evtest には何も出ない（送っていないため）。Brain の `-v` のログ（`ssh brain sudo journalctl -u lefthand -f` は `-v` なしでは出ないので、[ログを見ながら試す](#ログを見ながら試す)の手順で動かす）に `media: ... not sent` と出る。
+
+**スリープ解除**：
+
+1. `cat /sys/bus/usb/devices/3-2/power/wakeup` が `enabled` であることを確かめる（上の「PC（Linux）の設定」）。
+2. PC をスリープさせる（`systemctl suspend`）。
+3. 数秒待ってから、Brain の本体のキー（文字のキーなど）を押す。PC が起きれば OK。
+4. 起きたあと、`ssh brain sudo journalctl -u lefthand --since -10min | grep wakeup` に `wakeup: woke the PC` が出ている。`the PC did not wake up` なら、上の「それでも起きないとき」。
+
+**macOS**：メディアキーはそのまま効く（音量の表示が出る）。F13〜F15 は画面の明るさの変更に使われることがある。「キーボード」の設定の「キーボードショートカット」で、F13 などを割り当てられるか確かめる（試していない）。
+**Windows**：メディアキーはそのまま効く。F13〜F24 は、アプリのショートカットとして割り当てる（試していない）。
+
+### BIOS や UEFI で確かめる
+
+1. Brain をブートキーボードの形にする（`brain-deck usb-mode` が「キーボードだけ（ブートキーボード）」。違えば `brain-deck usb-mode keyboard`）。
+2. PC を再起動し、BIOS や UEFI の設定画面（F2 や Del など。PC による）に入る。Brain の本体のキーで、矢印、Enter、Esc、文字が打てるか確かめる。
+3. ブートローダー（GRUB など）のメニューで、矢印と Enter が効くか確かめる。
+4. 打てなければ、`/usr/local/sbin/lefthand-gadget-setup.prev`（前の版。キーの番号の上限 0x65）に戻して比べる：`ssh brain 'sudo HID_MOUSE=0 /usr/local/sbin/lefthand-gadget-setup.prev'`（USB を付け直す）。
 
 ## 設定 GUI
 
@@ -1350,8 +1460,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | ファイル | 内容 |
 | --- | --- |
 | main.go | 入力の読み取り（touchProc）、HID レポートの送信、キャリブレーション、コマンドラインの処理 |
-| hid.go | HID の形（キーボードだけか、キーボードとマウスか）。レポートディスクリプタと、configfs から形を読み取る処理 |
+| hid.go | HID の形（キーボードだけか、キーボードとマウスとメディアキーか）。レポートディスクリプタと、configfs から形を読み取る処理 |
 | mouse.go | マウスのレポート（ボタン、移動、ホイール）、マウスの割り当て（mouse:） |
+| media.go | メディアキーのレポート（Consumer Control）、メディアキーの割り当て（media:） |
+| wakeup.go | スリープ中の PC を起こす（USB のリモートウェイクアップ。UDC の state と srp） |
 | usbmode.go | USB の形の切り替え（キーボードだけ ⇔ キーボードとマウス。usb_mode、set_usb_mode）。端末モードの構成の名前 |
 | term.go | 端末（VT100 / xterm の一部）。制御シーケンスの解釈、画面の文字の格子、履歴、文字の幅 |
 | termkeys.go | 端末モードの本体キーの変換（US 配列、Ctrl、Alt、矢印）と、タッチのキーのページ |
@@ -1387,7 +1499,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | systemd/ | サービスと drop-in（serial-getty@ttyGS0.service.d/ はシリアルコンソールの getty） |
 | install.sh | Brain 上での配置 |
 | console-setup.sh | シリアルコンソール（ttyGS0 の getty）を有効にする・元に戻す |
-| contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則（70）と、端末モードのときだけ getty を起動する規則（71） |
+| contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則（70）、端末モードのときだけ getty を起動する規則（71）、スリープ解除を許す規則（72） |
 | contrib/systemd/brain-terminal-getty@.service、contrib/profile.d/brain-terminal.sh | PC 用。端末モードの getty と、端末の大きさを合わせるスクリプト |
 | config.yaml | 設定の例。実機と同じ値 |
 | config/current.yaml | Brain で動いている本番の設定の写し（2026-10-07 にダッシュボードのレイヤーを足して反映。メニューの「ダッシュボード」から入り、HOME で戻る） |
@@ -1395,6 +1507,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config/background-example.yaml、config/background-images/ | 背景画像の例（current.yaml に背景を足したもの）と、式で描いた例の画像 |
 | tools/mkbg/ | 例の画像（グラデーションと模様）を作るツール |
 | config/trackpad-example.yaml | トラックパッドとマウスのボタンの例（current.yaml に「マウス」のレイヤーを足したもの） |
+| config/media-example.yaml | メディアキーと F13〜F24 の例（current.yaml に「メディア」と「F13〜F24」のレイヤーを足したもの） |
 | config/gadgets-example.yaml | 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプと、自動減光の例（widgets-example.yaml に「道具」と「共有」のレイヤーと backlight を足したもの） |
 | tools/record-touch.sh | トラックパッドの調整のために、動きごとにタッチを記録する（Brain で実行） |
 | tools/fbshot.sh | Brain の画面のスクリーンショットを、PC に PNG で保存する（PC で実行） |
@@ -1496,6 +1609,17 @@ go run . -render-png gui/test/fixtures/trackpad.png -render-layer mouse $C
 go run . -render-png gui/test/fixtures/trackpad-pressed.png -render-layer mouse -render-pressed "0,0 3,1" $C
 go run . -render-png gui/test/fixtures/trackpad-pressed-fill.png -render-layer mouse -render-press-style fill -render-pressed "0,0 3,1" $C
 go run . -render-png gui/test/fixtures/trackpad-off.png -render-layer mouse -render-mouse-off $C
+```
+
+メディアキーと F13〜F24 のプレビューの PNG は、次のコマンドで書き出す（`-render-mouse-off` で、メディアキーのセルが「マウスオフでは無効」になる）。
+送れるキーの名前とメディアキーの名前は、Go と GUI で同じ表（`gui/test/fixtures/keynames.json`）と比べる。名前を足したら `LEFTHAND_UPDATE_KEYNAMES=1 go test -run KeyNames` で書き直す。
+
+```sh
+C=config/media-example.yaml; F=gui/test/fixtures
+go run . -render-png $F/media.png -render-layer media $C
+go run . -render-png $F/media-off.png -render-layer media -render-mouse-off $C
+go run . -render-png $F/media-off-pressed-fill.png -render-layer media -render-mouse-off -render-pressed "1,0 0,1" -render-press-style fill $C
+go run . -render-png $F/fkeys.png -render-layer fkeys $C
 ```
 
 `TestHWCalendar` は、6 秒後に始まって 9 秒後に終わる予定で、予定の始まりと終わりに自分で描き直すことと、▲▼、PC から送り直したときの描き直しの時間を測る。
