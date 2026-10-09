@@ -30,12 +30,18 @@ func newFakeBacklight(t *testing.T, cur int) *fakeBacklight {
 	return &fakeBacklight{t: t, dir: dir}
 }
 
+// level は今の明るさ。ふつうのファイルなので、書いている途中（空）に読んだら読み直す（sysfs ではそうならない）。
 func (f *fakeBacklight) level() int {
-	v, err := readSysInt(filepath.Join(f.dir, "brightness"))
-	if err != nil {
-		f.t.Fatal(err)
+	var err error
+	for i := 0; i < 50; i++ {
+		var v int
+		if v, err = readSysInt(filepath.Join(f.dir, "brightness")); err == nil {
+			return v
+		}
+		time.Sleep(time.Millisecond)
 	}
-	return v
+	f.t.Fatal(err)
+	return 0
 }
 
 // waitLevel は、明るさが want になるまで待つ（書くのは別の goroutine）。
