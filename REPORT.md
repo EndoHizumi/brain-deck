@@ -6,6 +6,80 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ A　ウィジェットの追加と自動減光（2026-10-09）
+
+電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプのウィジェットと、自動減光（設定の `backlight`）を足した。brain-deck に `qr` と `presence` を足し、`status` に電池と画面の明るさを出すようにした。設定 GUI は、新しいウィジェットの編集とプレビュー（`-render-png` と画素単位で同じ）に対応した。
+
+### 実機で調べたこと（読むだけ。何も書き換えていない）
+
+| 調べたもの | 結果 |
+| --- | --- |
+| `/sys/class/power_supply` | ない。カーネルの `CONFIG_POWER_SUPPLY` が無効（Brainux の brain_defconfig のまま） |
+| 電池の電圧 | IIO の `iio:device0`（名前 `mxs-lradc-adc`）の ch7（VBATT）。`in_voltage7_raw` 2309 × `in_voltage7_scale` 1.8066 = 4171 mV（USB で PC につないだまま） |
+| USB の 5V | 同じく ch15（VDD5V）。2736 × 1.8066 = 4943 mV。i.MX28 の HW_POWER_STS（0x800440C0）でも VBUSVALID0_STATUS = 1 |
+| 充電の状態 | i.MX28 の内蔵の充電回路は止めてある（HW_POWER_CHARGE の PWD_BATTCHRG = 1、BATTCHRG_I = 0）。充電は外付けの IC が行っていて、その状態は GPIO（/sys/kernel/debug/gpio）にも出ていない。HW_POWER_STS の CHRGSTS は 1 だが、内蔵の充電回路の状態なので使わない。HW_POWER_BATTMONITOR の BATT_VAL は 523（× 8 mV = 4184 mV） |
+| バックライト | `/sys/class/backlight/backlight@0`（pwm-backlight、PWM0）。`max_brightness` 7、起動したときは 7。デバイスツリーの `brightness-levels` は 0 4 8 16 32 64 128 255（PWM の 255 分率）。0 で消える |
+| ブザー | デバイスツリーにブザーのピンの定義はあるが、PWM のピンの設定に入っておらず、入力デバイス（pwm-beeper）も出ていない。ポモドーロの知らせは画面だけにした |
+
+### 決めたこと
+
+| 項目 | 決めたこと | 理由 |
+| --- | --- | --- |
+| 電池の残り | power_supply があればそれを使い、なければ LRADC の電圧から Li-ion の目安の表で見積もる（30 秒ごと、5 回の移動平均）。「充電中」は USB の 5V があって 4.15 V より低いとき | 充電の IC の状態を読めない。USB につないでいるあいだは電圧が高めに出る（満充電に近く見える）ことを、文書と `estimated` に書いた |
+| 長押し | ストップウォッチ、ポモドーロ、カウンター、在席ランプは、離したときにタップの働き、0.5 秒（Todo と同じ todoHold）でリセットなど | 誤って触れただけで 0 に戻らないよう。押しているあいだは、ふつうのセルと同じ枠を光らせる |
+| 状態の保存 | `/var/lib/lefthand/widgets.json`（boot_id と終了した時刻も入れる）。動いているタイマーは、始めた時刻を覚える | デーモンの再起動では数え続ける。Brain の再起動では、RTC がなく起動直後の時刻が当てにならないので止め、終了した時刻（なければ最後に始めた時点）までの時間を残す。時刻合わせで時計が動いたら、始めた時刻も同じだけ動かす |
+| ポモドーロの段階 | 始めた時刻と作業・休憩の時間から、今の段階を計算で求める（状態を書き換えずに描ける。GUI も同じ計算） | 切り替わりで SD カードに書かずに済む。切り替わる時刻にタイマーを掛け、画面を明るくする |
+| ポモドーロの知らせ | 切り替わってから 15 秒、0.5 秒ごとにセル全体を段階の色で点滅させる。タップで止まる | ブザーが使えない。画面が暗いときは明るくする |
+| QR コード | Project Nayuki の QR Code generator library（MIT）の手順を、バイトモードだけに絞って Go と TypeScript に書いた。誤り訂正 M（収まれば上げる）、UTF-8 なら ECI | 依存を増やさない。プレビューを画素単位で合わせるため、両方で同じ模様にする。Go の結果の表を、Nayuki の Python 版（pip の qrcodegen）と比べ、7 例すべて同じ。描いた PNG を zxing-cpp で読み取れた |
+| QR の中身 | テキストのタイルと同じ仕組み（`set_qr`、`get_qr`、`qr.json`、`--ttl`）。400 バイトまで | 「テキストのタイルの仕組みにそろえる」。4×3 の格子の 2×3 のセルなら、400 バイト（バージョン 15）でも 1 升 4 ドットで入る |
+| 在席ランプ | 状態は名前で覚え、色と並びはセルの `states`。セル全体をその色で塗る。長押しで前の状態 | 名前と色は設定で決める。行き過ぎたときに戻れるよう |
+| 自動減光の書き方 | トップレベルの `backlight`（`dim_after`、`dim_level`、`off_after`、`level`、`wake_on_key`、`in_terminal`）。書かなければ減光しない | 本番の設定は変えないので、今の動きを変えない。設定 GUI から保存すると再起動なしで反映する |
+| 暗いときのタッチ | 明るくするだけで、離すまでのサンプルをすべて捨てる（学習モードにも知らせない） | 誤操作を防ぐ。キーは暗いときもそのまま PC に送る |
+| 明るさを戻す | 終わるときに起動したときの明るさに戻す。暗くしているあいだは `/run/lefthand-backlight` に戻す明るさを書き、`-restore-console`（ExecStopPost）が使う。次に起動したデーモンも、そこから本来の明るさを読む | 落ちたときに暗いまま残らないよう |
+
+### 実機での確認（2026-10-09）
+
+試験用の設定（`dim_after: 10s`、`off_after: 20s`、ウィジェットを base に並べたもの）と、別の `-data-dir`（/tmp/lh-hw-data。ストップウォッチとポモドーロの状態を書いておいた）で、`systemd-run` で 60 秒と 75 秒ずつ動かした。本番の設定と `/var/lib/lefthand/` は使っていない。
+
+- **自動減光**：明るさ（2 秒ごとに読んだ値）は 7 → 10 秒で 1 → ポモドーロの切り替わりで 7 → 10 秒後に 1 → 20 秒で 0 → 終了で 7。ログも `backlight: dim (1)`、`widgets: pomodoro switched`、`backlight: bright (7)`、`backlight: off (0)` の順。終わったあと `/run/lefthand-backlight` は消えていた。
+- **電池**：`battery: lradc, 100% (4172 mV), plugged=true`。`brain-deck status` は「100%、USB 給電（4.17 V。残りと充電中は電圧からの見積もり）」。
+- **brain-deck**：`qr share`、`presence 会議中`、`presence next --id door`、`presence`（一覧）、`qr --list`、`status` が通り、画面に出た。
+- **時刻合わせ**：Brain は再起動のあと時刻が 12 時間 18 分遅れていた。`brain-deck qr` が時刻を合わせたとき、`widgets: shifted 2 running timers by 12h18m43.515s` と出て、ストップウォッチは続いた値のまま（1:12）だった。
+- **点滅**：切り替わりから 15 秒、0.5 秒ごとに描き直した。描き直しは、ふだん 8〜16 ms。fbshot で画面を読んでいるあいだ（ssh で 768 KB を送るので CPU を取り合う）は 90〜230 ms になった。ストップウォッチの描き直しは約 4.6 ms、秒つきの時計は約 3.7 ms。
+- **終了**：`widgets.json` に、終了した時刻（`last_seen`）と boot_id を書いた。
+- **反映のあと**：本番の画面（base）のフレームバッファは、Brain の背景画像を使った `-render-png` と、RGB565 で全画素同じだった。
+
+確かめていないこと：Brain を再起動したあとにタイマーが止まること（再起動は許可を得てから。ホストのテストで確かめた）、暗いときのタッチを捨てること（タッチを自動で再現できない。ホストのテストで、touchProc を通して確かめた）、本体キーで明るくなること（同じ）、電池だけで動かしたときの値（USB を抜くと確かめられない）。
+
+### 確認（ホスト）
+
+- Go：`go test ./...` がすべて通る。新しく、ウィジェットの設定の検証、往復（YAML に書いて読み直す）、ストップウォッチとカウンター、ポモドーロの段階の計算（点滅、タップでの確認、一時停止と再開）、Brain の再起動とデーモンの再起動、時刻合わせでずらす、エンジンを通したタップと長押し（設定の差し替えで取り消す）、QR の表と上限、電池（LRADC と power_supply の偽の sysfs）、自動減光（偽の backlight で、暗くする・消す・タッチを捨てる・キー・端末モード・設定の差し替え・終わるときと落ちたあとに戻す）、プロトコル（set_qr、get_qr、get_widgets、set_presence、widgets の通知、set_time で QR の期限もずらす）。
+- brain-deck：PTY の偽の Brain で qr、presence、終了コード。
+- 設定 GUI：`npm test` の 152 件が通る。新しく、QR の模様（Go の表と同じ）、プレビュー 7 枚（「道具」「共有」のレイヤー、動いている・止めている・点滅・押したとき・fill・期限切れ）が `-render-png` と画素単位で同じ、新しいウィジェットの編集と Brain の状態と通知、backlight が保存で残ること。
+- 例の設定 `config/gadgets-example.yaml` は `lefthand -check` を通る。
+
+### 反映
+
+- Brain：`/usr/local/bin/lefthand` を 0e27fc1 の版にし、サービスを再起動した。前の版は `/usr/local/bin/lefthand.prev`（2026-10-08 13:31、端末モードの版）。`~/lefthand/lefthand` も同じ。`/etc/lefthand/config.yaml` のハッシュは前後で同じ（809cafb2…）。`/var/lib/lefthand/` には書いていない（試験は /tmp/lh-hw-data）。
+- 本番の設定には新しいウィジェットも `backlight` もないので、見た目と動きは前と同じ。`brain-deck status` は「自動減光なし」。
+- PC：`~/.local/bin/brain-deck` を新しい版にした（前の版は `brain-deck.prev`）。設定 GUI は `gui/dist/` を作り直した。
+- 戻すとき：`ssh brain 'sudo cp /usr/local/bin/lefthand.prev /usr/local/bin/lefthand && sudo systemctl restart lefthand.service'`。
+
+### 目で確かめる手順
+
+1. **例の設定を開く**：設定 GUI で「ファイルを開く」から `config/gadgets-example.yaml` を開き、「Brain に保存…」で保存する（前の設定は `config.yaml.prev` に残る。戻すときは `config/current.yaml` を開いて保存）。
+2. **メニュー → 道具**：ストップウォッチをタップして数え始め、もう一度タップで止まる（「停止中」が黄色）。0.5 秒押し続けると 0 に戻る。カウンター（右上、「コーヒー」）をタップすると 1 ずつ増え、長押しで 0。電池のセルに残りと「USB 給電」か「充電中」が出る。右の「在室」をタップすると「不在」（灰色）に、もう一度で「在室」（緑）に。
+3. **ポモドーロ**：試すなら設定 GUI でセルの「作業の時間」「休憩の時間」を 1m にして保存し、タップして始める。1 分で休憩に変わり、セルが緑で 15 秒点滅する（タップすると点滅が止まる）。
+4. **メニュー → 共有**：PC で `brain-deck qr share "https://github.com/endohizumi/brain-deck"` を実行すると、左に QR コードが出る。スマホのカメラで読めることを確かめる。`brain-deck presence 会議中` で右のランプが橙の「会議中」になる。タップで次の状態（休憩、在席…）、長押しで前の状態。
+5. **自動減光**：1 分触らないと暗くなり、5 分で消える。暗いときに「保存」などのキーのセルを触ると、明るくなるだけで、PC には何も送られない（もう一度触ると送られる）。暗いときに本体キーで文字を打つと、PC に文字が入り、画面も明るくなる。端末モードのあいだは暗くならない。
+6. **元に戻す**：設定 GUI で `config/current.yaml` を開いて保存する。ストップウォッチなどの状態は `/var/lib/lefthand/widgets.json`、QR は `qr.json` に残る（`brain-deck qr share --clear` で消せる）。
+
+### 残っている課題
+
+- 電池の残りと「充電中」は、電圧からの見積もり。USB につないでいるあいだは多めに出る。電池だけのときの値や、見積もりの表が合っているかは、まだ確かめていない（USB を抜いたまま数時間使ってから、`brain-deck status` で見るとよい）。
+- 本番の Brain の時計は合っているが（試験で brain-deck が合わせた）、本番のデーモンは「この起動で合わせた」と知らないので、時計のウィジェットは「時刻未設定」と出る。設定 GUI をつなぐか `brain-deck time sync` で直る（本番のデータを書くので、作業では行っていない）。
+- Brain の再起動をまたいだタイマーの扱い、暗いときのタッチと本体キーは、実機では確かめていない（上の手順 5）。
+
 ## 追記：端末モード（2026-10-08）
 
 Brain の画面とキーボードで、USB でつないだ PC（画面やキーボードのない PC）にログインして操作できるようにした（README の「端末モード」）。PC の OS が起動したあとだけ使える。BIOS、GRUB、カーネルのメッセージは見えない。
