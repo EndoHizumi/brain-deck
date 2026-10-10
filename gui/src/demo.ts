@@ -42,7 +42,9 @@ export class FakeDaemon {
   photoMax = 10
   // 読み物（list_reads、delete_read）
   reads: { id: string; title: string; author?: string; kind: string; bytes: number; chars: number; added: string; pos?: { b: number; c: number }; progress?: number }[] = []
-  private photoUp: { token: string; name: string; of?: string; bytes: number; parts: Uint8Array[]; got: number } | null = null
+  private photoUp: { token: string; name: string; of?: string; path?: string; bytes: number; parts: Uint8Array[]; got: number } | null = null
+  // ファイル（list_files、get_file、delete_file、upload_* の kind: file）。/home/user の下だけ、フォルダは 1 段
+  files = new Map<string, Uint8Array>([['/home/user/memo.txt', new TextEncoder().encode('買うもの\n牛乳\n')]])
   private nextTodo = 1
   dataSubscribed = false
   // 通知を送る先（FakeTransport が設定する）
@@ -89,7 +91,7 @@ export class FakeDaemon {
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
             'set_calendar', 'get_calendar', 'set_weather', 'get_weather', 'get_weather_icon', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal', 'set_rotate',
             'set_qr', 'get_qr', 'get_widgets', 'set_presence', 'add_graph', 'clear_graph', 'get_graph',
-            'upload_begin', 'upload_chunk', 'upload_end', 'upload_abort', 'list_photos', 'get_photo', 'delete_photo', 'list_reads', 'delete_read'], upload_kinds: ['photo'] })
+            'upload_begin', 'upload_chunk', 'upload_end', 'upload_abort', 'list_photos', 'get_photo', 'delete_photo', 'list_reads', 'delete_read', 'list_files', 'get_file', 'delete_file'], upload_kinds: ['photo', 'file'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
@@ -260,6 +262,12 @@ export class FakeDaemon {
         this.reads.splice(i, 1)
         return ok({ deleted: req.read })
       }
+      case 'list_files':
+      case 'get_file':
+      case 'delete_file': {
+        const r = this.fileCmd(req)
+        return Array.isArray(r) ? err(r[0], r[1]) : ok(r)
+      }
       case 'subscribe_input':
         this.subscribed = req.enable !== false
         this.suppress = this.subscribed && !!req.suppress
@@ -269,10 +277,42 @@ export class FakeDaemon {
     }
   }
 
+  // fileCmd は、ファイルの一覧、読み出し、削除（files.go をまねる）。
+  private fileCmd(req: any): Record<string, unknown> | [string, string] {
+    const now = new Date().toISOString()
+    switch (req.cmd) {
+      case 'list_files':
+        if (!req.path) return { path: '', entries: [{ name: 'ホーム', path: '/home/user', dir: true, size: 0, mtime: now }], free_bytes: 100 << 20, total_bytes: 1 << 30 }
+        if (req.path !== '/home/user') return ['not_allowed', `outside the allowed places: ${req.path}`]
+        return { path: req.path, root: 'ホーム', delete: true, put: true, parent: '', free_bytes: 100 << 20, total_bytes: 1 << 30,
+          entries: [...this.files].map(([p, d]) => ({ name: p.slice(req.path.length + 1), path: p, size: d.length, mtime: now }))
+            .sort((a, b) => (req.by_size ? b.size - a.size : a.name < b.name ? -1 : 1)) }
+      case 'get_file': {
+        const d = this.files.get(req.path)
+        if (!d) return ['not_found', `no such file: ${req.path}`]
+        const off = req.offset ?? 0
+        const b = d.subarray(off, off + 98304)
+        let s = ''
+        for (const x of b) s += String.fromCharCode(x)
+        return { path: req.path, offset: off, total: d.length, data: btoa(s) }
+      }
+      case 'delete_file':
+        if (!this.files.delete(req.path)) return ['not_found', `no such file: ${req.path}`]
+        return { deleted: req.path }
+    }
+    return ['unknown_command', req.cmd]
+  }
+
   // photoCmd は、写真の受け取り（upload_*、kind: photo）、一覧、読み出し、削除（photo.go をまねる）。
   private photoCmd(req: any): Record<string, unknown> | [string, string] {
     switch (req.cmd) {
       case 'upload_begin': {
+        if (req.kind === 'file') {
+          if (req.path !== '/home/user') return ['not_allowed', `files cannot be added to ${req.path}`]
+          if (this.files.has(`${req.path}/${req.name}`)) return ['not_allowed', `${req.path}/${req.name} already exists`]
+          this.photoUp = { token: 'f' + Date.now(), name: req.name, path: req.path, bytes: req.bytes, parts: [], got: 0 }
+          return { upload: this.photoUp.token, chunk_bytes: 98304 }
+        }
         if (req.kind !== 'photo') return ['bad_request', `unknown "kind" ${req.kind}`]
         if (this.photos.size >= this.photoMax) return ['quota_exceeded', `there are already ${this.photos.size} photos (photo.max is ${this.photoMax})`]
         this.photoUp = { token: 'p' + Date.now(), name: req.name ?? '', of: req.of, bytes: req.bytes, parts: [], got: 0 }
@@ -297,6 +337,10 @@ export class FakeDaemon {
         for (const p of u.parts) {
           data.set(p, o)
           o += p.length
+        }
+        if (u.path) {
+          this.files.set(`${u.path}/${u.name}`, data)
+          return { path: `${u.path}/${u.name}`, bytes: data.length }
         }
         const w = data[4] | (data[5] << 8)
         const h = data[6] | (data[7] << 8)

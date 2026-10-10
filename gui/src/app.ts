@@ -41,6 +41,8 @@ import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, PhotoListResult, ReadListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode, InputKind,
+  FileEntry,
+  FileListResult,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -181,8 +183,13 @@ export class App {
   previewOffline = false // プレビューを、PC から外したときの画面にする
   brainLastSync: Date | null = null // Brain で最後に時刻を合わせた時刻（get_status の time.last_set）
   // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
-  section: 'config' | 'todo' | 'photos' | 'reads' | 'console' = 'config'
+  section: 'config' | 'todo' | 'photos' | 'reads' | 'files' | 'console' = 'config'
   reads: ReadListResult | null = null // Brain の読み物（list_reads）
+  files: FileListResult | null = null // Brain のファイル（list_files）
+  filesPath = '' // 見ているフォルダ（空なら場所の一覧）
+  filesBySize = false
+  filesBusy: string | null = null // 送っている、読んでいる
+  filePreview: { path: string; text?: string; url?: string; note?: string } | null = null
   photos: PhotoListResult | null = null // Brain の写真（list_photos）
   photoView: { id: string; img: Image565 } | null = null // 「見る」で読んだ写真
   photoBusy = false
@@ -1041,6 +1048,206 @@ export class App {
       h('p', { class: 'hint' }, '読み物を足すのは PC のコマンドです：brain-deck read add <青空文庫のテキストか zip | EPUB | Web のページの URL>、' +
         'RSS は brain-deck read feed add <URL> と brain-deck read feed sync。DRM のかかった電子書籍は扱いません。' +
         'Brain では、読み物のアプリ（セルの種類「ウィジェット」→「読み物」）で読みます。'),
+    )
+  }
+
+  // ---------- ファイル ----------
+
+  get filesSupported(): boolean {
+    return !!this.hello?.commands?.includes('list_files')
+  }
+
+  async loadFiles(path: string): Promise<void> {
+    if (!this.connected || !this.filesSupported) return
+    this.filesBusy = this.filesBySize && path ? 'フォルダの中の大きさを数えています（8 秒まで）…' : null
+    this.render()
+    try {
+      this.files = await this.client!.request<FileListResult>('list_files', { path, by_size: this.filesBySize }, 20000)
+      this.filesPath = this.files.path
+    } catch (e: any) {
+      this.say(`ファイルの一覧を読めませんでした：${e?.message ?? e}`, 'error')
+      if (path) return this.loadFiles('')
+    } finally {
+      this.filesBusy = null
+    }
+    this.render()
+  }
+
+  // readBrainFile は、get_file で Brain のファイルを読む（96 KiB ずつ）。
+  async readBrainFile(path: string, limit = Infinity): Promise<Uint8Array> {
+    const c = this.client!
+    const parts: Uint8Array[] = []
+    let got = 0
+    for (;;) {
+      const r = await c.request<{ total: number; data: string }>('get_file', { path, offset: got }, 15000)
+      const b = fromBase64(r.data)
+      parts.push(b)
+      got += b.length
+      if (got >= r.total || !b.length || got >= limit) break
+      this.filesBusy = `読んでいます：${kb(got)} / ${kb(r.total)}`
+      this.render()
+    }
+    const all = new Uint8Array(got)
+    let o = 0
+    for (const p of parts) {
+      all.set(p, o)
+      o += p.length
+    }
+    return all
+  }
+
+  async downloadFile(e: FileEntry): Promise<void> {
+    try {
+      const b = await this.readBrainFile(e.path)
+      const url = URL.createObjectURL(new Blob([b as any]))
+      const a = h('a', { href: url, download: e.name })
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      this.say(`${e.name} を取り出しました（${kb(b.length)}）`, 'ok')
+    } catch (err: any) {
+      this.say(`取り出せませんでした：${err?.message ?? err}`, 'error')
+    } finally {
+      this.filesBusy = null
+    }
+    this.render()
+  }
+
+  // previewFile は、テキスト（最初の 64 KiB）と画像（ブラウザで開ける形）を見る。
+  async previewFile(e: FileEntry): Promise<void> {
+    if (this.filePreview?.url) URL.revokeObjectURL(this.filePreview.url)
+    this.filePreview = null
+    const ext = e.name.toLowerCase().split('.').pop() ?? ''
+    const img = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)
+    try {
+      if (img) {
+        if (e.size > 16 << 20) {
+          this.filePreview = { path: e.path, note: `${kb(e.size)} は大きいので、ここでは見ません（取り出して見てください）` }
+        } else {
+          const b = await this.readBrainFile(e.path)
+          this.filePreview = { path: e.path, url: URL.createObjectURL(new Blob([b as any], { type: ext === 'jpg' ? 'image/jpeg' : `image/${ext}` })) }
+        }
+      } else {
+        const b = await this.readBrainFile(e.path, 64 << 10)
+        if (b.subarray(0, 4096).includes(0)) {
+          this.filePreview = { path: e.path, note: 'テキストのファイルではありません（取り出して開いてください）' }
+        } else {
+          let text = new TextDecoder('utf-8', { fatal: false }).decode(b.subarray(0, 64 << 10))
+          if (e.size > b.length) text += `\n…（最初の ${kb(b.length)} だけ）`
+          this.filePreview = { path: e.path, text }
+        }
+      }
+    } catch (err: any) {
+      this.say(`読めませんでした：${err?.message ?? err}`, 'error')
+    } finally {
+      this.filesBusy = null
+    }
+    this.render()
+  }
+
+  // putFiles は、ファイルを今のフォルダに足す（upload_*、kind: file）。同じ名前があれば Brain が断る。
+  async putFiles(list: FileList | File[]): Promise<void> {
+    const c = this.client
+    const dir = this.files?.path
+    if (!c || !dir || !this.files?.put) return this.say('この場所にはファイルを足せません', 'error')
+    for (const f of Array.from(list)) {
+      this.filesBusy = `送っています：${f.name}`
+      this.render()
+      try {
+        const file = new Uint8Array(await f.arrayBuffer())
+        const sha = await sha256Hex(file)
+        const b = await c.request<{ upload: string; chunk_bytes: number }>('upload_begin',
+          { kind: 'file', sha256: sha, bytes: file.length, name: f.name, path: dir, source: 'gui' })
+        try {
+          for (let off = 0; off < file.length; off += b.chunk_bytes) {
+            const end = Math.min(off + b.chunk_bytes, file.length)
+            await c.request('upload_chunk', { upload: b.upload, offset: off, data: toBase64(file.subarray(off, end)) }, 15000)
+            this.filesBusy = `送っています：${f.name}（${kb(end)} / ${kb(file.length)}）`
+            this.render()
+          }
+          await c.request('upload_end', { upload: b.upload }, 30000)
+        } catch (e) {
+          await c.request('upload_abort', { upload: b.upload }).catch(() => {})
+          throw e
+        }
+        this.say(`${f.name} を足しました`, 'ok')
+      } catch (e: any) {
+        this.say(`${f.name} を足せませんでした：${e?.message ?? e}`, 'error')
+      }
+    }
+    this.filesBusy = null
+    await this.loadFiles(dir)
+  }
+
+  async deleteFile(e: FileEntry): Promise<void> {
+    if (!this.deps.confirm(`${e.path} を Brain から消します。元に戻せません。よいですか？`)) return
+    try {
+      await this.client!.request('delete_file', { path: e.path })
+      this.say(`${e.name} を消しました`, 'ok')
+      if (this.filePreview?.path === e.path) this.filePreview = null
+    } catch (err: any) {
+      this.say(`消せませんでした：${err?.message ?? err}`, 'error')
+    }
+    await this.loadFiles(this.filesPath)
+  }
+
+  private viewFiles(): HTMLElement {
+    const panel = (...c: (HTMLElement | HTMLElement[] | null)[]) => h('section', { class: 'panel files-panel' }, h('h2', null, 'ファイル（Brain）'), c)
+    if (!this.connected) return panel(h('p', { class: 'hint' }, 'Brain に接続すると、Brain のファイル（設定の files.roots の場所）を見て、取り出し、足し、消せます。'))
+    if (!this.filesSupported) return panel(h('div', { class: 'warn' }, 'Brain の lefthand がファイルに対応していません。lefthand を新しくしてください'))
+    const l = this.files
+    const busy = !!this.filesBusy
+    const pick = h('input', { type: 'file', multiple: true, class: 'hidden', onchange: (e: Event) => {
+      const el = e.target as HTMLInputElement
+      const fs = Array.from(el.files ?? [])
+      el.value = ''
+      if (fs.length) void this.putFiles(fs)
+    } })
+    const when = (s: string) => (s.startsWith('0001-') ? '（まだない）' : new Date(s).toLocaleString())
+    const row = (e: FileEntry) => h('tr', { dataset: { path: e.path } },
+      h('td', null, e.dir
+        ? h('a', { href: '#', class: 'dir', onclick: (ev: Event) => { ev.preventDefault(); this.filePreview = null; void this.loadFiles(e.path) } }, e.name + '/')
+        : h('span', null, e.name, e.link ? h('span', { class: 'hint' }, ' →（リンク。たどらない）') : null)),
+      h('td', null, l!.path === '' ? e.path : e.dir && !this.filesBySize ? '' : kb(e.size)),
+      h('td', null, when(e.mtime)),
+      h('td', null,
+        !e.dir && !e.link ? h('button', { class: 'small', disabled: busy, onclick: () => void this.previewFile(e) }, '見る') : null,
+        !e.dir && !e.link ? h('button', { class: 'small', disabled: busy, onclick: () => void this.downloadFile(e) }, '取り出す') : null,
+        l!.delete && l!.path ? h('button', { class: 'small danger', disabled: busy, onclick: () => void this.deleteFile(e) }, '削除') : null))
+    const p = this.filePreview
+    return panel(
+      h('div', { class: 'files-bar',
+        ondragover: (e: DragEvent) => e.preventDefault(),
+        ondrop: (e: DragEvent) => {
+          e.preventDefault()
+          const fs = e.dataTransfer?.files
+          if (fs?.length) void this.putFiles(fs)
+        } },
+        h('button', { id: 'files-up', disabled: busy || !l?.path, onclick: () => { this.filePreview = null; void this.loadFiles(l?.parent ?? '') } }, '↑ 上へ'),
+        h('label', null, h('input', { type: 'checkbox', checked: this.filesBySize, onchange: (e: Event) => {
+          this.filesBySize = (e.target as HTMLInputElement).checked
+          void this.loadFiles(this.filesPath)
+        } }), ' 大きい順（フォルダは中の合計）'),
+        pick,
+        l?.put ? h('button', { class: 'primary', id: 'files-add', disabled: busy, onclick: () => pick.click() }, 'ファイルを足す…') : null,
+        l?.put ? h('span', { class: 'hint' }, ' ファイルをここにドロップしてもよい') : null),
+      h('div', { class: 'source' }, l ? (l.path ? `${l.path}（${l.root}。${l.delete ? '足す・消すことができる' : '読むだけ'}）` : '見られる場所') : ''),
+      this.filesBusy ? h('p', { class: 'hint' }, this.filesBusy) : null,
+      l
+        ? l.entries.length
+          ? h('table', { class: 'files' },
+            h('thead', null, h('tr', null, ['名前', l.path ? '大きさ' : '場所', '更新した日時', ''].map((x) => h('th', null, x)))),
+            h('tbody', null, l.entries.map(row)))
+          : h('p', { class: 'hint' }, '空のフォルダです。')
+        : h('p', { class: 'hint' }, '読み込んでいます…'),
+      l ? h('p', { class: 'hint' }, `${l.entries.length} 個${l.truncated ? '（多いので最初の 2000 個）' : ''}${l.partial ? '。数え終わらなかったフォルダは途中までの合計' : ''}。SD カードの空き ${kb(l.free_bytes)}。`) : null,
+      p ? h('div', { class: 'file-preview' }, h('h3', null, p.path),
+        p.note ? h('p', { class: 'hint' }, p.note) : null,
+        p.text !== undefined ? h('pre', null, p.text) : null,
+        p.url ? h('img', { src: p.url, alt: p.path, style: 'max-width: 100%; max-height: 480px' }) : null) : null,
+      h('p', { class: 'hint' }, '見られるのは設定の files.roots の場所だけです（書かなければ /home/user と写真、メモ、読み物のデータ）。' +
+        '/boot やパスワードのファイルは出しません。足す・消すのは delete: true の場所だけです。PC のコマンドでは brain-deck files ls | get | put | rm。'),
     )
   }
 
@@ -1931,7 +2138,7 @@ export class App {
       { class: 'app' },
       this.viewHeader(),
       this.viewMessages(),
-      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' || this.section === 'photos' || this.section === 'reads' ? this.viewEditor() : this.viewStart(),
+      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' || this.section === 'photos' || this.section === 'reads' || this.section === 'files' ? this.viewEditor() : this.viewStart(),
       this.diff ? this.viewDiff() : null,
       this.imageEdit ? this.viewImageEdit() : null,
     )
@@ -2013,6 +2220,8 @@ export class App {
         ? this.viewPhotos()
         : this.section === 'reads'
         ? this.viewReads()
+        : this.section === 'files'
+        ? this.viewFiles()
         : [
             h('div', { class: 'source' }, `編集中：${this.source}`, this.dirty ? h('span', { class: 'dirty' }, '（未保存の変更あり）') : null),
             this.viewTabs(),
@@ -2031,10 +2240,11 @@ export class App {
     )
   }
 
-  showSection(s: 'config' | 'todo' | 'photos' | 'reads' | 'console'): void {
+  showSection(s: 'config' | 'todo' | 'photos' | 'reads' | 'files' | 'console'): void {
     this.section = s
     if (s === 'photos') void this.loadPhotos()
     if (s === 'reads') void this.loadReads()
+    if (s === 'files') void this.loadFiles(this.filesPath)
     this.render()
     if (s === 'console') this.console.focus()
   }
@@ -2054,6 +2264,8 @@ export class App {
       h('button', { role: 'tab', id: 'section-reads', class: ['section', this.section === 'reads' && 'active'],
         'aria-selected': this.section === 'reads' ? 'true' : 'false', onclick: () => this.showSection('reads') },
         '読み物', this.reads?.reads.length ? h('span', { class: 'count' }, String(this.reads.reads.length)) : null),
+      h('button', { role: 'tab', id: 'section-files', class: ['section', this.section === 'files' && 'active'],
+        'aria-selected': this.section === 'files' ? 'true' : 'false', onclick: () => this.showSection('files') }, 'ファイル'),
       h('button', { role: 'tab', id: 'section-console', class: ['section', this.section === 'console' && 'active'],
         'aria-selected': this.section === 'console' ? 'true' : 'false', onclick: () => this.showSection('console') },
         'コンソール', this.console.open ? h('span', { class: 'count ok' }, '接続中') : null))
@@ -3083,6 +3295,9 @@ export class App {
         : own.widget === 'pentablet' ? this.viewPenTabEditor(own)
         : own.widget === 'memo' ? this.viewMemoEditor()
         : own.widget === 'reader' ? this.viewReaderEditor()
+        : own.widget === 'files' ? [h('p', { class: 'hint' }, 'Brain のファイル（設定の files.roots の場所。書かなければ /home/user と写真、メモ、読み物のデータ）を、Brain の画面で見ます。' +
+          'タップでフォルダを開く・ファイルの中を見る（テキストと画像）。見ているときに真ん中をタップすると、読み物、写真、背景画像に足せます。' +
+          '行を 0.8 秒押し続けると、消すかを聞きます（delete: true の場所だけ）。大きさは 1×1（レイヤー全体）がおすすめです。')]
         : own.widget === 'clock' ? this.viewClockEditor(text, missing) : this.viewGadgetEditor(own),
     )
   }

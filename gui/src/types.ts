@@ -64,7 +64,7 @@ export interface ActionSpec {
   pressure_range?: [number, number] // 筆圧の 0 と最大にする押す強さ（既定 [400, 2400]）
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo' | 'reader'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo' | 'reader' | 'files'
 
 // プレゼン用タイマーの色の区切り 1 つ（presenter.go の PresenterColorSpec）
 export interface PresenterColorSpec {
@@ -235,6 +235,7 @@ export interface Config {
   terminal?: TerminalConfig
   backlight?: BacklightConfig
   photo?: PhotoConfig
+  files?: { roots?: { name: string; path: string; delete?: boolean }[] } // ファイルエクスプローラの見られる場所（files.go）
   home?: HomeConfig // ホーム画面（home.go）
   status_bar?: StatusBarConfig // 状態の帯（statusbar.go）
   offline?: { home?: boolean } // PC から外したときの動き（offline.go）
@@ -582,3 +583,26 @@ export interface WidgetsEvent extends WidgetsState {
 }
 
 export type Notification = InputEvent | LayerEvent | TodoEvent | TerminalEvent | WidgetsEvent
+
+// list_files の 1 行（ファイルエクスプローラ。files.go）
+export interface FileEntry {
+  name: string
+  path: string
+  dir?: boolean
+  link?: boolean
+  size: number
+  mtime: string
+}
+
+export interface FileListResult {
+  path: string // 空なら場所の一覧
+  root?: string
+  delete?: boolean
+  put?: boolean
+  parent?: string
+  entries: FileEntry[]
+  truncated?: boolean
+  partial?: boolean
+  free_bytes: number
+  total_bytes: number
+}

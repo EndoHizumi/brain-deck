@@ -1196,3 +1196,27 @@ describe('ホーム画面、状態の帯、縦向きの格子、画面の向き'
     expect(t.app.cfg!.offline).toBeUndefined()
   })
 })
+
+describe('ファイル', () => {
+  it('Brain のファイルの一覧を出し、見て、足して、消せる', async () => {
+    const t = await connected()
+    t.click('#section-files')
+    await vi.waitFor(() => expect(t.app.files?.entries.length).toBe(1))
+    expect(t.$('.files-panel').textContent).toContain('見られる場所')
+    t.$<HTMLAnchorElement>('a.dir').click()
+    await vi.waitFor(() => expect(t.app.files?.path).toBe('/home/user'))
+    expect(t.$('.files-panel').textContent).toContain('memo.txt')
+    t.$<HTMLButtonElement>('tr[data-path="/home/user/memo.txt"] button').click()
+    await vi.waitFor(() => expect(t.app.filePreview?.text).toContain('牛乳'))
+    expect(t.$('.file-preview pre').textContent).toContain('買うもの')
+    // 足す（ドロップと同じ putFiles）
+    await t.app.putFiles([new File([new Uint8Array([1, 2, 3])], 'a.bin')])
+    expect([...t.daemon.files.get('/home/user/a.bin')!]).toEqual([1, 2, 3])
+    expect(t.$('.files-panel').textContent).toContain('a.bin')
+    // 同じ名前は断られる
+    await t.app.putFiles([new File([new Uint8Array([9])], 'a.bin')])
+    expect(t.app.messages.at(-1)?.text ?? '').toContain('足せませんでした')
+    t.$<HTMLButtonElement>('tr[data-path="/home/user/a.bin"] button.danger').click()
+    await vi.waitFor(() => expect(t.daemon.files.has('/home/user/a.bin')).toBe(false))
+  })
+})

@@ -242,3 +242,11 @@ main.console-main { padding-bottom: 0; }
   min-width: 0;
   max-width: 100%;
 }
+
+/* ファイル（Brain のファイル） */
+.files-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; border: 1px dashed #c8ccd4; border-radius: 6px; }
+table.files { border-collapse: collapse; font-size: 13px; margin: 6px 0; width: 100%; }
+table.files td, table.files th { padding: 3px 8px; border-bottom: 1px solid #eef0f3; text-align: left; }
+table.files td:nth-child(2) { text-align: right; white-space: nowrap; }
+table.files a.dir { font-weight: bold; }
+.file-preview pre { max-height: 420px; overflow: auto; white-space: pre-wrap; background: #f6f7f9; padding: 8px; border-radius: 4px; }

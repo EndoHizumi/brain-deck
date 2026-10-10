@@ -22,3 +22,14 @@ export function drawReaderEmpty(px: Px, area: Rect, fit: Fit, centered: Centered
     centered(area, y + i * FONT_H * 2 + 4 * i, l, s, colReadSub)
   })
 }
+
+// drawFilesPlaceholder は、ファイルエクスプローラ（widget: files）のプレビュー。中身は Brain のファイルなので、説明だけ。
+export function drawFilesPlaceholder(px: Px, area: Rect, fit: Fit, centered: Centered): void {
+  px.fill(area, colReadBar)
+  const lines = ['ファイル', 'Brain のファイルを見る（「ファイル」のタブ）']
+  const y = area.y0 + Math.trunc((area.y1 - area.y0) / 2) - FONT_H * 2
+  lines.forEach((l, i) => {
+    const s = Math.min(fit([l], area.x1 - area.x0 - 8, FONT_H * 2, 2), 2)
+    centered(area, y + i * FONT_H * 2 + 4 * i, l, s, colReadSub)
+  })
+}
