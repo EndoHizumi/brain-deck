@@ -1146,6 +1146,12 @@ func terminalCommand(o *options) (func(*Client) (string, error), error) {
 			if r.Info.State == "on" {
 				return "端末モードに入っています", nil
 			}
+			if r.Info.State == "choosing" {
+				return "Brain の画面で、つなぐ先（PC か Brain）を選んでください（brain-deck terminal pc か brain で直接選べます）", nil
+			}
+			if mode == "brain" {
+				return "Brain 自身にログインします（Brain の画面でパスワードを聞きます。USB は付け直しません）", nil
+			}
 			return "端末モードに入ります。シリアルの端末モードでは USB を付け直すので、数秒、キー入力、SSH、シリアルが切れます", nil
 		}
 		if r.Info.State == "off" {

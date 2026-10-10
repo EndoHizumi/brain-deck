@@ -236,7 +236,9 @@ func (r *termRenderer) drawStatus(cv *Canvas, st termStatus, f *termFrame) {
 	if st.Alt {
 		parts = append(parts, "[Alt]")
 	}
-	parts = append(parts, itoaB(f.Cols)+"×"+itoaB(f.Rows))
+	if f.Cols > 0 { // 選ぶ画面では、まだ端末がない
+		parts = append(parts, itoaB(f.Cols)+"×"+itoaB(f.Rows))
+	}
 	if st.Exitable {
 		parts = append(parts, "HOME で抜ける")
 	} else {
