@@ -1214,7 +1214,12 @@ func main() {
 	battery.SetCurve(batP.curve)
 	guard := NewBatteryGuard(batP, *dataDir)
 	guard.wake = dim.Wake
-	guard.backlight = func() int { return dim.Info().Level }
+	guard.backlight = func() int {
+		if in := dim.Info(); in.Enabled {
+			return in.Level
+		}
+		return currentBacklight() // 自動減光を使っていなければ、今の明るさを読む
+	}
 	var powerOff func() error // 電池が少ないときに電源を切る（更新の係ができたら決める）
 	guard.poweroff = func() error {
 		if powerOff == nil {

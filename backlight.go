@@ -211,6 +211,19 @@ func (b *Backlight) write(level int) error {
 	return os.WriteFile(filepath.Join(b.dir, "brightness"), []byte(strconv.Itoa(level)+"\n"), 0)
 }
 
+// currentBacklight は、最初のバックライトの今の明るさ。読めなければ -1。
+func currentBacklight() int {
+	ds, _ := filepath.Glob(filepath.Join(backlightClass, "*"))
+	if len(ds) == 0 {
+		return -1
+	}
+	v, err := readSysInt(filepath.Join(ds[0], "brightness"))
+	if err != nil {
+		return -1
+	}
+	return v
+}
+
 // restoreBacklight は、暗くしたまま終わったデーモンの明るさを戻す（-restore-console）。
 func restoreBacklight() {
 	s, err := os.ReadFile(backlightStateFile)

@@ -712,6 +712,9 @@ func TestBacklightOffline(t *testing.T) {
 	if d.Info().Offline {
 		t.Fatal("still offline")
 	}
+	if currentBacklight() != 6 {
+		t.Fatalf("currentBacklight %d", currentBacklight())
+	}
 	none := dimParamsFor(t, "{ dim_after: 1m }")
 	if none.offline != nil {
 		t.Fatal("offline params without offline")

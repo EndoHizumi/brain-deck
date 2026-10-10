@@ -775,7 +775,7 @@ README の「Brain の保守」。lefthand が systemd のサービスとして�
 | `vbus_mv` | USB の 5V |
 | `percent` | 見積もった残り |
 | `plugged` | 5V があるか |
-| `backlight` | 画面の明るさ（0〜7。自動減光を使っていなければ空のことがある） |
+| `backlight` | 画面の明るさ（PW-SH2 は 0〜7。読めなければ -1） |
 | `event` | `start`（起動）、`unplugged`、`plugged`、`warn`、`critical`、`poweroff-countdown`、`poweroff-cancelled`、`poweroff` |
 
 行を書くのは、5V がないあいだは 30 秒ごと、5V があるあいだは起動したときとつないだときだけ。
