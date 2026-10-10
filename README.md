@@ -1,21 +1,33 @@
-# lefthand
+# brain-deck：PC のための手元の PDA
 
-Sharp Brain PW-SH2 を、PC 用の左手デバイスにするデーモン。
-Brain 上の Brainux で動き、本体のキーボードとタッチパネルの入力を、設定どおりのキー入力やマウスの操作に変えて
-USB HID のキーボードとマウスとして PC に送る。タッチパネルの画面には、どこを押すと何が送られるかを表示する。
+Sharp Brain PW-SH2 を、**PC のそばに置いて PC と一緒に使う、手元の PDA** にする。
+昔の PDA は PC から離れて単独で使う道具だったが、brain-deck は PC の横に置き、PC の予定、Todo、天気、ビルドの結果などを
+いつも目に入る場所に出し、ボタンやキーで PC を操作する。PC から外して持ち歩いても、時計、Todo、受け取り済みの予定などはそのまま使える
+（PC から外したときの使い方と同期は、フェーズ P2、P3 で整える）。
 
-- **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
-- **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
-- **トラックパッド**：タッチパネルのセルを、マウスのトラックパッドにできる（`widget: trackpad`）。指でカーソルを動かし、タップでクリック、右端の帯でスクロール。キーやセルにマウスのボタンも割り当てられる（`mouse: left`）。Android のスマホでもそのまま使える。起動したときはブートキーボード（BIOS でも使える）で、マウスを使うときだけ USB の形を切り替える（`usb_mode`）。
-- **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定、月の表示（卓上カレンダー。祝日を赤く、予定のある日に点）、天気予報（今日と明日。気象庁の天気アイコン、気温、降水確率）、電池の残り、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
-- **自動減光**：しばらく触らなければ画面を暗くし、さらに時間がたったら消す（`backlight`）。暗いときのタッチは明るくするだけで、セルは押さない。本体キーは暗いときもそのまま PC に送る。
-- **背景画像**：セルごとの背景と、レイヤーごとの壁紙に、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
-- **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定や天気予報を送ったり（`brain-deck calendar sync`、`brain-deck weather sync`）、URL を QR コードにして出したり（`brain-deck qr share "https://..."`）、在席ランプを変えたり（`brain-deck presence 会議中`）、Brain の時刻を合わせたりする。
-- **端末モード**：Brain の画面とキーボードを、USB でつないだ PC のコンソールの端末にする。画面やキーボードのない PC に、Brain からログインして操作できる（PC の OS が起動したあとだけ。BIOS や GRUB は見えない）。PC 側の設定が一度だけ要る。
-- **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI が接続したときに PC の時刻に合わせる。
-- **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
-- **PC から見た Brain**：標準の USB キーボードとして見えるので、PC 側に専用のソフトは要らない。同じ USB ケーブルで、設定や保守のためのネットワーク（SSH）とシリアルも使える。
-- **設定 GUI**：PC のブラウザ（Chrome / Edge）から、USB シリアル経由で設定を読み書きできる。保存するとデーモンを止めずにすぐ反映する。
+Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマンド **brain-deck**、PC のブラウザで開く**設定 GUI** からなる。
+
+- **ホーム画面**：アプリ（入る先の画面）のアイコンと名前を並べた入り口（`home`）。予定、Todo、天気、電卓、メモ、左手デバイス、端末、本体の情報などをアプリとして置き、タップで入って、画面右の HOME でどこからでも戻る。アイコンは組み込みのドット絵 35 個か、自分の画像。
+- **アプリ（レイヤー）**：アプリの中身は、タッチの格子に置いたウィジェットとキーのセル。格子の大きさもセルの組み合わせも、アプリごとに自由に決める。
+- **ウィジェット**：時計、テキスト（PC から書き換える）、Todo、カレンダーの予定、月の表示（卓上カレンダー。祝日を赤く、予定のある日に点）、天気予報（今日と明日。気象庁の天気アイコン、気温、降水確率）、グラフ（PC から送った値）、電卓、プレゼン用タイマー、電池の残り、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **状態の帯**：画面の上に、時刻、電池、PC とつながっているか、マウスの形、最後に同期した時刻を出す細い帯（`status_bar`）。アプリごとに出すか決められる。
+- **画面の向き**：ボタンひとつで縦向き（480×800）と横向き（800×480）を切り替える（`rotate`）。アプリごとに縦向き用の並び（`touch_portrait`）を書ける。タッチも向きに合わせて回り、ベゼルに印刷された画面右のボタンはそのまま使える。
+- **左手デバイス**（アプリの 1 つ）：本体のキーボードとタッチパネルの入力を、設定どおりのキー入力やマウスの操作に変えて、USB HID のキーボードとマウスとして PC に送る。PC には標準の USB キーボードとして見えるので、PC 側に専用のソフトは要らない。
+  - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
+  - **タッチのセル**：セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
+  - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。
+  - **トラックパッド**：タッチパネルのセルを、マウスのトラックパッドにできる（`widget: trackpad`）。指でカーソルを動かし、タップでクリック、右端の帯でスクロール。起動したときはブートキーボード（BIOS でも使える）で、マウスを使うときだけ USB の形を切り替える（`usb_mode`）。
+  - **メディアキー、F13〜F24、スリープ解除**：音量や再生のキー、PC のキーボードにない F13〜F24（OS のショートカットにコマンドを割り当てる）、スリープ中の PC をキーで起こす。
+- **PC から**：PC の **brain-deck** で、ビルドの結果などのテキストを出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定や天気予報を送ったり（`brain-deck calendar sync`、`brain-deck weather sync`）、グラフの値を足したり、URL を QR コードにして出したり、在席ランプを変えたり、Brain の時刻を合わせたりする。Brain のボタンから PC のコマンドを動かすこともできる（F13〜F18 と `brain-deck exec`）。
+- **端末モード**：Brain の画面とキーボードを、USB でつないだ PC のコンソールの端末にする（アプリの 1 つとして置ける）。
+- **自動減光**：しばらく触らなければ画面を暗くし、さらに時間がたったら消す（`backlight`）。暗いときのタッチは明るくするだけで、セルは押さない。
+- **背景画像**：セルごとの背景、レイヤーとホーム画面の壁紙、アイコンに、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
+- **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI や brain-deck が接続したときに PC の時刻に合わせる。
+- **設定 GUI**：PC のブラウザ（Chrome / Edge）から、USB シリアル経由で設定を読み書きする。ホーム画面、アイコン、状態の帯、縦向きの並びも編集し、向きを切り替えてプレビューで確かめられる。保存するとデーモンを止めずにすぐ反映する。
+- **保守**：一度入れたあとの更新、再起動、ログ、設定の読み書きは、ssh を使わずに brain-deck で行える（`brain-deck update`）。
+
+設定に `home` を書かなければ、今までどおり左手デバイス（base のレイヤー）から始まる。
+「PC のための手元の PDA」として使う例は [config/pda-example.yaml](config/pda-example.yaml)（今のダッシュボードや道具をアプリとして並べ、縦向きの並びも入れたもの）。
 
 ## 目次
 
@@ -313,6 +325,59 @@ cells:
 - **状態の保存**：ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態は `/var/lib/lefthand/widgets.json` に残す。同じ `id` のセルは同じ状態を出す（`id` を省略すると種類の名前）。
 - **例**：[config/gadgets-example.yaml](config/gadgets-example.yaml)（widgets-example.yaml に、メニューから入る「道具」と「共有」のレイヤーと、自動減光を足したもの）。
 
+### ホーム画面（home）
+
+アプリ（入る先のレイヤー）のアイコンと名前を並べた入り口。書けば、Brain を起動したときにこの画面が出る。書かなければ今までどおり。
+
+```yaml
+home:
+  apps:
+    - {name: 予定, icon: calendar, layer: calendar}   # タップで calendar のレイヤーへ
+    - {name: Todo, icon: todo, layer: todo}
+    - {name: 左手, icon: keyboard, layer: base}       # 左手デバイス（base）もアプリの 1 つ
+    - {name: 写真, icon: 11af1a4e111547aa, layer: photo}  # 自分の画像（64×64）のアイコン
+```
+
+- **戻る**：画面右の帯の **HOME**（`soft_key`）で、どのレイヤーからでもホーム画面に戻る（レイヤーの HOME の割り当てより優先する）。ホーム画面で HOME を押すと 1 ページ目へ。
+- **並び**：1 ページは横向きで 4×3、縦向きで 3×4（`cols`、`rows`、`portrait` で変えられる）。入りきらなければ、下の帯の ◀ ▶ と画面右の帯の ◀ ▶ でページを送る。
+- **アイコン**：組み込みのドット絵（`calendar`、`todo`、`weather`、`calculator`、`memo`、`keyboard`、`terminal`、`settings` など 35 個。ウィジェットの種類と同じ名前のものもある）か、自分の画像（背景画像と同じく設定 GUI で 64×64 に変換して送る）。組み込みのアイコンは、このリポジトリのために描いたもの。
+- **起動したとき**：`start: base` なら、今までどおり base から始まる（HOME でホーム画面へ）。
+- **例**：[config/pda-example.yaml](config/pda-example.yaml)。書き方の詳細は [docs/config.md](docs/config.md) の「ホーム画面（home）」。
+
+### 状態の帯（status_bar）
+
+画面の上の細い帯（高さ 28 ドット）に、今のレイヤーの名前と、最後に同期した時刻、マウスの形、PC とのつながり、電池、時刻を出す。帯を出すレイヤーでは、格子がその分だけ小さくなる。
+
+```yaml
+status_bar:
+  show: true                 # status_bar を書いていないレイヤーでも出す（既定は出さない）
+  items: [sync, mouse, pc, battery, time]   # 出す項目（左から。省略するとこの 5 つ）
+layers:
+  - name: base
+    status_bar: false        # このレイヤーでは出さない（左手デバイスの格子を広く使う）
+```
+
+- **PC とのつながり**：USB の状態（UDC の state）を 2 秒ごとに見て、つながっていれば緑の「PC」、PC がスリープ中なら「PC休止」、外れていれば橙の「PCなし」。
+- **同期**：今は、最後に PC から時刻を合わせた時刻。一度もなければ橙の「未同期」（フェーズ P3 で `brain-deck sync` の時刻にする）。
+- **ホーム画面**：既定で出す（`home.status_bar: false` で出さない）。
+- **詳しく**：[docs/config.md](docs/config.md) の「状態の帯（status_bar）」。
+
+### 画面の向き（rotate）と縦向きの格子（touch_portrait）
+
+キー、セル、ソフトキーに `rotate` を割り当てると、画面を縦向き（480×800）と横向き（800×480）に切り替えられる。
+
+```yaml
+"0,1": {rotate: next, label: 回す}     # 押すたびに 90 度回す
+"2,1": {rotate: 90, label: 縦向き}     # 画面の上が本体の右（ソフトキーの帯の側）
+```
+
+- **向きは残る**：変えた向きは Brain に保存し、再起動しても続く。設定 GUI の「Brain もこの向きにする」でも変えられる。
+- **タッチ**：向きに合わせて回す（トラックパッドの指の動きも）。キャリブレーションの値はそのまま。
+- **画面右の帯**：ベゼルに印刷されていて動かないので、向きによらず同じ区画（HOME、▲▼、◀▶、決定、戻る、操作機能）として働く。縦向き 90 度では帯は上、270 度では下になる。
+- **縦向きの並び**：レイヤーの `touch_portrait` に、縦向き用の格子を書ける（書き方は `touch` と同じ）。書いていないレイヤーは、横向きの格子の列と行を入れ替えて使う（`display.portrait_grid: transpose`。4×3 は 3×4 になり、セルの形がほぼ同じになる）。`stretch` にすると、横向きの格子をそのまま縦に伸ばす。
+- **端末モード**：向きによらず、横向き（設定の `display.rotate`）で描く。
+- **詳しく**：[docs/config.md](docs/config.md) の「画面の向きと縦向きの格子」。
+
 ### 自動減光（backlight）
 
 ```yaml
@@ -356,7 +421,7 @@ layers:
 - **ない画像**：設定にある id の画像が Brain にないときは、背景なしで描く。起動時と `lefthand -check` の警告、ログ（`images: background ... is not on this Brain`）、GUI の「Brain の背景画像」で分かる。大きさがセルと違う画像は、中央に置き、はみ出す分は切る（警告も出す）。
 - **上限**：1 枚は画面いっぱい（800×480、768,008 バイト）まで。合計 16 MiB まで。保存したあとも SD カードに 64 MiB（ファイルシステムが小さければ、その 10%）の空きを残せないときは、保存を断って理由を返す。
 - **消すとき**：GUI の「Brain の背景画像」の「使っていない画像を Brain から消す」か、`brain-deck images prune`。今の設定（GUI では編集中の設定も）で使っていない画像を消す。`config.yaml.prev` に戻す予定があるなら、先に消さないこと（その設定の画像も消える）。
-- **画面の回転**：`display.rotate` が 90 か 270 のときも描けるが、GUI は 800×480 の向きで切り抜く（大きさが合わず、中央に置いて切る）。
+- **画面の向き**：縦向きの格子（`touch_portrait`）の壁紙とセルの背景画像は、設定 GUI のプレビューを「縦向き」にして選べば、縦向きの大きさで切り抜く。横向きの格子の画像を縦向き（入れ替えた格子）で描くときは、中央に置いて切る。ホーム画面の壁紙は 800×480 で、縦向きでは中央を切り取って描く。
 - **例**：[config/background-example.yaml](config/background-example.yaml) と、式で描いた画像 [config/background-images/](config/background-images/)（`go run ./tools/mkbg config/background-images` で作り直せる）。Brain に送るには `brain-deck images put config/background-images/*.565`。
 
 ### データの置き場所（/var/lib/lefthand）
@@ -366,6 +431,7 @@ layers:
 | ファイル | 内容 |
 | --- | --- |
 | clock.json | 最後に時刻を合わせた記録（起動ごとの ID、時刻、ずれ、送った側） |
+| display.json | 画面の向き（`rotate` で変えたもの）と、そのときの設定の display.rotate |
 | text.json | テキストのタイルの中身（id ごとに、テキスト、色、書いた時刻、有効期限、送った側）。64 個まで覚え、超えたら古いものから捨てる |
 | todo.json | Todo の項目（ID、文、完了、更新番号、時刻、変えた側）。数の上限はない |
 | calendar.json | カレンダーの予定（カレンダーごとに、名前、色、祝日か、取ってきた時刻、取得の失敗、予定）と、送られた範囲。展開したあとの予定で、1000 件まで（約 250 KB） |
@@ -393,7 +459,7 @@ layers:
 
 ### 今のレイヤーの表示
 
-画面の右上に、今のレイヤーの label を出す。色で入り方がわかる。
+画面の右上に、今のレイヤーの label を出す（状態の帯を出すレイヤーでは、帯の左に出す）。色で入り方がわかる。
 
 | 色 | 状態 |
 | --- | --- |
@@ -801,6 +867,10 @@ sudo udevadm control --reload
 - **Todo**：上の「Todo」タブで、項目を足す（Enter。Shift+Enter か「先頭に追加」で先頭に）、チェックで完了を切り替える、文を書き換える（Enter か欄を離れたとき）、↑↓ で並べ替える（未完了と完了の境はまたがない）、削除、完了した項目をまとめて消す。変更はすぐ Brain に書く（「Brain に保存」は要らない）。Brain で長押しして切り替えると、通知ですぐ反映する。Brain で変わったあとの古い一覧のまま書き換えようとすると、書き換えずに読み直す。
 - **背景画像**：セルを選ぶと割り当ての欄に「背景画像」、レイヤーの欄に「壁紙」がある。「画像を選ぶ…」（またはドロップ）で切り抜きの画面が開き、元の画像の上で範囲をドラッグで動かし、ホイールか「拡大」で大きさを変える（縦横比はセルの枠の内側か画面に合わせる）。「明るさ」と「ディザリング」を選び、下の Brain の画面のプレビュー（ラベル、縁取り、「押したときの枠を重ねる」）で確かめて「この範囲にする」。このタブで選んだ画像は「切り抜きを直す」でやり直せる。保存すると、まだ Brain にない画像を送ってから設定を保存する（画面いっぱいの画像は 1 枚 2 秒ほど）。接続したときに、設定で使っている Brain の画像を読んでプレビューに使う。タッチの欄の下の「Brain の背景画像」に、名前、大きさ、使っている場所の一覧と、使っていない画像を消すボタンがある。
 - **ウィジェット**：セルを選び、種類を「ウィジェット（時計、テキスト、Todo）」にすると、時計の書式とタイムゾーン、テキストの id、見出し、タップしたときの動きを選べる。テキストは、接続したときに Brain から読んだ中身でプレビューに出る（GUI の接続中は brain-deck が書けないので、中身は変わらない）。プレビューは PC の今の時刻で描き、時刻が変わるたびに描き直す（Brain のタイムゾーンが PC と違うと、`tz` を書いていない時計の表示は Brain と違う）。
+- **ホーム画面**：レイヤーのタブの「＋ ホーム画面」で、今のレイヤーをそれぞれアプリにしたホーム画面を作る（あとから足し、消し、並べ替える）。タブの「ホーム」で、プレビューのアイコンをクリックしてアプリを選び、名前、入る先、アイコン（組み込みの一覧か「画像を選ぶ…」。アイコンに画像ファイルをドロップしてもよい）を変える。1 ページの格子、起動したときの画面、戻るソフトキー、状態の帯、壁紙もここで決める。同じ画面の「状態の帯」で、書いていないレイヤーにも出すかと、出す項目を選ぶ。
+- **状態の帯（レイヤー）**：レイヤーの欄の「状態の帯」で、そのレイヤーに出す・出さない・書かない（全体の設定のとおり）を選ぶ。出すと、プレビューのセルが帯の下に並ぶ。
+- **縦向き**：タッチの欄の「横向き」「縦向き」で、プレビューの向きを切り替える。縦向きでは、そのレイヤーの縦向きの格子を出す。横向きから作った格子（`touch_portrait` を書いていない）は編集できないので、「縦向きの格子を作る」で今の並びを写してから編集する（大きさ、セル、壁紙、背景画像）。「横向きから作るのに戻す」で消せる。「書いていないレイヤー」で、列と行を入れ替えるか、そのまま縦に伸ばすかを選ぶ。接続中で、Brain の向きとプレビューの向きが違えば「Brain もこの向きにする」で Brain の向きを変えられる。接続したときは、Brain の今の向きで始める。
+- **画面の向きを変える割り当て**：種類の「画面の向きを変える（rotate）」で、回す（next）か、向き（0、90、180、270）を選ぶ。
 - **セルの大きさ**：セルを選び、「大きさ」の列と行を変える。広げた範囲に、このレイヤーのセルがあれば、消してよいか聞く。
 - **時刻**：接続するたびに、PC の時刻を Brain に送って合わせる。ずれていたときと、Brain のタイムゾーンが PC と違うときは、そのことを出す。
 - **GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`display`（`press_style` を除く）は、デーモンを再起動しないと変えられないので、GUI からの保存では変えられない（変えると誤りになる）。ファイルを直接編集して、サービスを再起動する。
@@ -1794,9 +1864,14 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | apply.go | 設定の保存と、再起動なしの反映、失敗したときの巻き戻し |
 | keymap_pwsh2.go | 設定 GUI に渡す、本体キーの配置と制約 |
 | version.go | バージョンの文字列 |
-| layer.go | レイヤーの重なり、透過の解決、押したときの割り当ての記録 |
-| display.go | セルの配置と描画、描画用の goroutine |
-| fb.go | フレームバッファの読み書き、裏画面への描画 |
+| layer.go | レイヤーの重なり、透過の解決、押したときの割り当ての記録、画面の向きとタッチの判定 |
+| display.go | セルの配置と描画、描画用の goroutine（向きが変わったら裏画面を作り直す） |
+| fb.go | フレームバッファの読み書き、裏画面への描画（回した向きでも、塗りは物理の矩形を行単位で書く） |
+| home.go | ホーム画面（設定の home から作るレイヤー、アプリの配置、ページ、タップ、描画） |
+| icons.go | 組み込みのアイコン（16×16 のドット絵）。gui/src/icons.json も同じ表 |
+| statusbar.go | 状態の帯（項目、配置、描き直しの時刻） |
+| rotate.go | 画面の回転（rotate、向きの保存 display.json、タッチの座標の変換、縦向きの格子の作り方） |
+| link.go | PC とのつながり（UDC の state を 2 秒ごとに見る） |
 | vt.go | 専用 VT の確保と、元の VT への復帰 |
 | font.go、font/ | 埋め込みフォントと、そのライセンス |
 | tools/mkfont/ | BDF フォントを埋め込み用の形式に変換するツール |
@@ -1813,6 +1888,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | tools/mkbg/ | 例の画像（グラデーションと模様）を作るツール |
 | config/trackpad-example.yaml | トラックパッドとマウスのボタンの例（current.yaml に「マウス」のレイヤーを足したもの） |
 | config/media-example.yaml | メディアキーと F13〜F24 の例（current.yaml に「メディア」と「F13〜F24」のレイヤーを足したもの） |
+| config/pda-example.yaml | 「PC のための手元の PDA」の例（ホーム画面、状態の帯、縦向きの格子、画面の向きのセル。gadgets-example.yaml に月、天気、電卓、グラフ、マウス、発表、メモ、端末、本体のレイヤーを足したもの） |
 | config/gadgets-example.yaml | 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプと、自動減光の例（widgets-example.yaml に「道具」と「共有」のレイヤーと backlight を足したもの） |
 | tools/mkupdate/ | brain-deck update で送る更新のファイル（manifest.json、lefthand、gadget-setup.sh の tar.gz）を作る |
 | config/shortcuts-example.yaml | コマンドのショートカットの例（current.yaml に「コマンド」のレイヤーを足したもの。F14〜F18、Ctrl + F14〜F16、結果のタイル） |
@@ -1920,7 +1996,22 @@ G=config/graph-example.yaml
 TZ=Asia/Tokyo go run . -render-png $F/graph.png -render-layer graph -render-time $T -render-graph $F/graph.json $G
 TZ=Asia/Tokyo go run . -render-png $F/graph-few.png -render-layer graph -render-time $T -render-graph $F/graph-few.json $G
 TZ=Asia/Tokyo go run . -render-png $F/graph-pressed-fill.png -render-layer graph -render-time $T -render-graph $F/graph.json -render-pressed 3,1 -render-press-style fill $G
+# ホーム画面、状態の帯、縦向き（-render-rotate は向き、-render-size は物理の大きさのまま）。画像のアイコンと壁紙は gui/test/fixtures/home-images.yaml
+C=config/pda-example.yaml; H=$F/home-images.yaml; I=config/background-images; S=2026-10-06T09:30:00+09:00
+TZ=Asia/Tokyo go run . -render-png $F/pda-home.png -render-time $T -render-battery 87 -render-last-sync $S $C
+TZ=Asia/Tokyo go run . -render-png $F/pda-home-p2-portrait.png -render-rotate 90 -render-home-page 2 -render-time $T -render-battery 12 -render-link suspended -render-mouse-off $C
+TZ=Asia/Tokyo go run . -render-png $F/pda-tools.png -render-layer tools -render-time $T -render-battery 50,charging -render-link "not attached" -render-widgets $F/widgets-state.json $C
+TZ=Asia/Tokyo go run . -render-png $F/pda-calendar-portrait.png -render-rotate 90 -render-layer calendar -render-time $T -render-calendar $F/calendar.json -render-last-sync 2026-10-05T18:00:00+09:00 $C
+TZ=Asia/Tokyo go run . -render-png $F/pda-info-portrait-pressed.png -render-rotate 270 -render-layer info -render-time $T -render-pressed "0,0 1,3" $C
+TZ=Asia/Tokyo go run . -render-png $F/pda-system-portrait-fill.png -render-rotate 90 -render-layer system -render-time $T -render-pressed "0,2" -render-press-style fill -render-battery 50,plugged $C
+TZ=Asia/Tokyo go run . -render-png $F/pda-base-180.png -render-rotate 180 -render-layer base -render-time $T $C
+TZ=Asia/Tokyo go run . -render-png $F/home-images.png -render-time $T -render-images $I $H
+TZ=Asia/Tokyo go run . -render-png $F/home-images-portrait.png -render-rotate 90 -render-time $T -render-images $I $H
+TZ=Asia/Tokyo go run . -render-png $F/home-images-stretch.png -render-rotate 90 -render-layer info -render-time $T -render-images $I $H
 ```
+
+組み込みのアイコンの表（icons.go）を変えたら、GUI に同梱した表も `LEFTHAND_UPDATE_ICONS=1 go test -run IconsJSON` で書き直し、上の PNG も作り直す。
+ホーム画面、状態の帯、画面の向きは、実機で `sudo LEFTHAND_HW_TEST=1 timeout 120 ./lefthand.test -test.run HWHomeRotate -test.v`（本番を止めてから。テストの実行ファイルと同じディレクトリに config/pda-example.yaml を pda-example.yaml として置く）。アプリのタップ（横向きと、本体を回して持ったときの位置）、HOME、4 つの向きへの回転、帯の描き直しの時間を測り、そのたびに画面が全体を描いたものと同じことを確かめる。
 
 天気のウィジェットの配置（`gui/src/weatherwidget.ts`）は、Go の結果の表（`gui/test/fixtures/weatherlayout.json`。文字、色、アイコンの箱の位置）と比べる。配置を変えたら `LEFTHAND_UPDATE_WEATHER=1 go test -run TestWeatherFixtures` で書き直し、上の PNG も作り直す。
 
@@ -2080,6 +2171,10 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-month-offset -1             月の表示に出す月（今月からのずれ。-1 で先月）
          -render-month-select 2026-10-17     月の表示で選んだ日。follow のカレンダーにもその日の予定が出る
          -render-images dir                  背景画像を探すディレクトリ（-check でも使う。省略すると -data-dir の images）
+         -render-rotate 90                   画面の向き（0、90、180、270。-render-size は物理の大きさのまま）。省略すると display.rotate
+         -render-home-page 2                 ホーム画面に出すページ（1 から）
+         -render-link configured             状態の帯の PC とのつながり（UDC の state。空なら出さない）
+         -render-last-sync 2026-10-06T09:30:00+09:00  状態の帯の、最後に同期した時刻（省略すると未同期）
 lefthand -record-touch out.touch [config.yaml]  タッチの生のイベントを記録して終わる（lefthand.service を止めてから）
          -record-gesture name                見出しに書く動きの名前（slow、tap など）
          -record-note text                   見出しに書くメモ

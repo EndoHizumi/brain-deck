@@ -58,7 +58,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 
 - `protocol` はこの文書の版。互換性のない変更をしたら上げる。GUI は違えば使わない。
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
-- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱い、`get_qr`・`get_widgets` があるときだけ QR コードとストップウォッチなどの状態を読み、`get_graph` があるときだけグラフの値を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
+- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱い、`get_qr`・`get_widgets` があるときだけ QR コードとストップウォッチなどの状態を読み、`get_graph` があるときだけグラフの値を読み、`set_rotate` があるときだけ「Brain もこの向きにする」を出す。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
 - `upload_kinds` は、`upload_begin` で受け取れる種類（`update`、`image`、`weather_icon`）。この項目がなければ、`upload_*` がない版。
 
@@ -148,7 +148,7 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 ```json
 → {"id":6,"cmd":"get_status"}
 ← {"id":6,"ok":true,"result":{"status":{"layer":"edit","label":"編集","mode":"temp",
-   "stack":[{"layer":"edit","kind":"layer_hold"}],"cols":4,"rows":3},
+   "stack":[{"layer":"edit","kind":"layer_hold"}],"cols":4,"rows":3,"rotate":0,"portrait":false,"status_bar":false,"home":false},
    "uptime_sec":120,"subscribed":true,"suppressing":true,
    "time":{"now":"2026-10-06T19:04:27.13+09:00","timezone":"Asia/Tokyo","utc_offset_sec":32400,"synced":true,"ntp_synced":false,
    "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true,"media":true,"switching":false,"usb_state":"configured"},
@@ -211,6 +211,20 @@ USB の形を切り替える（キーボードだけ ⇔ キーボードとマ�
 - **誤り**：mode が違えば `bad_request`。
 
 `mode` は `base`（base だけ）、`latched`（layer_toggle か layer_to で切り替えたまま）、`temp`（layer_hold か layer_oneshot で一時的）。画面の右上の札の色と同じ。
+
+`status` の `rotate` は画面の向き（0、90、180、270）、`portrait` は縦向きか（`cols` と `rows` は縦向きの格子のもの）、`status_bar` は状態の帯を出しているか、`home` はホーム画面を出しているか。ホーム画面のときは、`layer` が `home`、`mode` が `base`、`cols` と `rows` が 1。これらがなければ、フェーズ P1 より前の版。レイヤーの通知（`event: layer`）も同じ項目を持つ。
+
+### set_rotate
+
+画面の向きを変える（設定の `rotate` の割り当てと同じ）。`mode` は `next`（90 度回す）、`0`、`90`、`180`、`270`。変えた向きは Brain に残る（`display.json`）。
+
+```json
+→ {"id":9,"cmd":"set_rotate","mode":"90"}
+← {"id":9,"ok":true,"result":{"status":{"layer":"home","label":"ホーム","mode":"base","stack":[{"layer":"home","kind":"layer_to"}],
+   "cols":1,"rows":1,"rotate":90,"portrait":true,"status_bar":true,"home":true}}}
+```
+
+- **誤り**：mode が違えば `bad_request`。
 
 ### subscribe_input
 

@@ -9,6 +9,7 @@
 - **設定 GUI で保存したとき**：デーモンが YAML で書き直す（`lefthand -check` を通る形）。割り当ては 1 行（`KEY_A: LCTRL+Z`、`"0,0": {key: B, label: ブラシ}`）で、項目は名前順になる。**手で書いたコメントは消える**。前の版は `config.yaml.prev` に残る。
 - **設定 GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`touch` の有無、`display`（`press_style` を除く）は、開いているデバイスにかかわるので、動作中のデーモンには反映できない。ファイルを直接編集し、サービスを再起動する。プロトコルは [protocol.md](protocol.md)。
 - **設定 GUI で編集しない項目**：`terminal` と `backlight` は、GUI では編集しない（GUI で保存しても残る）。ファイルを直接編集する。
+- **ホーム画面、状態の帯、縦向きの格子**：`home`、`status_bar`、レイヤーの `touch_portrait` と `status_bar`、`display.portrait_grid` は GUI で編集でき、保存すればすぐ反映する（下の「ホーム画面（home）」「状態の帯（status_bar）」「画面の向きと縦向きの格子」）。
 
 ## 全体
 
@@ -20,6 +21,8 @@ layers: [ ... ]             # レイヤー。最初のものが base
 display: { ... }            # 画面表示。省略可
 terminal: { ... }           # 端末モード。省略可（下の「端末モード（terminal）」）
 backlight: { ... }          # 自動減光。省略すると減光しない（下の「自動減光（backlight）」）
+home: { ... }               # ホーム画面。省略すると使わない（下の「ホーム画面（home）」）
+status_bar: { ... }         # 状態の帯。省略すると、status_bar を書いたレイヤーとホーム画面だけに出す（下の「状態の帯（status_bar）」）
 ```
 
 | 項目 | 型 | 内容 |
@@ -28,9 +31,11 @@ backlight: { ... }          # 自動減光。省略すると減光しない（�
 | keyboard | 文字列 | 既定は `brain-kbd-i2c` |
 | touch | オブジェクト | 下を参照 |
 | layers | 配列 | 1 つ以上。下を参照 |
-| display | オブジェクト | enabled（真偽）、device（既定 `/dev/fb0`）、vt（0 で自動）、rotate（0、90、180、270）、press_style（下を参照） |
+| display | オブジェクト | enabled（真偽）、device（既定 `/dev/fb0`）、vt（0 で自動）、rotate（0、90、180、270。起動したときの向き。下の「画面の向きと縦向きの格子」）、press_style、portrait_grid（下を参照） |
 | terminal | オブジェクト | 端末モードの設定。下の「端末モード（terminal）」 |
 | backlight | オブジェクト | 触らなければ画面を暗くし、消す。下の「自動減光（backlight）」 |
+| home | オブジェクト | アプリを並べたホーム画面。下の「ホーム画面（home）」 |
+| status_bar | オブジェクト | 画面の上の状態の帯。下の「状態の帯（status_bar）」 |
 
 ## touch：タッチパネル
 
@@ -55,6 +60,8 @@ layers:
       rows: 3
       cells: { ... }
     soft_keys: { ... }      # ソフトキーの割り当て
+    touch_portrait: { ... } # 縦向き（480x800）のときの格子。省略可（下の「画面の向きと縦向きの格子」）
+    status_bar: true        # 画面の上に状態の帯を出すか。省略可（下の「状態の帯（status_bar）」）
 ```
 
 - **base**：最初のレイヤーが base になる。名前は何でもよいが、`base` を勧める。base はいつも一番下にあり、外れない。
@@ -100,8 +107,9 @@ layers:
 | `{ media: play_pause }` | メディアキー（再生、音量など）。下の「メディアキー」 |
 | `{ usb_mode: toggle }` | USB の形の切り替え（マウスのオンとオフ）。下の「USB の形の切り替え」 |
 | `{ terminal: toggle }` | 端末モードに入る・抜ける。下の「端末モード（terminal）」 |
+| `{ rotate: next }` | 画面の向きを変える。`next` で 90 度ずつ、`0`、`90`、`180`、`270` でその向き。下の「画面の向きと縦向きの格子」 |
 
-- **オブジェクトの形**：`key`、`layer_hold`、`layer_toggle`、`layer_oneshot`、`layer_to`、`mouse`、`media`、`usb_mode`、`terminal` のうち、ちょうど 1 つを書く。`label` はどれにも付けられる。ウィジェットのセル（下の「ウィジェット」）では、どれも書かなくてよい。
+- **オブジェクトの形**：`key`、`layer_hold`、`layer_toggle`、`layer_oneshot`、`layer_to`、`mouse`、`media`、`usb_mode`、`terminal`、`rotate` のうち、ちょうど 1 つを書く。`label` はどれにも付けられる。ウィジェットのセル（下の「ウィジェット」）では、どれも書かなくてよい。
 - **セルの大きさ**：タッチのセルには `span: [列数, 行数]` を書ける（下の「セルの大きさ」）。
 - **送れるキーの名前**：修飾キー（LCTRL、LSHIFT、LALT、LGUI、RCTRL、RSHIFT、RALT、RGUI）、A〜Z、0〜9、F1〜F24（F13〜F24 は PC のキーボードにないキー。ショートカット用）、ENTER、ESC、BACKSPACE、TAB、SPACE、INSERT、DELETE、HOME、END、PAGEUP、PAGEDOWN、UP、DOWN、LEFT、RIGHT、テンキー（KP0〜KP9、KPPLUS、KPMINUS、KPASTERISK、KPSLASH、KPDOT、KPENTER）、MINUS、EQUAL、LEFTBRACE、RIGHTBRACE、BACKSLASH、SEMICOLON、APOSTROPHE、GRAVE、COMMA、DOT、SLASH。
 - **配列によらない記号**：記号は US 配列での位置を送るので、PC が日本語配列だと別の文字になることがある。`+` などはテンキーの名前で送ると配列によらない。例：Ctrl++ は `LCTRL+KPPLUS`。
@@ -731,9 +739,128 @@ layers:
 - **layer_to**：重なりを全部外してから、行き先を重ねる。layer_hold で押しているキーを離しても、もう何も外れない。
 - **オートリピート**：無視する。リピートは PC 側に任せる。端末モードのあいだだけは、Brain のカーネルのオートリピートで文字を繰り返す。
 
+## ホーム画面（home）
+
+「PC のための手元の PDA」として使うときの入り口。アプリ（入る先のレイヤー）のアイコンと名前を格子に並べる。
+**書かなければ今までどおり**（base から始まり、HOME のソフトキーはレイヤーの soft_keys のとおり）。
+
+```yaml
+home:
+  cols: 4                   # 1 ページの列（横向き）。cols と rows は両方書くか、両方省略（4×3）
+  rows: 3
+  portrait: {cols: 3, rows: 4}   # 縦向きの 1 ページ。省略すると cols と rows を入れ替えたもの
+  label: ホーム             # 帯と札に出す名前。省略すると「ホーム」
+  start: home               # 起動したときの画面。home（既定）か base
+  soft_key: home            # ホーム画面に戻るソフトキーの区画（touch.soft_areas の名前）。既定 home
+  status_bar: true          # 状態の帯を出すか。既定は出す
+  background: 7f8f231d4a49bfee   # 壁紙（背景画像の id、800×480）。省略可
+  apps:
+    - {name: 予定, icon: calendar, layer: calendar}
+    - {name: 左手, icon: keyboard, layer: base}
+    - {name: 写真, icon: 11af1a4e111547aa, layer: photo}   # 自分の画像（64×64）のアイコン
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `apps` | 1〜64 個。`name`（1〜16 文字）、`layer`（入る先のレイヤーの名前）、`icon`（組み込みのアイコンの名前か画像の id。省略すると `app`） |
+| `cols`、`rows` | 横向きの 1 ページの格子（1〜8）。アプリが入りきらなければページを分ける |
+| `portrait` | 縦向きの 1 ページの格子（1〜8） |
+| `start` | `home` なら、起動したとき・設定を保存したときにホーム画面を出す。`base` なら今までどおり base から |
+| `soft_key` | どのレイヤーでもホーム画面に戻るソフトキー。レイヤーの `soft_keys` に同じ名前の割り当てがあっても、こちらが優先する（警告を出す） |
+| `status_bar` | ホーム画面に状態の帯を出すか（既定は出す） |
+| `background` | ホーム画面の壁紙 |
+
+- **アプリをタップ**：そのレイヤーに `layer_to` と同じく移る（重なりを外して、そのレイヤーだけを base の上に重ねる）。base なら base だけになる。押したとき（離すのを待たずに）移る。
+- **戻る**：画面右の帯の `soft_key`（既定は HOME）で、どのレイヤーからでもホーム画面に戻る。ホーム画面で押すと 1 ページ目に戻る。ほかのレイヤーの `layer_to: home` でも戻れる（ホーム画面のレイヤーの名前は `home`）。
+- **ページ**：アプリが 1 ページに入りきらなければ、下に高さ 40 ドットの帯を出し、◀ と ▶ でページを送る。画面右の帯の ◀（`left`）と ▶（`right`）でも送る（ホーム画面のあいだだけ）。ページの数は向きで変わる。
+- **アイコン**：組み込みのアイコンは、このリポジトリのために描いた 16×16 のドット絵（色の板に白い絵）を、入る大きさで 4 倍（64×64）まで拡大して描く。名前は `app`、`battery`、`browser`、`calculator`、`calendar`、`clock`、`code`、`command`、`counter`、`folder`、`graph`、`home`、`info`、`keyboard`、`media`、`memo`、`month`、`mouse`、`pomodoro`、`presence`、`presenter`、`qr`、`rotate`、`settings`、`share`、`stopwatch`、`symbol`、`sync`、`terminal`、`text`、`todo`、`trackpad`、`weather`、`window`（ウィジェットの種類と同じ名前のものは、そのウィジェットの絵）。
+- **自分の画像**：背景画像と同じく、設定 GUI で 64×64 に変換して送り、`icon` に画像の id を書く。Brain にない画像は `app` のアイコンで描き、警告を出す。
+- **名前**：倍率 2 で入れば倍率 2、入らなければ倍率 1、それでも入らなければ後ろを「…」で切る。壁紙があるときは、名前に黒い縁取りを付ける。
+- **本体キー**：ホーム画面のあいだも、本体キーは base のとおり PC に送る（ホーム画面のレイヤーはキーを書いていない）。
+- **右上の札と色**：ホーム画面は出発点なので、base と同じ青で描く。
+- **検証**：`home` という名前のレイヤーがある、アプリの `layer` がない、`name` が空か長い、知らない `icon`、`soft_key` が `touch.soft_areas` にない、`cols`・`rows` が範囲外、`start` が home・base 以外は誤り。ホーム画面があれば、どのレイヤーからもホーム画面に戻れるので、「base に戻る手段」は調べない（ホーム画面が出発点になる）。
+
+## 状態の帯（status_bar）
+
+画面の上の高さ 28 ドットに、今のレイヤーの名前と、状態を出す。帯を出すレイヤーでは、格子は帯の下（800×452）に並ぶので、セルがその分だけ小さくなる。
+
+```yaml
+status_bar:
+  show: true                          # status_bar を書いていない（格子を持つ）レイヤーでも出す。既定は出さない
+  items: [sync, mouse, pc, battery, time]   # 右側に並べる項目（左から）。省略するとこの 5 つ
+layers:
+  - name: base
+    status_bar: false                 # このレイヤーでは出さない
+```
+
+| 項目 | 出すもの |
+| --- | --- |
+| `time` | 時刻（`15:04`）。時刻を合わせていなければ橙色 |
+| `battery` | 電池の絵と残り（%）。USB から給電していれば緑、25% 以下で黄、10% 以下で赤。読めなければ「電池?」 |
+| `pc` | PC とのつながり。USB の UDC の state が `configured` なら緑の「PC」、`suspended` なら「PC休止」、それ以外（外れている、電源だけ）なら橙の「PCなし」。2 秒ごとに見る |
+| `mouse` | USB がキーボードとマウスの形なら「マウス」。キーボードだけの形なら出さない |
+| `sync` | 最後に PC から時刻を合わせた時刻（今日なら `同期15:04`、前の日なら `同期10/9`）。一度もなければ橙の「未同期」。フェーズ P3 で `brain-deck sync` の時刻に変える予定 |
+
+- **出すかどうか**：重なりの上から見て、`status_bar` を書いたレイヤーがあればそれ、なければ格子（touch）を持ついちばん上のレイヤーで決める。格子を持つレイヤーが書いていなければ `status_bar.show`。格子を持たないレイヤー（キーだけのレイヤー）は、書かなければ下のレイヤーのとおり。ホーム画面は `home.status_bar`。
+- **レイヤーの名前**：帯の左に、右上の札と同じ色で出す（帯を出すあいだは、右上の札は出さない）。項目と重なれば、名前の後ろを切る。
+- **描き直し**：分が変わったとき（時刻か同期の項目があれば）と、中身が変わったとき（電池、PC とのつながり、マウスの形、レイヤー）に、帯だけを描き直す（実機で約 4 ms）。
+- **帯に触れたとき**：何もしない（セルを押さない）。
+- **背景画像**：帯を出すレイヤーのセルの背景画像は、帯の下のセルの大きさ（4×3 なら 192×143）で作る。設定 GUI はこの大きさで切り抜く。
+
+## 画面の向きと縦向きの格子
+
+キー、セル、ソフトキーに `rotate` を割り当てると、動いているあいだに画面の向きを変えられる。
+
+```yaml
+"0,1": {rotate: next, label: 回す}      # 押すたびに 90 度回す
+"1,1": {rotate: 0, label: 横向き}
+"2,1": {rotate: 90, label: 縦向き}      # 画面の上が、本体の右側（ソフトキーの帯の側）になる
+```
+
+| 値 | 向き |
+| --- | --- |
+| `0` | 横向き（800×480）。ふだんの向き |
+| `90` | 縦向き（480×800）。画面の上が本体の右（ソフトキーの帯の側）。本体を反時計回りに 90 度回して持つ |
+| `180` | 横向き、上下が逆 |
+| `270` | 縦向き。画面の上が本体の左。本体を時計回りに 90 度回して持つ |
+| `next` | 今の向きから 90 度回す（0 → 90 → 180 → 270 → 0） |
+
+- **保存**：変えた向きは `/var/lib/lefthand/display.json` に残し、デーモンや Brain を再起動しても続ける。設定の `display.rotate`（起動したときの向き）を書き換えたら、保存した向きより設定を使う。設定 GUI の「Brain もこの向きにする」（`set_rotate`）でも変えられる。
+- **タッチ**：キャリブレーション（`min_x` など）で生の座標を物理の画面のドットにしてから、向きに合わせて回す。キャリブレーションの値はそのまま使う。トラックパッドも、画面の向きに合わせて指の動きを回す（縦向きで指を画面の上に動かすと、マウスも上に動く）。
+- **ソフトキー**：画面右の帯はベゼルに印刷されていて動かないので、生の座標のまま判定し、向きの影響を受けない。縦向き 90 度では、帯は画面の上の側になる。
+- **端末モード**：端末は、向きによらず設定の `display.rotate` の向き（ふつうは横向き）で描く。
+- **描き直しの時間**：向きを変えると、画面全体を描き直す（実機で約 50〜90 ms）。
+
+### touch_portrait（縦向きの格子）
+
+縦向き（`rotate` が 90 か 270）のときは、各レイヤーの `touch_portrait` の格子を使う。
+
+```yaml
+  - name: tools
+    touch: { cols: 4, rows: 3, cells: { ... } }     # 横向き
+    touch_portrait:                                 # 縦向き
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: stopwatch, span: [2, 1]}
+        "0,1": {widget: pomodoro, span: [2, 2]}
+```
+
+- **書き方**：`touch` と同じ（`cols`、`rows`、`cells`、`background`）。`cols` と `rows` を省略すると base の縦向きの格子と同じ大きさ。`touch_portrait` を書くレイヤーには `touch` も要る。
+- **書いていないレイヤー**：`display.portrait_grid` で決める。
+
+| `display.portrait_grid` | 縦向きのときの格子 |
+| --- | --- |
+| `transpose`（既定） | 横向きの格子の列と行を入れ替える（`"列,行"` を `"行,列"` に、`span: [w, h]` を `[h, w]` に）。4×3 の格子は 3×4 になり、セルの形（横長、正方形に近い形）が横向きとほぼ同じになる。並びは、横向きの上の行が縦向きの左の列になる |
+| `stretch` | 横向きの格子をそのまま縦に伸ばす。並びは同じだが、セルは細く縦長になり、ラベルが小さくなる |
+
+  決めた理由：Brain の 4×3 のセル（200×160）をそのまま縦に伸ばすと 120×266 の細いセルになり、日本語のラベルが倍率 2 に落ちて読みにくい。入れ替えれば 160×200 で、横向きとほぼ同じ大きさで読める。並びが変わることは、よく使うレイヤーに `touch_portrait` を書いて直せばよい。ほかに「縦向きでも、書いていないレイヤーだけは横向きに戻す」も考えたが、本体を縦に持ったまま画面だけ横を向くと読めず、操作もしにくいので採らなかった。
+- **透過**：縦向きの格子どうしで、横向きと同じ規則（格子の大きさが同じあいだ、書いていないセルは下のレイヤーのもの）。
+- **確かめ方**：`lefthand -render-png out.png -render-rotate 90 -render-layer tools config.yaml`、設定 GUI のプレビューの「縦向き」。
+
 ## 画面の表示
 
-- **右上の札**：今のレイヤーの label を出す。色で入り方がわかる。
+- **右上の札**：今のレイヤーの label を出す。色で入り方がわかる。状態の帯を出すあいだは、帯の左に出す。
 - **色**：base だけのときは青、layer_toggle か layer_to で入ったとき（離しても戻らない）は緑、layer_hold か layer_oneshot で入ったとき（一時的）は橙。セルの枠も同じ色になる。
 - **描き直し**：レイヤーが変わると、画面全体を描き直す。描画は別のスレッドで行い、キー入力の処理を待たせない。
 
@@ -807,6 +934,9 @@ backlight:
 | 新しいウィジェット | `stopwatch`、`pomodoro`、`counter`、`presence` に `key` などのタップの動き、`qr` に `id` がない、`work`・`break` の時間の誤り、`states` の数・名前・色の誤り、名前の重なり |
 | 自動減光 | `dim_after`・`off_after` の時間の誤り、`off_after` が `dim_after` より短い、`level` が 0、`device` が /sys/class/backlight の外（場所は `/backlight`） |
 | 定義していないソフトキー | soft_areas にない名前を soft_keys に書いた |
+| ホーム画面 | 上の「ホーム画面（home）」の検証 |
+| 状態の帯 | `status_bar.items` に知らない名前か、同じ名前が 2 つ |
+| 画面の向き | `rotate` が next、0、90、180、270 以外、`display.portrait_grid` が transpose、stretch 以外、`touch` のないレイヤーの `touch_portrait`、`touch_portrait` の格子の外のセル |
 | base の格子がない | touch があるのに、base に cols/rows がない |
 | 旧形式との混在 | layers と、トップレベルの keys（または touch.cells）を両方書いた |
 
