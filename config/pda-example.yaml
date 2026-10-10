@@ -4,6 +4,8 @@
 # 「メモ」「端末」「本体」のレイヤー、ホーム画面、状態の帯（status_bar）、縦向きの格子（touch_portrait）を足したもの。
 # 起動するとホーム画面が出る。アイコンをタップするとそのレイヤーに入り、画面右の帯の HOME でホーム画面に戻る。
 # 左手デバイス（base）も、ホーム画面のアプリの 1 つ（「左手」）。書き方は docs/config.md の「ホーム画面」「状態の帯」「画面の回転」
+# PC から外したとき（offline）は、ホーム画面に切り替え、PC に送るセルを休みにする。Todo は Brain のキーボードで足せ（Todo の「追加」か 決定）、
+# 時刻は「本体」の「時刻合わせ」で合わせられる。電池が少なくなったら知らせ、5% を下回ったら電源を切る（docs/config.md の「PC から外したとき」）
 hid_device: /dev/hidg0
 keyboard: brain-kbd-i2c
 touch:
@@ -293,8 +295,12 @@ layers:
         "2,0": {widget: clock, span: [2, 1]}
         "2,1": {widget: text, id: build, label: ビルド}
         "3,1": {widget: text, id: deploy, label: デプロイ}
-        "2,2": {layer_to: menu, label: メニュー}
+        # Brain のキーボードで Todo を足す（英数字と記号。日本語は入れられない）。決定で足し、戻るでやめる
+        "2,2": {input: todo, label: "Todo\n追加"}
         "3,2": {layer_to: base, label: 基本}
+    # Todo のレイヤーでは、決定（KEY_ENTER）でも Todo を足す欄を開く
+    keys:
+      KEY_ENTER: {input: todo}
   - name: calendar
     label: 予定
     touch:
@@ -479,7 +485,9 @@ layers:
       rows: 3
       cells:
         "0,0": {widget: battery, label: 電池}
-        "1,0": {widget: clock, span: [2, 1]}
+        "1,0": {widget: clock}
+        # PC がないときに、Brain のキーボードで時刻を合わせる（年-月-日 時:分）
+        "2,0": {input: clock, label: 時刻合わせ}
         "3,0": {widget: presence}
         # 画面の向き。next で 90 度ずつ回す。向きは保存され、再起動しても残る
         "0,1": {rotate: next, label: 回す}
@@ -502,7 +510,8 @@ layers:
         "1,2": {rotate: 0, label: 横向き}
         "0,3": {usb_mode: toggle}
         "1,3": {terminal: on, label: 端末}
-        "0,4": {layer_to: base, label: 基本, span: [2, 1]}
+        "0,4": {layer_to: base, label: 基本}
+        "1,4": {input: clock, label: 時刻合わせ}
 # ホーム画面。アプリは、入る先のレイヤー（layer）と、名前（name）、アイコン（icon。組み込みの名前か、画像の id）。
 # 1 ページは横向きで 4×3、縦向きで 3×4。入りきらなければ、下の ◀ ▶（と画面右の帯の ◀ ▶）でページを送る
 home:
@@ -531,12 +540,29 @@ status_bar:
   show: true
 # 自動減光。1 分触らなければ暗くし（明るさ 1）、5 分で消す。暗いときのタッチは、明るくするだけでセルを押さない。
 # 本体キーは、暗いときもそのまま PC に送り、画面も明るくする（wake_on_key）。端末モードのあいだは暗くしない
+# PC から外しているあいだ（offline）は、電池を持たせるため 30 秒で暗くし、2 分で消す
 backlight:
   dim_after: 1m
   dim_level: 1
   off_after: 5m
   wake_on_key: true
   in_terminal: false
+  offline:
+    dim_after: 30s
+    off_after: 2m
+# PC から外れたら（USB を抜いた、PC の電源が切れた）、ホーム画面に切り替え、つなぎ直したら前の画面に戻す
+offline:
+  home: true
+# 電池だけで動いているあいだ、残り 20% で知らせ、10% でもう一度知らせ、5% を下回ったら 60 秒後に電源を切る
+# （キーかタッチでやめられる）。USB につないでいるあいだは切らない。電圧の記録（battery-log.csv）は既定で取る
+battery:
+  warn: 20
+  critical: 10
+  poweroff: 5
+# 時刻：起動したとき、時刻が合っていなければ内蔵 RTC の時刻に合わせる（RTC が狂っていれば使わない）。
+# 純正のファームウェアの時計と同じ形だと確かめたら、write にすると、合わせた時刻を RTC に書き戻す
+clock:
+  rtc: read
 display:
   enabled: true
   device: /dev/fb0
