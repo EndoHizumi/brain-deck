@@ -10,7 +10,7 @@ export const IMAGE_HEADER = 8
 export const IMAGE_MAX_SIDE = 800
 export const IMAGE_MAX_PIXELS = 800 * 480
 export const IMAGE_ID = /^[0-9a-f]{16}$/
-// 読み込んだ画像の長い辺をここまで縮めてから扱う（大きな写真でもメモリを使いすぎない）
+// 読み込んだ画像の長い辺がこれを超えると、整数の倍率で縮めてから扱う（shrink。brain-deck と同じ）
 export const SOURCE_MAX_SIDE = 2048
 
 export type Dither = 'fs' | 'none'
@@ -49,101 +49,137 @@ export interface ConvertParams {
 export const DEFAULT_BRIGHTNESS = -0.35 // 文字が読みやすいよう、少し暗くする
 export const MAX_ZOOM = 8
 
-// ---------- 切り抜き ----------
+// ---------- 変換（internal/imgconv/imgconv.go と同じ整数の計算） ----------
+//
+// brain-deck photo add（Go）と画素単位で同じ結果にするため、浮動小数点を使わず、整数だけで計算する。
+// 値は 2^53 より小さい整数なので、number のままでも正確に計算できる（割り算は idiv で切り捨てる）。
 
-// fitCrop は、元の画像 sw×sh から、tw×th と同じ縦横比の範囲を、中心 (cx, cy) と拡大率で決める。
-// 範囲は元の画像の中に収める（はみ出すときは中心をずらす）。
+export const UNIT = 16 // resample の結果の単位（1/16）
+export const FULL = 255 * UNIT
+
+// idiv は、0 以上の整数 a を b で割って切り捨てる（浮動小数点の割り算の丸めに頼らない）。
+function idiv(a: number, b: number): number {
+  return (a - (a % b)) / b
+}
+
+// shrink は、長い辺が SOURCE_MAX_SIDE を超えるとき、整数の倍率 k で k×k の画素を平均して縮める。
+export function shrinkFactor(w: number, h: number): number {
+  return Math.ceil(Math.max(w, h, 1) / SOURCE_MAX_SIDE)
+}
+
+export function shrink(src: SourceImage): SourceImage {
+  const k = shrinkFactor(src.w, src.h)
+  if (k <= 1) return src
+  const w = Math.max(Math.floor(src.w / k), 1)
+  const h = Math.max(Math.floor(src.h / k), 1)
+  const out = new Uint8ClampedArray(w * h * 4)
+  const n = k * k
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const s = [0, 0, 0, 0]
+      for (let dy = 0; dy < k; dy++) {
+        const o = ((y * k + dy) * src.w + x * k) * 4
+        for (let dx = 0; dx < k; dx++) for (let c = 0; c < 4; c++) s[c] += src.data[o + dx * 4 + c]
+      }
+      for (let c = 0; c < 4; c++) out[(y * w + x) * 4 + c] = idiv(s[c] + (n >> 1), n)
+    }
+  }
+  return { w, h, data: out }
+}
+
+// fitCrop は、元の画像 sw×sh から、tw×th と同じ縦横比の範囲を、中心 (cx, cy) と拡大率で決める（整数の画素）。
+// 範囲は元の画像の中に収める（はみ出すときは中心をずらす）。拡大率は 1000 分率に丸める。
 export function fitCrop(sw: number, sh: number, tw: number, th: number, zoom: number, cx: number, cy: number): Crop {
-  const a = tw / th
-  const z = Math.min(Math.max(zoom, 1), MAX_ZOOM)
-  let w = Math.min(sw, sh * a) / z
-  let h = w / a
-  w = Math.min(w, sw)
-  h = Math.min(h, sh)
-  const x = Math.min(Math.max(cx - w / 2, 0), sw - w)
-  const y = Math.min(Math.max(cy - h / 2, 0), sh - h)
+  const zm = Math.min(Math.max(Math.round(zoom * 1000), 1000), MAX_ZOOM * 1000)
+  let bw: number
+  let bh: number
+  if (sw * th <= sh * tw) {
+    bw = sw
+    bh = idiv(sw * th, tw)
+  } else {
+    bh = sh
+    bw = idiv(sh * tw, th)
+  }
+  const w = Math.min(Math.max(idiv(bw * 1000, zm), 1), sw)
+  const h = Math.min(Math.max(idiv(bh * 1000, zm), 1), sh)
+  // 負の中心は、真ん中（brain-deck の既定）
+  const px = cx < 0 ? sw >> 1 : Math.round(cx)
+  const py = cy < 0 ? sh >> 1 : Math.round(cy)
+  const x = Math.min(Math.max(px - (w >> 1), 0), sw - w)
+  const y = Math.min(Math.max(py - (h >> 1), 0), sh - h)
   return { x, y, w, h }
 }
 
-// ---------- 縮小・拡大 ----------
-
-// axisWeights は、出力の 1 列（1 行）ごとに、元の画素の番号と重みを返す。
-// 縮小は、出力の画素が覆う範囲の面積で平均する。拡大は、2 つの画素の間を直線でつなぐ（バイリニア）。
-function axisWeights(start: number, len: number, out: number, size: number): { idx: Int32Array; w: Float32Array; off: Int32Array } {
-  const s = len / out
-  const idx: number[] = []
-  const wt: number[] = []
-  const off: number[] = [0]
+// spans は、長さ n の範囲を out 個に分けたときの、出力ごとの最初の画素と重み（合計は n）。
+function spans(n: number, out: number): { j0: number; w: number[] }[] {
+  const sp = []
   for (let i = 0; i < out; i++) {
-    if (s >= 1) {
-      const a = start + i * s
-      const b = a + s
-      for (let j = Math.floor(a); j < Math.ceil(b); j++) {
-        const cover = Math.min(b, j + 1) - Math.max(a, j)
-        if (cover <= 0) continue
-        idx.push(Math.min(Math.max(j, 0), size - 1))
-        wt.push(cover / s)
-      }
-    } else {
-      const c = start + (i + 0.5) * s - 0.5
-      const j = Math.floor(c)
-      const f = c - j
-      idx.push(Math.min(Math.max(j, 0), size - 1), Math.min(Math.max(j + 1, 0), size - 1))
-      wt.push(1 - f, f)
-    }
-    off.push(idx.length)
+    const a = i * n
+    const b = (i + 1) * n
+    const j0 = Math.floor(a / out)
+    const j1 = Math.ceil(b / out)
+    const w: number[] = []
+    for (let j = j0; j < j1; j++) w.push(Math.max(Math.min(b, (j + 1) * out) - Math.max(a, j * out), 0))
+    sp.push({ j0, w })
   }
-  return { idx: Int32Array.from(idx), w: Float32Array.from(wt), off: Int32Array.from(off) }
+  return sp
 }
 
-// resample は、元の画像の crop の範囲を tw×th にして、RGB（0〜255 の小数）を返す。透明な部分は黒の上に重ねる。
-export function resample(src: SourceImage, crop: Crop, tw: number, th: number): Float32Array {
-  const xs = axisWeights(crop.x, crop.w, tw, src.w)
-  const ys = axisWeights(crop.y, crop.h, th, src.h)
-  // 使う行だけ、横方向を先に縮める
-  const rows = new Map<number, Float32Array>()
-  const row = (sy: number): Float32Array => {
-    let r = rows.get(sy)
-    if (r) return r
-    r = new Float32Array(tw * 3)
-    const base = sy * src.w * 4
-    for (let i = 0; i < tw; i++) {
-      let R = 0
-      let G = 0
-      let B = 0
-      for (let k = xs.off[i]; k < xs.off[i + 1]; k++) {
-        const o = base + xs.idx[k] * 4
-        const a = (src.data[o + 3] / 255) * xs.w[k]
-        R += src.data[o] * a
-        G += src.data[o + 1] * a
-        B += src.data[o + 2] * a
-      }
-      r[i * 3] = R
-      r[i * 3 + 1] = G
-      r[i * 3 + 2] = B
-    }
-    rows.set(sy, r)
-    return r
-  }
-  const out = new Float32Array(tw * th * 3)
+// resample は、元の画像の crop の範囲を tw×th にして、RGB を 1/16 の単位（0〜4080）で返す。
+// 出力の画素が覆う元の画素の面積で重みを付けて平均する（縮小も拡大も同じ式）。透明な部分は黒の上に重ねる。
+export function resample(src: SourceImage, crop: Crop, tw: number, th: number): Int32Array {
+  const xs = spans(crop.w, tw)
+  const ys = spans(crop.h, th)
+  const out = new Int32Array(tw * th * 3)
+  const row = new Float64Array(tw * 3)
+  let rowY = -1
+  const acc = new Float64Array(tw * 3)
+  const d = crop.w * crop.h * 255
   for (let j = 0; j < th; j++) {
-    const o = j * tw * 3
-    for (let k = ys.off[j]; k < ys.off[j + 1]; k++) {
-      const r = row(ys.idx[k])
-      const wy = ys.w[k]
-      for (let i = 0; i < tw * 3; i++) out[o + i] += r[i] * wy
+    acc.fill(0)
+    const sj = ys[j]
+    for (let k = 0; k < sj.w.length; k++) {
+      const wy = sj.w[k]
+      if (!wy) continue
+      const sy = crop.y + sj.j0 + k
+      if (sy !== rowY) {
+        const base = sy * src.w * 4
+        for (let i = 0; i < tw; i++) {
+          let R = 0
+          let G = 0
+          let B = 0
+          const si = xs[i]
+          for (let q = 0; q < si.w.length; q++) {
+            const wx = si.w[q]
+            if (!wx) continue
+            const o = base + (crop.x + si.j0 + q) * 4
+            const a = src.data[o + 3] * wx
+            R += src.data[o] * a
+            G += src.data[o + 1] * a
+            B += src.data[o + 2] * a
+          }
+          row[i * 3] = R
+          row[i * 3 + 1] = G
+          row[i * 3 + 2] = B
+        }
+        rowY = sy
+      }
+      for (let i = 0; i < acc.length; i++) acc[i] += row[i] * wy
     }
+    const o = j * tw * 3
+    for (let i = 0; i < acc.length; i++) out[o + i] = idiv(acc[i] * UNIT + Math.floor(d / 2), d)
   }
   return out
 }
 
-// adjust は明るさを変える（画像に焼き込む）。k が負なら黒に、正なら白に近づける。
-export function adjust(rgb: Float32Array, k: number): Float32Array {
-  const out = new Float32Array(rgb.length)
-  const t = Math.min(Math.max(k, -1), 1)
-  for (let i = 0; i < rgb.length; i++) {
-    const v = rgb[i]
-    out[i] = t < 0 ? v * (1 + t) : v + (255 - v) * t
+// adjust は明るさを変える（画像に焼き込む）。k は -1〜1（百分率に丸める）。負なら黒に、正なら白に近づける。
+export function adjust(v: Int32Array, k: number): Int32Array {
+  const t = Math.min(Math.max(Math.round(k * 100), -100), 100)
+  const out = Int32Array.from(v)
+  if (t === 0) return out
+  for (let i = 0; i < out.length; i++) {
+    const x = out[i]
+    out[i] = t < 0 ? Math.trunc((x * (100 + t)) / 100) : x + Math.trunc(((FULL - x) * t) / 100)
   }
   return out
 }
@@ -155,10 +191,10 @@ export function unpack565(v: number): [number, number, number] {
   return [Math.floor((((v >> 11) & 31) * 255) / 31), Math.floor((((v >> 5) & 63) * 255) / 63), Math.floor(((v & 31) * 255) / 31)]
 }
 
-// to565 は、RGB を RGB565 にする。fs なら Floyd–Steinberg のディザリングで、丸めた誤差を右と下の画素に分ける。
-// 誤差は、Brain が表示する色（unpack565）との差で計る。
-export function to565(rgb: Float32Array, w: number, h: number, dither: Dither): Uint16Array {
-  const buf = Float32Array.from(rgb)
+// to565 は、RGB（1/16 の単位）を RGB565 にする。fs なら Floyd–Steinberg のディザリングで、丸めた誤差を右と下の画素に分ける。
+// 誤差は、Brain が表示する色（unpack565）との差で計り、1/16 の単位の整数で分ける。
+export function to565(v: Int32Array, w: number, h: number, dither: Dither): Uint16Array {
+  const buf = Int32Array.from(v)
   const out = new Uint16Array(w * h)
   const max = [31, 63, 31]
   for (let y = 0; y < h; y++) {
@@ -167,22 +203,71 @@ export function to565(rgb: Float32Array, w: number, h: number, dither: Dither): 
       for (let c = 0; c < 3; c++) {
         const i = (y * w + x) * 3 + c
         const m = max[c]
-        const v = Math.min(Math.max(buf[i], 0), 255)
-        q[c] = Math.round((v * m) / 255)
+        const p = Math.min(Math.max(buf[i], 0), FULL)
+        q[c] = idiv(p * m * 2 + FULL, FULL * 2)
         if (dither !== 'fs') continue
-        const e = v - Math.floor((q[c] * 255) / m)
-        if (x + 1 < w) buf[i + 3] += (e * 7) / 16
+        const e = p - idiv(q[c] * 255, m) * UNIT
+        const e7 = (e * 7) >> 4
+        const e3 = (e * 3) >> 4
+        const e5 = (e * 5) >> 4
+        const e1 = e - e7 - e3 - e5
+        if (x + 1 < w) buf[i + 3] += e7
         if (y + 1 < h) {
           const d = i + w * 3
-          if (x > 0) buf[d - 3] += (e * 3) / 16
-          buf[d] += (e * 5) / 16
-          if (x + 1 < w) buf[d + 3] += e / 16
+          if (x > 0) buf[d - 3] += e3
+          buf[d] += e5
+          if (x + 1 < w) buf[d + 3] += e1
         }
       }
       out[y * w + x] = (q[0] << 11) | (q[1] << 5) | q[2]
     }
   }
   return out
+}
+
+// fit565 は、RGB565 の画像を、縦横比を保って dw×dh の中央に縮めて置き、残りを黒にする（Brain の photo.go と同じ）。
+// 縦向きの画面に、縦向きに切り抜いていない横向きの写真を出すときの見た目。
+export function fit565(src: Image565, dw: number, dh: number): Image565 {
+  const { w: sw, h: sh } = src
+  const out = new Uint16Array(dw * dh)
+  let w: number
+  let h: number
+  if (sw * dh <= sh * dw) {
+    h = dh
+    w = Math.max(idiv(sw * dh, sh), 1)
+  } else {
+    w = dw
+    h = Math.max(idiv(sh * dw, sw), 1)
+  }
+  const ox = (dw - w) >> 1
+  const oy = (dh - h) >> 1
+  const xs = spans(sw, w)
+  const ys = spans(sh, h)
+  const d = sw * sh
+  const hd = Math.floor(d / 2)
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      let r = 0
+      let g = 0
+      let b = 0
+      for (let k = 0; k < ys[j].w.length; k++) {
+        const wy = ys[j].w[k]
+        if (!wy) continue
+        const base = (ys[j].j0 + k) * sw
+        for (let q = 0; q < xs[i].w.length; q++) {
+          const wx = xs[i].w[q]
+          if (!wx) continue
+          const p = src.pix[base + xs[i].j0 + q]
+          const wt = wx * wy
+          r += ((p >> 11) & 31) * wt
+          g += ((p >> 5) & 63) * wt
+          b += (p & 31) * wt
+        }
+      }
+      out[(oy + j) * dw + ox + i] = (idiv(r + hd, d) << 11) | (idiv(g + hd, d) << 5) | idiv(b + hd, d)
+    }
+  }
+  return { w: dw, h: dh, pix: out }
 }
 
 // ---------- ファイル ----------
@@ -216,11 +301,15 @@ export async function sha256Hex(b: Uint8Array): Promise<string> {
 }
 
 // convert は、元の画像を tw×th の Brain の画像ファイルにする。
+// 長い辺が SOURCE_MAX_SIDE を超える画像は、先に shrink で縮める（cx、cy は縮める前の座標で受け取る）。
 export function convert(src: SourceImage, tw: number, th: number, p: ConvertParams): { img: Image565; file: Uint8Array; crop: Crop } {
-  const crop = fitCrop(src.w, src.h, tw, th, p.zoom, p.cx, p.cy)
-  const rgb = adjust(resample(src, crop, tw, th), p.brightness)
+  const k = shrinkFactor(src.w, src.h)
+  const s = shrink(src)
+  const c = fitCrop(s.w, s.h, tw, th, p.zoom, p.cx < 0 ? -1 : Math.floor(Math.round(p.cx) / k), p.cy < 0 ? -1 : Math.floor(Math.round(p.cy) / k))
+  const rgb = adjust(resample(s, c, tw, th), p.brightness)
   const img = { w: tw, h: th, pix: to565(rgb, tw, th, p.dither) }
-  return { img, file: encodeImageFile(img), crop }
+  // crop は、元の画像の座標で返す（切り抜きの枠を描くため）
+  return { img, file: encodeImageFile(img), crop: { x: c.x * k, y: c.y * k, w: c.w * k, h: c.h * k } }
 }
 
 // checkTarget は、Brain に置ける大きさかを確かめる。
@@ -231,15 +320,10 @@ export function checkTarget(w: number, h: number): string | null {
 }
 
 // decodeFile は、画像ファイル（PNG、JPEG、WebP など、ブラウザが読めるもの）を RGBA にする（ブラウザだけで使う）。
-// 長い辺が SOURCE_MAX_SIDE を超えるときは、読み込むときに縮める。
 export async function decodeFile(file: Blob): Promise<SourceImage> {
-  const probe = await createImageBitmap(file)
-  const s = Math.min(1, SOURCE_MAX_SIDE / Math.max(probe.width, probe.height))
-  let bmp = probe
-  if (s < 1) {
-    bmp = await createImageBitmap(file, { resizeWidth: Math.round(probe.width * s), resizeHeight: Math.round(probe.height * s), resizeQuality: 'high' })
-    probe.close()
-  }
+  // EXIF の向きはブラウザが直す（imageOrientation: from-image。brain-deck も同じく直す）。
+  // 縮めるのは convert の shrink（整数の計算）で行い、ブラウザの縮小は使わない（brain-deck と同じ結果にするため）
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' })
   const c = document.createElement('canvas')
   c.width = bmp.width
   c.height = bmp.height
