@@ -3,7 +3,7 @@
 Sharp Brain PW-SH2 を、**PC のそばに置いて PC と一緒に使う、手元の PDA** にする。
 昔の PDA は PC から離れて単独で使う道具だったが、brain-deck は PC の横に置き、PC の予定、Todo、天気、ビルドの結果などを
 いつも目に入る場所に出し、ボタンやキーで PC を操作する。PC から外して持ち歩いても、時計、Todo、受け取り済みの予定などはそのまま使える
-（PC から外したときの使い方と同期は、フェーズ P2、P3 で整える）。
+（PC から外したときの使い方はフェーズ P2 で整えた。同期はフェーズ P3 で整える）。
 
 Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマンド **brain-deck**、PC のブラウザで開く**設定 GUI** からなる。
 
@@ -22,7 +22,8 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 - **端末モード**：Brain の画面とキーボードを、USB でつないだ PC のコンソールの端末にする（アプリの 1 つとして置ける）。
 - **自動減光**：しばらく触らなければ画面を暗くし、さらに時間がたったら消す（`backlight`）。暗いときのタッチは明るくするだけで、セルは押さない。
 - **背景画像**：セルごとの背景、レイヤーとホーム画面の壁紙、アイコンに、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
-- **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI や brain-deck が接続したときに PC の時刻に合わせる。
+- **PC から外したとき**：PC とつながっているか、電源だけか、外れているかを見分け、外れているあいだは PC に送るセルを休みにして「PCなし」と出す。外れたらホーム画面に切り替えられる（`offline`）。Todo は Brain のキーボードで足せ（英数字と記号）、時刻も Brain で合わせられる（`input`）。外しているあいだの自動減光を別に決められ、電池が少なくなったら知らせ、さらに少なくなったら保存して電源を切る（`battery`）。
+- **時刻合わせ**：設定 GUI や brain-deck が接続したときに PC の時刻に合わせる。Brainux は内蔵 RTC を使っていないが、lefthand が起動したときに RTC のレジスタを直接読み、時刻が合っていなければ合わせる（`clock`）。
 - **設定 GUI**：PC のブラウザ（Chrome / Edge）から、USB シリアル経由で設定を読み書きする。ホーム画面、アイコン、状態の帯、縦向きの並びも編集し、向きを切り替えてプレビューで確かめられる。保存するとデーモンを止めずにすぐ反映する。
 - **保守**：一度入れたあとの更新、再起動、ログ、設定の読み書きは、ssh を使わずに brain-deck で行える（`brain-deck update`）。
 
@@ -44,14 +45,15 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 11. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
 12. [Brain の保守（ssh を使わない）](#brain-の保守ssh-を使わない)
 13. [時刻合わせ](#時刻合わせ)
-14. [タッチのキャリブレーション](#タッチのキャリブレーション)
-15. [日常の操作](#日常の操作)
-16. [シリアルコンソール](#シリアルコンソール)
-17. [端末モード](#端末モード)
-18. [画面とコンソール](#画面とコンソール)
-19. [困ったとき](#困ったとき)
-20. [開発](#開発)
-21. [フォントとライセンス](#フォントとライセンス)
+14. [PC から外して使う](#pc-から外して使う)
+15. [タッチのキャリブレーション](#タッチのキャリブレーション)
+16. [日常の操作](#日常の操作)
+17. [シリアルコンソール](#シリアルコンソール)
+18. [端末モード](#端末モード)
+19. [画面とコンソール](#画面とコンソール)
+20. [困ったとき](#困ったとき)
+21. [開発](#開発)
+22. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -316,7 +318,7 @@ cells:
 
 - **長押し**：ストップウォッチ、ポモドーロ、カウンター、在席ランプは、タップ（離したとき）と、**0.5 秒の長押し**（Todo と同じ長さ）で働きが違う。長押しの働きは離す前に起き、離しても何もしない。誤って触れただけで 0 に戻らないよう、リセットは長押しにした。これらのセルには `key` などのタップの動きは書けない。
 - **電池**：PW-SH2 では、残りと充電中を電池の電圧から見積もる（`/sys/class/power_supply` がないため。[docs/config.md](docs/config.md) の「電池」）。USB につないでいるあいだは、残りが多めに出る。
-- **ストップウォッチ**：1 秒ごとに描き直す（実機で約 5 ms）。デーモンを再起動しても数え続ける。Brain を再起動すると止まる（Brain には RTC がないため。終了した時点までの時間は残る）。
+- **ストップウォッチ**：1 秒ごとに描き直す（実機で約 5 ms）。デーモンを再起動しても数え続ける。Brain を再起動すると止まる（Brainux は内蔵 RTC を使っておらず、起動直後の時刻が当てにならないため。終了した時点までの時間は残る）。
 - **ポモドーロ**：作業（既定 25 分）と休憩（既定 5 分）をくり返す。**切り替わるとセルを 15 秒点滅させ、画面が暗ければ明るくする**。点滅はタップで止まる。
 - **QR コード**：中身はテキストのタイルと同じ仕組みで、PC の [brain-deck qr](#qr-コード) で送る（UTF-8 で 400 バイトまで、有効期限も付けられる）。セルに入らないときは「QR が入りません」と出る。
 - **プレゼン用タイマー**（`presenter`）：持ち時間（`duration`、既定 10 分）から残り時間を大きく出し、残りが区切り（`colors`。既定は残り 5 分で黄、1 分で赤）を下回ると色を変える。時間を過ぎたら超えた時間を赤で出し、セルを点滅させる。タップで開始と一時停止、長押しで 0 に戻す。**動いているあいだは自動減光をしない**。スライド送りのセルと並べた例は [config/presenter-example.yaml](config/presenter-example.yaml)（「発表」は 20 分、「LT」は 5 分で残り 1 分で黄、30 秒で赤）。
@@ -397,6 +399,24 @@ backlight:
 - **終わるとき**：デーモンが終わると、起動したときの明るさに戻す（落ちたときも、サービスの ExecStopPost の `lefthand -restore-console` が戻す）。
 - **バックライト**：PW-SH2 では `/sys/class/backlight/backlight@0`（pwm-backlight、0〜7）。実機で、暗くする・消す・明るくする・終了時に戻す、を確かめた。
 - **書かなければ**、今までどおり減光しない。設定 GUI では編集しないが、GUI で保存しても残る。詳しくは [docs/config.md](docs/config.md) の「自動減光」。
+- **PC から外しているあいだ**：`offline:` の下に書いた `dim_after`、`off_after`、`level`、`dim_level` だけ、そちらを使う（電池を持たせるため早めに暗くするなど）。
+
+### PC から外したとき（offline、input、battery、clock）
+
+```yaml
+offline:
+  home: true            # PC から外れたらホーム画面に切り替え、つなぎ直したら前の画面に戻す（既定 false）
+battery:
+  warn: 20              # 電池だけのとき、残り 20% で知らせる（既定 20）
+  critical: 10          # 10% でもう一度知らせる（既定 10）
+  poweroff: 5           # 5% を下回ったら、60 秒後に保存して電源を切る（既定 0 で切らない）
+clock:
+  rtc: read             # 起動したときに内蔵 RTC から時刻を合わせる（既定 read。write で書き戻し、off で使わない）
+```
+
+セルやキーに `{input: todo}` を割り当てると Brain のキーボードで Todo を足す欄が、`{input: clock}` で時刻を合わせる欄が開く。
+書かなくても、外れているあいだは PC に送るセルを休みにする（押しても送らず、「PC につながっていません」と出す）。
+使い方は下の「[PC から外して使う](#pc-から外して使う)」、書き方の詳細は [docs/config.md](docs/config.md) の「PC から外したとき」「電池」「時刻と内蔵 RTC」。
 
 ### 背景画像
 
@@ -896,7 +916,8 @@ brain-deck calendar sync                                   # カレンダー（I
 brain-deck images                                          # Brain にある背景画像の一覧
 brain-deck time sync                                       # PC の時刻を Brain に送る
 brain-deck terminal on                                     # 端末モードに入る（off で抜ける。引数なしで今の状態）
-brain-deck status                                          # 版、レイヤー、Brain の時刻、電池、画面の明るさ
+brain-deck status                                          # 版、レイヤー、Brain の時刻と内蔵 RTC、PC とのつながり、電池、画面の明るさ
+brain-deck battery log > battery.csv                       # 電池だけで動かしたときの電圧の記録（--fit で残りの見積もりの表を作る）
 brain-deck exec --result build -- make                     # コマンドを実行し、結果をタイル build に出す（コマンドのショートカット）
 brain-deck update lefthand-<版>.update.tar.gz             # lefthand と gadget-setup.sh を組で更新する（Brain の保守）
 brain-deck logs -f                                         # Brain の lefthand のログを追いかける
@@ -1316,7 +1337,7 @@ npm の例（`package.json`）：
 
 ### cron で時刻を合わせる
 
-Brain には RTC がないので、電源を切ると時刻が遅れる（[時刻合わせ](#時刻合わせ)）。PC の cron から定期的に合わせられる。設定はユーザーが行う（`crontab -e`）。
+Brainux は内蔵 RTC を使っていないので、lefthand が起動したときに RTC から合わせられなければ、電源を切ると時刻が遅れる（[時刻合わせ](#時刻合わせ)）。PC の cron から定期的に合わせられる。設定はユーザーが行う（`crontab -e`）。
 
 ```cron
 # 10 分ごとに Brain の時刻を合わせる。Brain がつながっていないとき（終了コード 3）や、
@@ -1391,7 +1412,7 @@ lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタ
 | 項目 | 結果 |
 | --- | --- |
 | タイムゾーン | `/etc/localtime` が Asia/Tokyo（JST）。`/etc/timezone` は Etc/UTC と書いてあるが、使われていない |
-| RTC | なし。カーネルにドライバ（stmp3xxx-rtc）はあるが、デバイスツリーにデバイスがなく、`/dev/rtc0` もない |
+| RTC | Linux からは使っていない。カーネルにドライバ（stmp3xxx-rtc）はあるが、デバイスツリーで無効になっていて、`/dev/rtc0` もない。i.MX28 の内蔵 RTC そのものは動いていて、lefthand が `/dev/mem` からレジスタを読む（下の「[内蔵 RTC](#内蔵-rtc)」） |
 | 起動したときの時刻 | systemd-timesyncd が保存した時刻（`/var/lib/systemd/timesync/clock`）と、fake-hwclock（`/etc/fake-hwclock.data`、1 時間ごとと終了時に保存）から戻す |
 | 電源を切ったあと | 保たれない。最後に保存した時刻から再開するので、切っていたあいだの分だけ遅れる。調べたときは PC より 37 時間 25 分遅れていた |
 | NTP | systemd-timesyncd は動いているが、届くサーバーがなく、一度も同期していない |
@@ -1403,6 +1424,37 @@ lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタ
 - **合わせたかどうか**：Brain を起動してから一度でも合わせれば「合わせ済み」。デーモンを再起動しても覚えている（`/var/lib/lefthand/clock.json`）。Brain を再起動すると「未設定」に戻り、時計に「時刻未設定」と出る。
 - **タイムゾーン**：変えない。Brain と PC で違えば、GUI がそのことを出す。時計ごとに `tz` で変えられる。
 - **確かめ方**：`ssh brain date` か、GUI の接続の知らせ。`ssh brain cat /var/lib/lefthand/clock.json` で最後に合わせた記録が見られる。
+
+### 内蔵 RTC
+
+i.MX28 の内蔵 RTC（HW_RTC_SECONDS、0x80056030）は、本体の電池が残っている限り数え続ける。Brain 純正のファームウェアは、これを「2000-01-01 00:00:00 から数えた秒、日本の時刻」として使う（[参考の記事](https://qiita.com/kurokouji/items/66ddd4884cefbc89d736)の「6. 時計」。PW-SH6 での話）。
+lefthand は起動したとき、時刻が合っていなければ RTC の時刻に合わせる（設定の `clock.rtc`。既定は読むだけ）。RTC が今の時刻（前に止まったときの時刻）より前なら、狂っているとみなして使わない。
+
+2026-10-10 に PW-SH2 で読むだけで調べた結果：
+
+| 項目 | 結果 |
+| --- | --- |
+| `/dev/mem` から読めるか | 読める。カーネルは `CONFIG_STRICT_DEVMEM=y` だが `CONFIG_IO_STRICT_DEVMEM` は無効で、ドライバが使っていない RTC の範囲（0x80056000）は root で読める |
+| HW_RTC_STAT | 0xe0000000（RTC、アラーム、ウォッチドッグがある。NEW_REGS と STALE_REGS は 0） |
+| HW_RTC_PERSISTENT0 | 0x00820121（クロックは 32.768 kHz の水晶、AUTO_RESTART が 1）。lefthand は PERSISTENT に触らない |
+| 数えているか | 数えている（2 秒で 2 増える。PC の時刻との差の変わり方は下の「RTC の進み方」） |
+| 2000 年起点の日本の時刻とみなすと | 2026-10-05 02:29:15（そのときの正しい時刻は 2026-10-10 20:43）。**5 日 18 時間 13 分 48 秒遅れている** |
+| 1970 年起点の UTC とみなすと | 1996-10-05。こちらの形ではない |
+
+2000 年起点の形とみなすと日付はもっともらしいが、5 日 18 時間ほど遅れている。純正のファームウェアで最後に時刻を合わせてから、RTC が止まっていた時間があったのかもしれない（電池が切れていたなど）。形が同じかは、次の手順で純正のファームウェアの時計と比べて確かめる。確かめるまでは `clock.rtc: read`（読むだけ）のままにし、RTC には書かない。今の RTC は遅れているので、起動したときにも使われない（`brain-deck status` の「起動したとき：not used: …」）。
+
+**純正のファームウェアの時計と比べる手順**（ユーザーが行う）
+
+1. PC で `brain-deck status` を実行し、「内蔵 RTC」の時刻と「PC との差」を書き留める（例：`2026-10-05 03:04:37（PC との差 −5日18h13m50s、読むだけ）`）。
+2. `brain-deck poweroff` で電源を切る。画面が消えてから 10 秒ほど待ち、**USB ケーブルを抜く**（5V があると起動し直すことがあるため。下の「[電源を切る試験](#usb-につないだまま電源を切ると起動し直すか)」）。
+3. **microSD カードを抜く**。電源ボタンで電源を入れる。内蔵の eMMC にある純正のファームウェアが起動する（起動しなければ、Brainux の wiki の手順で純正の OS を起動する）。
+4. 純正のホーム画面に出る時刻（日付と時刻）と、そのときの PC の時刻を書き留める。
+   - 1. の RTC の時刻に、1. からたった時間を足したものと同じ（1 分以内）なら、**形は記事と同じ**（2000 年起点の日本の時刻）。
+   - 大きく違えば、形が違う。表示された時刻と、1. の値を報告する。
+5. （形が同じだったとき）純正の設定で、日付と時刻を正しく合わせる。これで RTC が正しくなる。
+6. 電源を切り、microSD カードを挿して電源を入れ（Brainux が起動する）、USB で PC につなぐ。
+7. `brain-deck status` の「内蔵 RTC」の「PC との差」が数秒以内なら、純正で合わせた時刻を Brainux から正しく読めている。「Brain の時刻」が「合わせてある：内蔵 RTC」なら、lefthand が起動したときに RTC から時刻を合わせた（PC がなくても時刻が合う）。
+8. 結果を報告する。形が同じと確かめられたら、合わせた時刻を RTC に書き戻す（`clock.rtc: write`）かを決める。
 
 ### PC を NTP サーバーにする（提案。PC 側の設定はユーザーが行う）
 
@@ -1427,6 +1479,85 @@ NCM（USB のネットワーク）で、Brain の timesyncd が PC から時刻�
 
 - **どちらがよいか**：まずは設定 GUI の `set_time` で足りる（GUI を開くたびに合う）。GUI を開かない日も時計を使うなら、[cron で brain-deck time sync](#cron-で時刻を合わせる) を実行するか、NTP を足す。
 - **注意**：NTP は、PC の usb のインターフェースに 192.168.7.1 が付いているあいだだけ届く。
+
+## PC から外して使う
+
+brain-deck は PC のそばに置いて使うが、USB を抜いて持ち歩いても使える。設定の例は [config/pda-example.yaml](config/pda-example.yaml)。
+
+### PC とつながっているかの見分け方
+
+| 状態の帯の「PC」 | 意味 | 見分け方 |
+| --- | --- | --- |
+| PC（緑） | PC とつながっている | USB コントローラ（UDC）の state が configured |
+| PC休止（灰） | PC がスリープ中。キーで起こせる（つながっているとみなす） | suspended |
+| 給電のみ（橙） | USB の 5V はあるが、PC と通信していない（充電器、電源の切れた PC） | configured、suspended 以外で、5V がある |
+| PCなし（橙） | 外れている | configured、suspended 以外で、5V がない |
+
+USB の形の切り替え（マウスのオンとオフ）や端末モードでは、USB を付け直すあいだ数秒 configured でなくなるので、5V があるときは 8 秒続いてから「外れた」とみなす。ケーブルを抜いたとき（5V がなくなったとき）は、2 秒以内に切り替わる。
+
+### 外れているあいだ
+
+- **休みにするもの**：PC に送るキーとセル、マウス、トラックパッド、メディアキー、端末モード。押しても何も送らず、画面の下に「PC につながっていません」と出る。セルは文字が薄くなり、下に「PCなし」と出る。PC から受け取るテキストとグラフのタイル、トラックパッドは、右下の隅に「PCなし」の札が出る（前に受け取った中身はそのまま）。
+- **そのまま使えるもの**：ホーム画面とアプリの移動、時計、Todo（見る、長押しで完了、Brain のキーボードで足す）、カウンター、ストップウォッチ、ポモドーロ、プレゼン用タイマー、電卓の計算、受け取り済みの予定と月の表示と天気、QR コード、在席ランプ、電池、画面の向き。
+- **ホーム画面に切り替える**：`offline: {home: true}` なら、外れたときにホーム画面に切り替える。つなぎ直したとき、ホーム画面のまま触っていなければ、外れる前の画面に戻る（外しているあいだに入ったアプリは、そのまま）。
+- **自動減光**：`backlight.offline` に、外しているあいだの時間と明るさを書ける（電池を持たせるため、早めに暗くするなど）。
+
+### Brain のキーボードで Todo を足す、時刻を合わせる
+
+`{input: todo}`、`{input: clock}` を割り当てたキーやセルを押すと、画面の下に入力欄が開く（例の設定では、Todo のアプリの「Todo 追加」と 決定、本体のアプリの「時刻合わせ」）。
+
+- **打てる文字**：英字、数字、スペース、記号（シフトで大文字と記号。「記号」とシフトで US 配列の記号すべて。端末モードと同じ）。**日本語は入れられない**（Brain に日本語の入力の仕組みがないため）。日本語の Todo は、設定 GUI か `brain-deck todo add` で足す。
+- **操作**：決定で確定、戻る（調べる）でやめる、後退で 1 字消す、← → でカーソル、↑ ↓ で先頭と最後、マーカーテスト（Delete）でカーソルの後ろの 1 字を消す。開いているあいだ、本体キーは PC に送らない。
+- **Todo**：決定で一覧の先頭に足し、「Todo に足しました：…」と出る。Brain のデータ（`/var/lib/lefthand/todo.json`）に足すので、PC から外していても失われず、つないだあとに `brain-deck todo` や設定 GUI で見える（Todo は Brain のデータが正）。
+- **時刻**：開くと今の時刻（合っていなければ目安）が「2026-10-10 09:41」の形で入っている。直して決定で、Brain の時刻を合わせる。形が違えば赤で知らせ、欄は開いたまま。
+
+### 時刻
+
+- **起動したとき**：時刻が合っていなければ、内蔵 RTC の時刻に合わせる（上の「[内蔵 RTC](#内蔵-rtc)」）。RTC が使えなければ、最後に分かっていた時刻（合っているあいだ 30 分ごとに残す）まで進める（「時刻未設定」のまま。目安）。
+- **外したあと**：電源を入れたままなら、Brain の時計は進み続ける（Linux のシステムの時計。USB は関係しない）。
+- **PC がないとき**：「時刻合わせ」で Brain のキーボードから合わせられる。
+- **確かめる**：`brain-deck status` の「Brain の時刻」（合わせた側：設定 GUI、brain-deck、Brain のキーボード、内蔵 RTC）と「内蔵 RTC」（RTC の時刻と PC との差）。
+
+### 電池
+
+- **残りの見積もり**：PW-SH2 は充電の状態を読めないので、電池の電圧から見積もる（`battery.go`）。見積もりの表は `battery.curve` で変えられる。電池だけで動かした記録から、表を作り直せる（下の手順）。
+- **知らせ**：電池だけのとき、残りが `battery.warn`（既定 20%）以下で「電池が少なくなりました」、`battery.critical`（既定 10%）以下で「電池がほとんどありません」と画面の下に出す（画面も明るくする）。
+- **電源を切る**：`battery.poweroff` を書けば、その値以下が続いたとき、60 秒後に電源を切ると知らせ、キーかタッチがなければ、データを保存して電源を切る。USB の 5V があるあいだは切らない（下の試験で確かめる）。既定は切らない。
+- **記録**：電池だけのあいだ、30 秒ごとに電圧を `/var/lib/lefthand/battery-log.csv` に記録する（既定。`battery.log: false` で止める。1 MiB ほどまで）。`brain-deck battery log` で PC に取り出す。
+
+### 目で確かめる手順（フェーズ P2）
+
+設定 GUI で [config/pda-example.yaml](config/pda-example.yaml) を開いて「Brain に保存…」してから行う（元に戻すときは `config/current.yaml` を開いて保存する）。
+
+1. **外したとき**：ホーム画面から「左手」に入る。USB ケーブルを抜く。2 秒ほどでホーム画面に切り替わり、帯に「PCなし」（橙）。
+2. **休みのセル**：外したまま「左手」に入る。セルの文字が薄く、下に「PCなし」。セルを押すと画面の下に「PC につながっていません」が 4 秒出て、消える。
+3. **Todo を足す**：ホーム画面 →「Todo」→ 決定。画面の下に「Todo を足す（英数字と記号）」の欄。シフトを押しながら B、続けて「uy milk」と打ち、決定。「Todo に足しました：Buy milk」と出て、一覧の先頭に「Buy milk」。
+4. **時刻を合わせる**：ホーム画面 →「本体」→「時刻合わせ」。今の時刻が入っている。後退で分を消して 1 分先の分を打ち、決定。「時刻を合わせました」と出て、時計が変わる。戻るでやめられることも確かめる。
+5. **時計は進む**：外したまま 5 分ほど待ち、時計が進むこと（帯の時刻、本体の時計）。
+6. **つなぎ直す**：ホーム画面のまま USB をつなぐ。帯が「PC」（緑）になり、1. で入っていた「左手」に戻る。PC で `brain-deck status` を実行し、「Brain の時刻」の「PC との差」が、4. でずらした分（1 分ほど）であること。`brain-deck time sync` で合わせ直す。`brain-deck todo` に「Buy milk」が出ること。
+7. **給電のみ**：USB の充電器（PC でないもの）につなぐ。8 秒ほどで帯が「給電のみ」になり、セルは休みのまま。
+8. **外したときの暗くなり方**：外したまま 30 秒触らないと暗くなり、2 分で消える（つないでいるときは 1 分、5 分）。
+
+### USB につないだまま電源を切ると、起動し直すか
+
+i.MX28 は、USB の 5V があるときに電源を切ると、起動し直してしまうと報告されている（[参考の記事](https://qiita.com/kurokouji/items/66ddd4884cefbc89d736)の「7. ハマったこと」）。HW_RTC_PERSISTENT0 の AUTO_RESTART が 1 になっていることも関係するかもしれない（lefthand は触らない）。電池が少ないときに電源を切る機能は、5V があるときは切らないように作ってある。PW-SH2 で同じかを、次の手順で確かめる（ユーザーが行う）。
+
+1. USB で PC につないだまま、`brain-deck poweroff` を実行する（`--no-wait` を付けなければ、終わるまで待つ）。
+2. 画面が消えたあと、1〜2 分のあいだに Brain が自分で起動し直すか（画面に起動のメッセージが出るか、`brain-deck status` が答えるようになるか）を見る。
+3. 起動し直さなければ、電源ボタンで電源を入れる。
+4. 次に、電池だけで電源を切る。USB でつないだまま `ssh brain 'sudo systemd-run --on-active=60s /bin/systemctl poweroff'` を実行し、60 秒以内に USB ケーブルを抜く。電源が切れたあと、切れたままになるかを見る。
+5. 電源が切れたままの Brain に USB をつなぎ、自分で起動するかを見る。
+6. 2.、4.、5. の結果を報告する。
+
+### 電池だけで動かして記録を取る
+
+残りの見積もり（電圧と残りの表）を見直すための記録。ユーザーが行う。lefthand をこの版にしてあれば、設定を変えなくても記録する。
+
+1. USB でつないだまま、電池を満たす（`brain-deck status` の「電池」が 4.15 V 以上になってから、さらに 1 時間ほど）。
+2. ふだんの使い方に近い画面（ホーム画面か、よく使うアプリ）にして、USB を抜いた時刻を書き留める。そのまま置いておく（自動減光の設定も、ふだんのまま）。
+3. Brain が自分で止まるまで待つ（数時間かかる）。止まった時刻が分かれば書き留める。`battery.poweroff` を書いていれば、その手前で知らせて電源を切る（書いていなければ、電池が切れて突然止まる。SD カードへの書き込みの途中で止まると、まれにファイルが壊れることがある）。
+4. USB でつないで電源を入れ、起動したら、PC で `brain-deck battery log > brain-battery-$(date +%Y%m%d).csv` と `brain-deck battery log --fit` を実行する。
+5. CSV と `--fit` の出力を、次のセッションに渡す（`--fit` の `battery: curve:` を設定に書けば、すぐ使える）。
 
 ## タッチのキャリブレーション
 
@@ -1847,7 +1978,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | gadgetwidget.go | 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプの検証、描画、タップと長押し |
 | gadgets.go | ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（widgets.json）、再起動と時刻合わせの扱い |
 | qr.go | QR コードの符号化（Project Nayuki の手順をバイトモードに絞ったもの。gui/src/qr.ts も同じ） |
-| battery.go | 電池の状態（power_supply か、i.MX28 の LRADC の電圧） |
+| battery.go | 電池の状態（power_supply か、i.MX28 の LRADC の電圧）と、残りの見積もりの表 |
+| batteryguard.go | 電池が少ないときの知らせと電源断（battery）、電池だけのあいだの記録（battery-log.csv） |
 | backlight.go | 自動減光（設定の backlight）。暗いときのタッチを捨てる、終わるときに戻す |
 | weather.go | 天気予報（set_weather、get_weather の中身）と、その保存。取得の失敗のときは前の予報を残す |
 | weathericon.go | 天気アイコンの置き場所（.lha、透明度付きの RGB565）、受け取り（upload_* の weather_icon）、上限、重ねて描く処理 |
@@ -1859,7 +1991,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | todo.go | Todo の項目（get_todo、todo_* のコマンドの中身）と、その保存、変わったことの通知 |
 | todowidget.go | Todo のセルの配置、描画、ページ送り、長押しでの切り替え |
 | text.go | テキストのタイルの中身（set_text、get_text）と、その保存 |
-| timesync.go | 時刻合わせ（set_time）と、合わせたかどうかの判断 |
+| timesync.go | 時刻合わせ（set_time）と、合わせたかどうかの判断、起動したときに内蔵 RTC から合わせる、最後に分かっていた時刻 |
+| rtc.go | i.MX28 の内蔵 RTC のレジスタを /dev/mem から読み書きする（clock.rtc） |
 | store.go | データの置き場所（/var/lib/lefthand）の読み書き |
 | apply.go | 設定の保存と、再起動なしの反映、失敗したときの巻き戻し |
 | keymap_pwsh2.go | 設定 GUI に渡す、本体キーの配置と制約 |
@@ -1871,7 +2004,9 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | icons.go | 組み込みのアイコン（16×16 のドット絵）。gui/src/icons.json も同じ表 |
 | statusbar.go | 状態の帯（項目、配置、描き直しの時刻） |
 | rotate.go | 画面の回転（rotate、向きの保存 display.json、タッチの座標の変換、縦向きの格子の作り方） |
-| link.go | PC とのつながり（UDC の state を 2 秒ごとに見る） |
+| link.go | PC とのつながり（UDC の state と USB の 5V を 2 秒ごとに見て、つながっている、電源だけ、外れているを見分ける） |
+| offline.go | PC から外れたとき（PC に送るものを休みにする、ホーム画面に切り替える、休みのセルの描き方） |
+| prompt.go | 画面の下に重ねて出す知らせと、Brain のキーボードで文字を入れる欄（input: todo、clock） |
 | vt.go | 専用 VT の確保と、元の VT への復帰 |
 | font.go、font/ | 埋め込みフォントと、そのライセンス |
 | tools/mkfont/ | BDF フォントを埋め込み用の形式に変換するツール |
@@ -1888,7 +2023,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | tools/mkbg/ | 例の画像（グラデーションと模様）を作るツール |
 | config/trackpad-example.yaml | トラックパッドとマウスのボタンの例（current.yaml に「マウス」のレイヤーを足したもの） |
 | config/media-example.yaml | メディアキーと F13〜F24 の例（current.yaml に「メディア」と「F13〜F24」のレイヤーを足したもの） |
-| config/pda-example.yaml | 「PC のための手元の PDA」の例（ホーム画面、状態の帯、縦向きの格子、画面の向きのセル。gadgets-example.yaml に月、天気、電卓、グラフ、マウス、発表、メモ、端末、本体のレイヤーを足したもの） |
+| config/pda-example.yaml | 「PC のための手元の PDA」の例（ホーム画面、状態の帯、縦向きの格子、画面の向きのセル、PC から外したとき、Todo 追加と時刻合わせ、電池、内蔵 RTC。gadgets-example.yaml に月、天気、電卓、グラフ、マウス、発表、メモ、端末、本体のレイヤーを足したもの） |
 | config/gadgets-example.yaml | 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプと、自動減光の例（widgets-example.yaml に「道具」と「共有」のレイヤーと backlight を足したもの） |
 | tools/mkupdate/ | brain-deck update で送る更新のファイル（manifest.json、lefthand、gadget-setup.sh の tar.gz）を作る |
 | config/shortcuts-example.yaml | コマンドのショートカットの例（current.yaml に「コマンド」のレイヤーを足したもの。F14〜F18、Ctrl + F14〜F16、結果のタイル） |
@@ -2008,9 +2143,14 @@ TZ=Asia/Tokyo go run . -render-png $F/pda-base-180.png -render-rotate 180 -rende
 TZ=Asia/Tokyo go run . -render-png $F/home-images.png -render-time $T -render-images $I $H
 TZ=Asia/Tokyo go run . -render-png $F/home-images-portrait.png -render-rotate 90 -render-time $T -render-images $I $H
 TZ=Asia/Tokyo go run . -render-png $F/home-images-stretch.png -render-rotate 90 -render-layer info -render-time $T -render-images $I $H
+# PC から外したとき（-render-link が configured、suspended 以外なら、PC に送るセルを休みと描く）
+TZ=Asia/Tokyo go run . -render-png $F/pda-base-offline.png -render-layer base -render-time $T -render-link "not attached" $C
+TZ=Asia/Tokyo go run . -render-png $F/pda-todo-offline.png -render-layer todo -render-time $T -render-battery 64 -render-link power -render-texts $F/texts.json -render-todo $F/todo.json $C
+TZ=Asia/Tokyo go run . -render-png $F/pda-mouse-offline-portrait.png -render-rotate 270 -render-layer mouse -render-time $T -render-link "not attached" -render-pressed "3,0" $C
 ```
 
 組み込みのアイコンの表（icons.go）を変えたら、GUI に同梱した表も `LEFTHAND_UPDATE_ICONS=1 go test -run IconsJSON` で書き直し、上の PNG も作り直す。
+PC から外したときは、実機で `sudo LEFTHAND_HW_TEST=1 timeout 120 ./lefthand.test -test.run HWOffline -test.v`（本番を止めてから。pda-example.yaml を同じディレクトリに置く）。内蔵 RTC を読み（読むだけ）、USB の 5V を読む時間を測り、外れたとき（ホーム画面への切り替え）、休みのセルを押したときの知らせ、Todo の欄に打つ・確定する、時刻の欄（形を確かめるだけで、システムの時刻は変えない）、つなぎ直したときの描き直しの時間を測って、そのたびに画面が全体を描いたもの（重ねた欄と知らせも）と同じことを確かめる。Todo と電池の記録はテストの一時ディレクトリに書く。
 ホーム画面、状態の帯、画面の向きは、実機で `sudo LEFTHAND_HW_TEST=1 timeout 120 ./lefthand.test -test.run HWHomeRotate -test.v`（本番を止めてから。テストの実行ファイルと同じディレクトリに config/pda-example.yaml を pda-example.yaml として置く）。アプリのタップ（横向きと、本体を回して持ったときの位置）、HOME、4 つの向きへの回転、帯の描き直しの時間を測り、そのたびに画面が全体を描いたものと同じことを確かめる。
 
 天気のウィジェットの配置（`gui/src/weatherwidget.ts`）は、Go の結果の表（`gui/test/fixtures/weatherlayout.json`。文字、色、アイコンの箱の位置）と比べる。配置を変えたら `LEFTHAND_UPDATE_WEATHER=1 go test -run TestWeatherFixtures` で書き直し、上の PNG も作り直す。

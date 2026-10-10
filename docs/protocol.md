@@ -154,10 +154,34 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
    "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"},"hid":{"mouse":true,"media":true,"switching":false,"usb_state":"configured"},
    "terminal":{"active":true,"state":"on","transport":"serial","status":"PC のログイン画面","cols":100,"rows":31},
    "battery":{"percent":100,"voltage_mv":4172,"plugged":true,"charging":false,"source":"lradc","estimated":true},
-   "backlight":{"enabled":true,"state":"dim","level":1,"max":7,"device":"/sys/class/backlight/backlight@0"}}}
+   "backlight":{"enabled":true,"state":"dim","level":1,"max":7,"device":"/sys/class/backlight/backlight@0"},
+   "rtc":{"mode":"read","readable":true,"seconds":844482277,"time":"2026-10-05T03:04:37+09:00","offset_ms":-497629310,
+     "stat":"0xe0000000","persistent0":"0x820121","boot":"not used: the RTC says 2026-10-05 03:01:40, before the clock restored at boot or the last known time (2026-10-10 21:15:28)"},
+   "link":{"state":"configured","online":true,"offline_mode":false}}}
 ```
 
 `time` は Brain の時刻の状態（下の `set_time` の結果と同じ形）。
+
+`rtc` は i.MX28 の内蔵 RTC（`rtc.go`。設定の `clock.rtc`）。この項目がなければ、RTC を読まない版（フェーズ P2 より前）。
+
+| 項目 | 内容 |
+| --- | --- |
+| `mode` | `read`（起動したときに読んで合わせるだけ）、`write`（時刻を合わせたら書き戻す）、`off`（使わない。ほかの項目は出さない） |
+| `readable` | 読めたか。false なら `error` に理由（`/dev/mem` が開けない、RTC_PRESENT が 0 など） |
+| `seconds` | HW_RTC_SECONDS（0x80056030）の値 |
+| `time` | `seconds` を「2000-01-01 00:00:00 起点の、Brain のタイムゾーンの時刻」とみなしたもの（Brain 純正のファームウェアの形） |
+| `offset_ms` | `time` − Brain のシステムの時刻（読んだとき） |
+| `stat`、`persistent0` | HW_RTC_STAT と HW_RTC_PERSISTENT0（調べるため。lefthand は PERSISTENT に書かない） |
+| `boot` | デーモンが起動したときにどうしたか（`set the clock from the RTC (…)`、`not used: …`、`not needed (…)`） |
+| `last_write`、`written_at` | `write` のとき、最後に書いた結果（`ok` か `failed: …`）と時刻 |
+
+`link` は PC とのつながり（`link.go`）。この項目がなければ、フェーズ P2 より前の版。
+
+| 項目 | 内容 |
+| --- | --- |
+| `state` | `configured`（PC とつながっている）、`suspended`（PC がスリープ中）、`power`（USB の 5V はあるが PC と通信していない。充電器、電源の切れた PC）、`not attached`（外れている）、そのほかの UDC の state。分からなければ空 |
+| `online` | `configured`、`suspended`、空なら true |
+| `offline_mode` | デーモンが「外れている」として、PC に送るものを休みにしているか（5V があるまま `configured` でなくなったときは、8 秒続いてから） |
 
 `hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.media` は、メディアキー（`media:`）が PC に届くか。キーボードとマウスの形で true（ガジェットを作り直す前の古い形では、マウスがあっても false）。この項目がなければ、メディアキーに対応する前の版。`hid.switching` は、`set_usb_mode` で切り替えている途中か。`hid.usb_state` は、Brain の USB コントローラの状態（`/sys/class/udc/ci_hdrc.0/state`。`configured` でつながっている、`suspended` は PC がスリープしてバスを止めている）。`hid` がなければ、lefthand がマウスに対応する前の版。
 
@@ -264,7 +288,7 @@ Brain のキーとタッチを、通知で知らせる。GUI の学習モード�
    "last_set":"2026-10-06T10:00:46.61Z","last_source":"gui"}}
 ```
 
-Brain のシステムの時刻を合わせる。Brain には RTC がないので、電源を切っていたあいだの分だけ時刻が遅れる。設定 GUI は、接続するたびに PC の時刻を送る。
+Brain のシステムの時刻を合わせる。Brainux は内蔵 RTC を使わない（ドライバが無効）ので、lefthand が起動したときに RTC から合わせられなければ、電源を切っていたあいだの分だけ時刻が遅れる。設定 GUI は、接続するたびに PC の時刻を送る。設定の `clock.rtc` が `write` なら、合わせた時刻を内蔵 RTC にも書く（返事のあと）。
 
 | 引数 | 内容 |
 | --- | --- |
@@ -278,7 +302,10 @@ Brain のシステムの時刻を合わせる。Brain には RTC がないので
 | `now`、`timezone`、`utc_offset_sec` | 合わせたあとの Brain の時刻と、タイムゾーン（`/etc/localtime`）。タイムゾーンは変えない。GUI は PC と違えば知らせる |
 | `synced` | Brain を起動してから、時刻を合わせたか（`set_time` か NTP）。false のあいだ、時計のウィジェットは「時刻未設定」と出す |
 | `ntp_synced` | NTP で合っているか（カーネルの STA_UNSYNC が消えている） |
-| `last_set`、`last_source` | 最後に `set_time` で合わせた時刻（UTC）と、送った側 |
+| `last_set`、`last_source` | 最後に合わせた時刻（UTC）と、合わせた側（`set_time` の `source`、Brain のキーボードなら `brain`、起動したときに内蔵 RTC からなら `rtc`） |
+| `last_pc_set` | 最後に PC から（`set_time` で）合わせた時刻。状態の帯の「同期」に出す |
+| `boot_source` | この起動のあいだに合わせた側（合わせていなければない） |
+| `last_known` | 合っていると分かっていた最後の時刻（合っているあいだ 30 分ごとと、デーモンが終わるときに残す）。RTC が使えないときの目安 |
 
 - **記録**：合わせたことは `/var/lib/lefthand/clock.json` に、起動ごとの ID（boot_id）と一緒に残す。デーモンを再起動しても「合わせ済み」のまま。Brain を再起動すると、ID が変わるので「未設定」に戻る。記録は返事のあとに書く（SD カードの書き込みを待たせない）。
 - **権限**：デーモンは root で動くので、時刻を変えられる。
@@ -731,6 +758,27 @@ README の「Brain の保守」。lefthand が systemd のサービスとして�
 ```
 
 `journalctl -u <デーモンのユニット> -u lefthand-update.service -o short-iso`。`cursor` を渡すと、そのあとのものだけ（追いかけるとき）。`lines` は 2000 まで、`text` は 200 KiB まで（長ければ新しいほうを残す）。
+
+### get_battery_log
+
+```json
+→ {"id":11,"cmd":"get_battery_log","lines":3}
+← {"id":11,"ok":true,"result":{"csv":"time,uptime_s,vbatt_mv,vbatt_avg_mv,vbus_mv,percent,plugged,backlight,event\n2026-10-11T09:00:00+09:00,…\n"}}
+```
+
+電池だけで動かしたときの記録（`<data-dir>/battery-log.csv` と、大きくなって移した `.1` を古い順につないだもの。`batteryguard.go`）。`lines` を書けば最後のその行数だけ（見出しは付ける）。設定の `battery.log` が false なら記録しない。
+
+| 列 | 内容 |
+| --- | --- |
+| `time`、`uptime_s` | 読んだ時刻と、起動してからの秒 |
+| `vbatt_mv`、`vbatt_avg_mv` | 電池の電圧（3 回読んだ中央値）と、5 回の移動平均（残りの見積もりに使う） |
+| `vbus_mv` | USB の 5V |
+| `percent` | 見積もった残り |
+| `plugged` | 5V があるか |
+| `backlight` | 画面の明るさ（0〜7。自動減光を使っていなければ空のことがある） |
+| `event` | `start`（起動）、`unplugged`、`plugged`、`warn`、`critical`、`poweroff-countdown`、`poweroff-cancelled`、`poweroff` |
+
+行を書くのは、5V がないあいだは 30 秒ごと、5V があるあいだは起動したときとつないだときだけ。
 
 ## 設定のテキスト（get_config_text、put_config_text）
 
