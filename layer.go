@@ -369,7 +369,7 @@ func (e *Engine) PressKey(code evdev.EvCode) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.calcKeyLocked(code) {
+	if e.calcKeyLocked(code) || e.readerKeyLocked(code) {
 		return
 	}
 	e.press(keyID(code), e.km.lookupKey(e.layers(), code))
@@ -412,6 +412,38 @@ func (e *Engine) calcKeyLocked(code evdev.EvCode) bool {
 	}
 	e.down[id] = nil
 	e.widgets.calc.Submit(w.ID, in, w.Prefix)
+	return true
+}
+
+// readerKeyLocked は、今の画面に読み物のアプリのセルがあり、読んでいるときのキー（← → スペースなど）なら、ページをめくる。
+func (e *Engine) readerKeyLocked(code evdev.EvCode) bool {
+	if e.widgets == nil || e.widgets.reader == nil || e.view == nil {
+		return false
+	}
+	found := false
+	for _, a := range e.view.Cells {
+		if a != nil && a.Widget != nil && a.Widget.Kind == widgetReader {
+			found = true
+		}
+	}
+	if !found {
+		return false
+	}
+	held := func(cs ...evdev.EvCode) bool {
+		for _, c := range cs {
+			if _, ok := e.down[keyID(c)]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	if held(evdev.KEY_LEFTCTRL, evdev.KEY_RIGHTCTRL, evdev.KEY_LEFTALT, evdev.KEY_RIGHTALT) {
+		return false
+	}
+	if !e.widgets.reader.key(code, held(evdev.KEY_LEFTSHIFT, evdev.KEY_RIGHTSHIFT)) {
+		return false
+	}
+	e.down[keyID(code)] = nil
 	return true
 }
 

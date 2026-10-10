@@ -869,6 +869,10 @@ func main() {
 	pngHomePage := flag.Int("render-home-page", 1, "-render-png で、ホーム画面に出すページ（1 から）")
 	pngLink := flag.String("render-link", "configured", "-render-png で、PC とのつながり（UDC の state か power。configured、suspended、power、not attached、空なら出さない）。configured と suspended のほかでは、PC に送るセルを休みと描く")
 	pngLastSync := flag.String("render-last-sync", "", "-render-png で、状態の帯に出す最後に同期した時刻（RFC 3339。省略すると未同期）")
+	pngRead := flag.String("render-read", "", "-render-png で、読み物のアプリのセルに、この読み物（brain-deck read add -o の .json.gz）を開いて出す")
+	pngReadPage := flag.Int("render-read-page", 1, "-render-read で出すページ（1 から）")
+	pngReadSize := flag.Int("render-read-size", 24, "-render-read の文字の大きさ（24 か 32）")
+	pngReadH := flag.Bool("render-read-horizontal", false, "-render-read を横書きで出す")
 	pngMemo := flag.String("render-memo", "", "-render-png で、手書きメモのセルに出すメモ（memo の <id>.json の形のファイル。最後のページを出す）")
 	pngPhoto := flag.String("render-photo", "", "-render-png で、格子の代わりに、この写真（.565）をフォトフレームと同じく描く（向きが違えば縮めて帯を入れる）")
 	pngQR := flag.String("render-qr", "", "-render-png で、QR コードのウィジェットに出す中身（qr.json の形のファイル）")
@@ -1133,6 +1137,41 @@ func main() {
 			env.Weather = &d
 		}
 		env.WeatherIcons = NewIconStore(iconsDir)
+		if *pngRead != "" {
+			dir, err := os.MkdirTemp("", "lefthand-read")
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer os.RemoveAll(dir)
+			b, err := os.ReadFile(*pngRead)
+			if err == nil {
+				err = os.WriteFile(filepath.Join(dir, "0000000000000001.json.gz"), b, 0o644)
+			}
+			if err != nil {
+				log.Fatal(err)
+			}
+			st := OpenReadStore(dir)
+			doc, err := st.Load("0000000000000001")
+			if err != nil {
+				log.Fatal(err)
+			}
+			st.idx["0000000000000001"] = readMeta{Title: doc.Title, Author: doc.Author}
+			rs := &ReaderService{store: st, mode: readRead, docID: "0000000000000001", doc: doc, size: *pngReadSize, vertical: !*pngReadH}
+			// 寸法を決めて、ページを数え終えてから、指定のページを出す
+			area := renderReaderArea(cfg, km, *pngLayer, w0(*pngSize), rotOf(cfg, *pngRotate))
+			rs.mu.Lock()
+			m := rs.metricsLocked(area)
+			rs.mu.Unlock()
+			t0 := time.Now()
+			starts := paginate(doc, m)
+			log.Printf("render: %q: %d pages in %v", doc.Title, len(starts), time.Since(t0))
+			rs.mu.Lock()
+			rs.gen++ // 数えている goroutine の結果は使わない
+			rs.starts, rs.counting = starts, false
+			rs.pos = starts[min(max(*pngReadPage-1, 0), len(starts)-1)]
+			rs.mu.Unlock()
+			env.Reader = rs.Snapshot()
+		}
 		if *pngMemo != "" {
 			dir, err := os.MkdirTemp("", "lefthand-memo")
 			if err != nil {
@@ -1316,7 +1355,12 @@ func main() {
 	memos := OpenMemoService(filepath.Join(*dataDir, "memo"))
 	addAtExit(memos.Flush) // まだ書いていない線を書く
 	widgetRT.memos = memos
+	reads := OpenReadStore(filepath.Join(*dataDir, "reader"))
+	addAtExit(reads.FlushState) // しおり
+	reader := NewReaderService(reads)
+	widgetRT.reader = reader
 	memos.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
+	reader.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
@@ -1329,6 +1373,7 @@ func main() {
 		env.Graph = graphs.Snapshot()
 		env.Calc = calc.Snapshot()
 		env.Memo = memos.Snapshot()
+		env.Reader = reader.Snapshot()
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1434,6 +1479,7 @@ func main() {
 				widgetRT.SetScreen(first.W, first.H, d.Poke)
 				widgetRT.SetInk(d.Ink)
 				memos.SetOnChange(d.Poke)
+				reader.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
 			}
@@ -1487,6 +1533,8 @@ func main() {
 			photos:  photos,
 			frame:   frame,
 			memos:   memos,
+			reads:   reads,
+			reader:  reader,
 			dataDir: *dataDir,
 			started: time.Now(),
 		}
@@ -1499,6 +1547,16 @@ func main() {
 		ctl.uploads.Register("update", upd.UploadKind())
 		ctl.uploads.Register("image", images.UploadKind())
 		ctl.uploads.Register("photo", photos.UploadKind())
+		rk := reads.UploadKind()
+		done := rk.Done
+		rk.Done = func(b UploadBegin, f *os.File, part string) (any, error) {
+			res, err := done(b, f, part)
+			if err == nil {
+				reader.Added()
+			}
+			return res, err
+		}
+		ctl.uploads.Register("read", rk)
 		ctl.uploads.Register(iconUploadKnd, icons.UploadKind())
 		icons.SetWanted(ctl.iconBoxes) // 上限を超えたら、今の設定で使わない大きさのアイコンから消す
 		if upd.Unit == "" {
@@ -1514,6 +1572,46 @@ func main() {
 	}
 	writeReady(*readyFile) // 更新の係は、これで新しい版が起動したことを知る
 	runKeyboard(kbd, e, mon, dim)
+}
+
+// w0 は、-render-size の大きさ。
+func w0(size string) image.Point {
+	var w, h int
+	fmt.Sscanf(size, "%dx%d", &w, &h)
+	return image.Pt(w, h)
+}
+
+func rotOf(cfg *Config, r int) int {
+	if r != -1 {
+		return r
+	}
+	return cfg.Display.Rotate
+}
+
+// renderReaderArea は、-render-read で、レイヤーの読み物のアプリのセルの中の範囲（ページを数えるため）。
+func renderReaderArea(cfg *Config, km *Keymap, layer string, size image.Point, rot int) image.Rectangle {
+	e := NewEngine(km, &State{hid: NewHIDWriter(os.DevNull), active: map[string]Combo{}})
+	e.SetRotation(rot, size.X, size.Y, nil)
+	name, _, _ := strings.Cut(layer, ":")
+	for i, l := range km.Layers {
+		if l.Name == name && i != 0 {
+			e.mu.Lock()
+			e.stack = []stackEntry{{layer: i, kind: actTo}}
+			e.view = nil
+			e.refresh()
+			e.mu.Unlock()
+		}
+	}
+	l := buildLayout(km, e.View())
+	l.W, l.H = rotatedSize(rot, size.X, size.Y)
+	for i, c := range l.Cells {
+		if c.Widget != nil && c.Widget.Kind == widgetReader && !c.Covered {
+			inner := l.rect(i%l.Cols, i/l.Cols).Inset(cellGap + textMargin)
+			_, _, area := widgetCaption(inner, c.Label)
+			return area
+		}
+	}
+	return image.Rect(0, 0, l.W, l.H)
 }
 
 // renderPhotoPNG は、写真を出している画面を PNG に書く（-render-photo）。

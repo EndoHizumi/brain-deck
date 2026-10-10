@@ -47,7 +47,7 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc, widgetPenTab, widgetMemo}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc, widgetPenTab, widgetMemo, widgetReader}
 
 // ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
@@ -113,6 +113,7 @@ type WidgetEnv struct {
 	Link         string                 // 状態の帯：PC とのつながり（UDC の state。分からなければ空）
 	LastSync     *time.Time             // 状態の帯：最後に PC から時刻を合わせた時刻。nil なら一度もない
 	Memo         *MemoView              // memo：今のページ（写し）。nil ならメモがない
+	Reader       *ReaderView            // reader：読み物のアプリの状態（写し）
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
@@ -122,6 +123,11 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		return compilePenTab(s)
 	case widgetMemo:
 		return compileMemo(s)
+	case widgetReader:
+		if s.Map != "" || s.PCScreen != "" || s.Region != nil || s.Pressure != nil || s.PressureRange != nil || s.hasPadFields() {
+			return nil, fmt.Errorf("widget: reader has no settings (the size and the writing direction are chosen on the Brain)")
+		}
+		return compileReader(s)
 	}
 	if s.Map != "" || s.PCScreen != "" || s.Region != nil || s.Pressure != nil || s.PressureRange != nil {
 		return nil, fmt.Errorf("map, pc_screen, region, pressure and pressure_range are for widget: pentablet")
@@ -412,6 +418,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return penTabKey(w.PenTab, env)
 	case widgetMemo:
 		return memoKey(w, env)
+	case widgetReader:
+		return readerKey(env)
 	}
 	return gadgetKey(v, env)
 }
@@ -440,7 +448,7 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		return wthNext(v.Widget, env)
 	case widgetGraph:
 		return graphNext(v.Widget, env)
-	case widgetHome, widgetPenTab, widgetMemo:
+	case widgetHome, widgetPenTab, widgetMemo, widgetReader:
 		return time.Time{}
 	}
 	return gadgetNext(v, env)
@@ -470,6 +478,8 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		drawPenTab(cv, area, v.Widget.PenTab, env)
 	case widgetMemo:
 		drawMemo(cv, area, env)
+	case widgetReader:
+		drawReader(cv, area, env)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {

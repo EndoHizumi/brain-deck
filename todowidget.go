@@ -96,6 +96,7 @@ type WidgetRT struct {
 	poke    func()                              // 画面の描き直し。待たずに返ること
 	pen     *Pen                                // ペンタブレットの出力。nil なら送らない
 	memos   *MemoService                        // 手書きメモ。nil なら書けない
+	reader  *ReaderService                      // 読み物のアプリ。nil なら読めない
 	ink     func(func(*Canvas) image.Rectangle) // 手書きメモの線を描き足す（Display.Ink）。nil なら描き足さない
 }
 
@@ -169,7 +170,7 @@ type widgetTouch struct {
 
 // ownsTouch は、ウィジェットがタップを自分で処理し、押した位置で働くか（セル全体を光らせない）。
 func (w *WidgetDef) ownsTouch() bool {
-	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc || w.Kind == widgetHome || w.Kind == widgetPenTab || w.Kind == widgetMemo)
+	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc || w.Kind == widgetHome || w.Kind == widgetPenTab || w.Kind == widgetMemo || w.Kind == widgetReader)
 }
 
 // todoGeom は、Todo のセルの中の配置。
@@ -351,6 +352,10 @@ func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
 	}
 	if w != nil && w.Kind == widgetCalc && rt != nil {
 		w.calcTouch(rt, t, label)
+		return
+	}
+	if w != nil && w.Kind == widgetReader && rt != nil && rt.reader != nil {
+		rt.reader.touch(t.cell, t.pt)
 		return
 	}
 	if !w.ownsTouch() || rt == nil || w.pager == nil { // トラックパッドは Pad が処理する

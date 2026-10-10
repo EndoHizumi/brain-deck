@@ -175,6 +175,7 @@ type request struct {
 	Of      string `json:"of,omitempty"`      // upload_begin（kind: photo）：縦向きに切り抜き直したもとの写真の id
 	Photo   string `json:"photo,omitempty"`   // get_photo、delete_photo：写真の id
 	Memo    string `json:"memo,omitempty"`    // get_memo、delete_memo：メモの id（m1 など）
+	Read    string `json:"read,omitempty"`    // delete_read：読み物の id
 }
 
 type response struct {
@@ -446,6 +447,8 @@ type Controller struct {
 	guard   *BatteryGuard
 	photos  *PhotoStore
 	memos   *MemoService
+	reads   *ReadStore
+	reader  *ReaderService
 	frame   *PhotoFrame
 	dataDir string // battery-log.csv の置き場所
 	started time.Time
@@ -482,7 +485,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
-				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo"},
+				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -619,6 +622,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.photo(id, req)
 	case "list_memos", "get_memo", "delete_memo":
 		return c.memo(id, req)
+	case "list_reads", "delete_read":
+		return c.readCmd(id, req)
 	case "get_battery_log":
 		text, err := readBatteryLog(c.dataDir, req.Lines)
 		if err != nil {
@@ -1535,4 +1540,27 @@ func (c *Controller) memoErr(id json.RawMessage, err error) response {
 		return errResp(id, errBadRequest, err.Error(), nil)
 	}
 	return errResp(id, errInternal, err.Error(), nil)
+}
+
+// readCmd は list_reads、delete_read を処理する。
+func (c *Controller) readCmd(id json.RawMessage, req request) response {
+	if c.reads == nil {
+		return errResp(id, errInternal, "readings are not available", nil)
+	}
+	switch req.Cmd {
+	case "list_reads":
+		free, size, _ := imageFreeSpace(c.reads.dir)
+		return response{ID: id, OK: true, Result: map[string]any{"reads": c.reads.List(), "total_bytes": c.reads.TotalBytes(),
+			"limit_bytes": readQuota, "free_bytes": free, "reserve_bytes": reserveFor(size)}}
+	case "delete_read":
+		if err := c.reads.Delete(req.Read); err != nil {
+			if errors.Is(err, errReadNotFound) {
+				return errResp(id, errNotFound, err.Error(), nil)
+			}
+			return errResp(id, errInternal, err.Error(), nil)
+		}
+		c.reader.Closed(req.Read)
+		return response{ID: id, OK: true, Result: map[string]any{"deleted": req.Read}}
+	}
+	return errResp(id, errUnknownCmd, req.Cmd, nil)
 }
