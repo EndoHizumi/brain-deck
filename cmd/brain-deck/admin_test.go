@@ -318,8 +318,8 @@ func TestClipWidth(t *testing.T) {
 	for in, want := range map[string]string{
 		"ok: 42 tests passed":          "ok: 42 tests passed",
 		"systemctl --user restart api": "systemctl --user r…",
-		"ビルドに失敗しました（make）": "ビルドに失敗しまし…",
-		"失敗(2) 18:15 12秒":           "失敗(2) 18:15 12秒",
+		"ビルドに失敗しました（make）":             "ビルドに失敗しまし…",
+		"失敗(2) 18:15 12秒":              "失敗(2) 18:15 12秒",
 	} {
 		if got := clip(in, execLineMax); got != want {
 			t.Errorf("clip(%q) = %q, want %q", in, got, want)

@@ -476,6 +476,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = photoCommand(o)
 	case "memo":
 		cmd, err = memoCommand(o)
+	case "read":
+		cmd, err = readCommand(o)
 	case "time":
 		if len(o.args) != 2 || o.args[1] != "sync" {
 			err = usageError("time のあとには sync を書きます（brain-deck time sync）")
@@ -497,6 +499,18 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = terminalCommand(o)
 	default:
 		err = usageError("知らないコマンド " + strconv.Quote(o.args[0]))
+	}
+	var lo localOutput
+	if errors.As(err, &lo) {
+		if !o.quiet {
+			fmt.Fprintln(stdout, string(lo))
+		}
+		return exitOK
+	}
+	var ue usageError
+	if err != nil && !errors.As(err, &ue) && o.args[0] == "read" {
+		fmt.Fprintln(stderr, "brain-deck: "+err.Error()) // 取り込めなかった（ファイル、ネットワーク）
+		return exitFetch
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "brain-deck: "+err.Error()+hint)
