@@ -170,7 +170,13 @@ func TestStopwatchAndCounter(t *testing.T) {
 	g.CounterAdd("c", 7)
 	waitGadgetsSaved(t, g)
 
-	// 保存したものを読み直す（デーモンの再起動）
+	// 保存したものを読み直す（デーモンの再起動）。saved は前の保存の知らせのこともあるので、最後の値が書かれるまで待つ
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		var f gadgetFile
+		if OpenStore(dir).Load(gadgetStoreName, &f) == nil && f.Counter["c"].Value == 7 {
+			break
+		}
+	}
 	g2 := NewGadgetService(OpenStore(dir))
 	if v := g2.Snapshot().Counter["c"].Value; v != 7 {
 		t.Errorf("counter after restart = %d", v)
