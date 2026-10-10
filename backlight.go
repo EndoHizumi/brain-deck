@@ -48,6 +48,8 @@ type BacklightConfig struct {
 	DimLevel   *int   `yaml:"dim_level,omitempty" json:"dim_level,omitempty"`     // 暗くしたときの明るさ。省略すると 1
 	WakeOnKey  *bool  `yaml:"wake_on_key,omitempty" json:"wake_on_key,omitempty"` // 本体キーでも明るくする（既定 true）
 	InTerminal bool   `yaml:"in_terminal,omitempty" json:"in_terminal,omitempty"` // 端末モードのあいだも暗くする（既定 false）
+	// Photo は、暗くする段階で、暗くする代わりに写真を出す（photo.go。既定 false）
+	Photo *bool `yaml:"photo,omitempty" json:"photo,omitempty"`
 	// Offline は、PC から外しているあいだ（offline.go）に使う時間と明るさ。書いた項目だけ上のものに代わる
 	Offline *BacklightOffline `yaml:"offline,omitempty" json:"offline,omitempty"`
 }
@@ -58,6 +60,7 @@ type BacklightOffline struct {
 	OffAfter string `yaml:"off_after,omitempty" json:"off_after,omitempty"`
 	Level    *int   `yaml:"level,omitempty" json:"level,omitempty"`
 	DimLevel *int   `yaml:"dim_level,omitempty" json:"dim_level,omitempty"`
+	Photo    *bool  `yaml:"photo,omitempty" json:"photo,omitempty"`
 }
 
 // dimParams は、組み立て済みの backlight。
@@ -69,6 +72,7 @@ type dimParams struct {
 	dimLevel   int
 	wakeOnKey  bool
 	inTerminal bool
+	photo      bool       // 暗くする代わりに写真を出す
 	offline    *dimParams // PC から外しているあいだ。nil なら同じもの
 }
 
@@ -94,6 +98,9 @@ func (c *BacklightConfig) compile() (*dimParams, error) {
 	}
 	if c.Offline.DimLevel != nil {
 		o.DimLevel = c.Offline.DimLevel
+	}
+	if c.Offline.Photo != nil {
+		o.Photo = c.Offline.Photo
 	}
 	if p.offline, err = o.compileOne(); err != nil {
 		return nil, fmt.Errorf("offline: %w", err)
@@ -149,6 +156,12 @@ func (c *BacklightConfig) compileOne() (*dimParams, error) {
 	if c.WakeOnKey != nil {
 		p.wakeOnKey = *c.WakeOnKey
 	}
+	if c.Photo != nil {
+		p.photo = *c.Photo
+	}
+	if p.photo && p.dimAfter == 0 {
+		return nil, fmt.Errorf("photo needs dim_after (photos are shown instead of dimming)")
+	}
 	return p, nil
 }
 
@@ -163,9 +176,10 @@ const (
 	dimBright = iota
 	dimDim
 	dimOff
+	dimPhoto // 暗くする代わりに写真を出している（photo.go）
 )
 
-var dimNames = [...]string{"bright", "dim", "off"}
+var dimNames = [...]string{"bright", "dim", "off", "photo"}
 
 // Backlight は /sys/class/backlight/<名前> の 1 つ。
 type Backlight struct {
@@ -261,6 +275,54 @@ type Dimmer struct {
 	written int           // 最後に書いた明るさ（書く goroutine だけが触る）
 	closed  bool
 	since   time.Time // 今の段階になった時刻
+
+	// 写真（photo.go）。frame が nil なら写真を出さない。gate は、ほかの条件（時刻が合っている、
+	// タイマーが動いていない）を満たすか。d.mu を持たずに呼べること
+	frame   *PhotoFrame
+	gate    func() bool
+	photoOn bool // 写真を出している（state が -1 になっても覚えておく）
+}
+
+// SetPhotoFrame は、写真を出す係と、出してよいかを決める関数を設定する。
+func (d *Dimmer) SetPhotoFrame(f *PhotoFrame, gate func() bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.frame, d.gate = f, gate
+	d.mu.Unlock()
+	if f != nil {
+		f.night = d.nightOff
+	}
+}
+
+// nightOff は、写真を出しているあいだに夜間になったときに呼ぶ（画面を消す）。
+func (d *Dimmer) nightOff() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.state != dimPhoto || d.closed {
+		return
+	}
+	log.Printf("backlight: night time; the photos are stopped and the screen is turned off")
+	d.stopTimerLocked()
+	d.setLocked(dimOff)
+}
+
+// dimStageLocked は、暗くする段階で、暗くする（dimDim）か、写真を出す（dimPhoto）か、夜間なので消す（dimOff）かを決める。
+func (d *Dimmer) dimStageLocked() int {
+	if !d.p.photo || d.frame == nil || d.term {
+		return dimDim
+	}
+	if d.frame.AtNight(time.Now()) {
+		return dimOff
+	}
+	if d.gate != nil && !d.gate() {
+		return dimDim
+	}
+	if !d.frame.Has() {
+		return dimDim
+	}
+	return dimPhoto
 }
 
 // NewDimmer は、設定の backlight で自動減光を始める。p が nil なら何もしない。
@@ -353,6 +415,19 @@ func (d *Dimmer) SetOffline(off bool) {
 	}
 }
 
+// levelOf は、段階 st の明るさ。
+func (d *Dimmer) levelOf(st int) int {
+	switch st {
+	case dimDim:
+		return d.p.dimLevel
+	case dimOff:
+		return 0
+	case dimPhoto:
+		return min(d.frame.Level(), d.bl.max)
+	}
+	return d.brightLevel()
+}
+
 // brightLevel は、ふだんの明るさ。
 func (d *Dimmer) brightLevel() int {
 	if d.p.level > 0 {
@@ -366,15 +441,17 @@ func (d *Dimmer) setLocked(st int) {
 	if st == d.state {
 		return
 	}
-	lv := d.brightLevel()
-	switch st {
-	case dimDim:
-		lv = d.p.dimLevel
-	case dimOff:
-		lv = 0
-	}
+	lv := d.levelOf(st)
 	if d.state >= 0 || st != dimBright {
 		vlogf("backlight: %s (%d)", dimNames[st], lv)
+	}
+	if d.photoOn && st != dimPhoto {
+		d.photoOn = false
+		d.frame.Stop()
+	}
+	if st == dimPhoto && !d.photoOn {
+		d.photoOn = true
+		d.frame.Start()
 	}
 	d.state = st
 	d.since = time.Now()
@@ -448,7 +525,7 @@ func (d *Dimmer) scheduleLocked(from time.Time) {
 		default:
 			return
 		}
-	case dimDim:
+	case dimDim, dimPhoto:
 		if d.p.offAfter == 0 {
 			return
 		}
@@ -462,6 +539,9 @@ func (d *Dimmer) scheduleLocked(from time.Time) {
 		defer d.mu.Unlock()
 		if d.gen != gen || d.p == nil || d.closed {
 			return
+		}
+		if st == dimDim {
+			st = d.dimStageLocked()
 		}
 		d.setLocked(st)
 		d.scheduleLocked(time.Now())
@@ -581,13 +661,7 @@ func (d *Dimmer) Info() DimInfo {
 	if d.p == nil || d.bl == nil || d.state < 0 {
 		return DimInfo{}
 	}
-	lv := d.brightLevel()
-	switch d.state {
-	case dimDim:
-		lv = d.p.dimLevel
-	case dimOff:
-		lv = 0
-	}
+	lv := d.levelOf(d.state)
 	return DimInfo{Enabled: true, State: dimNames[d.state], Level: lv, Max: d.bl.max, Device: d.bl.dir,
 		Offline: d.offline && d.base != nil && d.p == d.base.offline}
 }
@@ -604,6 +678,10 @@ func (d *Dimmer) Close() {
 	}
 	d.closed = true
 	d.stopTimerLocked()
+	if d.photoOn {
+		d.photoOn = false
+		d.frame.Stop()
+	}
 	close(d.writes)
 	bl := d.bl
 	d.mu.Unlock()

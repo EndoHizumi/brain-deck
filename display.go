@@ -462,6 +462,11 @@ type Display struct {
 	termR     *termRenderer // 描画側だけが触る
 	termShown bool          // 今、端末を描いている（描画側だけが触る）
 
+	// 写真（photo.go）。photo が nil でなければ、格子の代わりに写真を描く。d.mu で守る
+	photo      *Image
+	photoNew   bool
+	photoShown bool // 今、写真を描いている（描画側だけが触る）
+
 	// ウィジェット（描画の goroutine だけが触る）
 	env    func() WidgetEnv // 今の時刻など。nil なら時刻だけ
 	wkeys  []string         // セルごとに、前に描いたウィジェットの中身（widgetKey）
@@ -548,6 +553,20 @@ func (d *Display) SetTerminal(m *TermMode) {
 	d.term = m
 	d.termNew = m != nil
 	if m == nil {
+		d.invalid = true // 格子を全体から描き直す
+	}
+	d.mu.Unlock()
+	d.poke()
+}
+
+// SetPhoto は、格子の代わりに写真を出す（nil で元の格子に戻す）。img は今の画面の向きの大きさ。描画は待たない。
+func (d *Display) SetPhoto(img *Image) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.photo, d.photoNew = img, true
+	if img == nil {
 		d.invalid = true // 格子を全体から描き直す
 	}
 	d.mu.Unlock()
@@ -844,6 +863,12 @@ func (d *Display) redraw() bool {
 		d.mu.Unlock()
 		return d.redrawTerminal(tm, full)
 	}
+	if ph := d.photo; ph != nil {
+		fresh := d.photoNew
+		d.photoNew = false
+		d.mu.Unlock()
+		return d.redrawPhoto(ph, fresh)
+	}
 	next := d.next
 	d.next = nil
 	if next != nil {
@@ -860,8 +885,8 @@ func (d *Display) redraw() bool {
 	if d.closed {
 		return false
 	}
-	wasTerm := d.termShown // 端末モードから戻った：格子を全体から描き直す
-	d.termShown = false
+	wasTerm := d.termShown || d.photoShown // 端末モードか写真から戻った：格子を全体から描き直す
+	d.termShown, d.photoShown = false, false
 	if (next != nil || invalid || wasTerm) && ovNew {
 		d.ovShown, ovNew = ov, false // 全体を描くので、そのときに一緒に描く
 	}
@@ -912,6 +937,31 @@ func (d *Display) redraw() bool {
 		d.updateOverlayLocked(ov)
 	}
 	d.redrawWidgets()
+	return true
+}
+
+// redrawPhoto は、写真を画面全体に描く。格子の描き直し（d.next など）は、写真をやめるまで取っておく。
+func (d *Display) redrawPhoto(img *Image, fresh bool) bool {
+	d.drawMu.Lock()
+	defer d.drawMu.Unlock()
+	if d.closed {
+		return false
+	}
+	d.wakeAt = time.Time{} // ウィジェットは描かない
+	if !fresh && d.photoShown {
+		return true
+	}
+	t := time.Now()
+	full := image.Rect(0, 0, d.cv.W, d.cv.H)
+	if img.W != d.cv.W || img.H != d.cv.H {
+		d.cv.fill(full, colBG)
+	}
+	d.cv.blitImage(img, centered(img, full).dst, full)
+	d.photoShown = true
+	if d.active {
+		d.fb.Blit(d.cv, image.Rect(0, 0, d.cv.pw, d.cv.ph))
+	}
+	vlogf("display: photo redraw %v", time.Since(t))
 	return true
 }
 

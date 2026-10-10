@@ -302,6 +302,21 @@ func (g *GadgetService) SetOnBusy(f func(bool)) {
 	}
 }
 
+// TimerRunning は、プレゼン用タイマーかポモドーロが動いているか（動いているあいだは写真を出さない。photo.go）。
+func (g *GadgetService) TimerRunning() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, p := range g.f.Pomodoro {
+		if p.Running {
+			return true
+		}
+	}
+	return g.presenterRunningLocked()
+}
+
 func (g *GadgetService) presenterRunningLocked() bool {
 	for _, s := range g.f.Presenter {
 		if s.StartedAt != nil {

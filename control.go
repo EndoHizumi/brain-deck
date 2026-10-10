@@ -172,6 +172,8 @@ type request struct {
 	Cursor  string `json:"cursor,omitempty"`  // get_logs：前の結果の cursor（そのあとだけ読む）
 	Prev    bool   `json:"prev,omitempty"`    // get_config_text：前の版（.prev）を読む
 	Restart bool   `json:"restart,omitempty"` // put_config_text：再起動が要る項目が変わってもよい（書いて再起動する）
+	Of      string `json:"of,omitempty"`      // upload_begin（kind: photo）：縦向きに切り抜き直したもとの写真の id
+	Photo   string `json:"photo,omitempty"`   // get_photo、delete_photo：写真の id
 }
 
 type response struct {
@@ -441,6 +443,8 @@ type Controller struct {
 	updater *Updater // 更新、再起動、電源、ログ
 	link    *LinkMonitor
 	guard   *BatteryGuard
+	photos  *PhotoStore
+	frame   *PhotoFrame
 	dataDir string // battery-log.csv の置き場所
 	started time.Time
 }
@@ -475,7 +479,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"set_qr", "get_qr", "get_widgets", "set_presence", "add_graph", "clear_graph", "get_graph",
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
-				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log"},
+				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
+				"list_photos", "get_photo", "delete_photo"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -523,7 +528,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
 			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "usb_state": USBState()},
-			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(),
+			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(),
 			"rtc": c.clock.RTCInfo(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()}})
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)
@@ -607,6 +612,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.update(id, req)
 	case "get_config_text", "put_config_text":
 		return c.configText(id, req)
+	case "list_photos", "get_photo", "delete_photo":
+		return c.photo(id, req)
 	case "get_battery_log":
 		text, err := readBatteryLog(c.dataDir, req.Lines)
 		if err != nil {
@@ -1050,7 +1057,7 @@ func (c *Controller) upload(id json.RawMessage, req request) response {
 		if src == "" {
 			src = "unknown"
 		}
-		res, err = c.uploads.Begin(UploadBegin{Kind: req.Kind, SHA256: req.SHA256, Bytes: req.Bytes, Name: req.Name, Source: src})
+		res, err = c.uploads.Begin(UploadBegin{Kind: req.Kind, SHA256: req.SHA256, Bytes: req.Bytes, Name: req.Name, Source: src, Of: req.Of})
 	case "upload_chunk":
 		if req.Offset == nil || req.Data == "" {
 			return errResp(id, errBadRequest, `"upload", "offset" and "data" (base64) are required`, nil)
@@ -1434,4 +1441,55 @@ func (c *Controller) runSerial(path string) {
 		vlogf("control: %s closed: %v", path, err)
 		time.Sleep(reopenDelay)
 	}
+}
+
+// photoStatus は get_status の photo。
+func (c *Controller) photoStatus() map[string]any {
+	if c.photos == nil {
+		return map[string]any{"available": false}
+	}
+	return map[string]any{"available": true, "count": c.photos.Count(), "showing": c.frame.Showing()}
+}
+
+// photo は list_photos、get_photo、delete_photo を処理する。
+func (c *Controller) photo(id json.RawMessage, req request) response {
+	if c.photos == nil {
+		return errResp(id, errInternal, "photos are not available", nil)
+	}
+	switch req.Cmd {
+	case "list_photos":
+		l := c.photos.List()
+		l.Showing = c.frame.Showing()
+		return response{ID: id, OK: true, Result: l}
+	case "get_photo":
+		off := int64(0)
+		if req.Offset != nil {
+			off = *req.Offset
+		}
+		b, total, err := c.photos.Read(req.Photo, off, req.Length)
+		if err != nil {
+			return c.photoErr(id, err)
+		}
+		return response{ID: id, OK: true, Result: map[string]any{"photo": req.Photo, "offset": off, "total": total,
+			"data": base64.StdEncoding.EncodeToString(b)}}
+	case "delete_photo":
+		if c.frame.Showing() == req.Photo {
+			c.dim.Wake() // 出している写真を消すときは、写真をやめる
+		}
+		if err := c.photos.Delete(req.Photo); err != nil {
+			return c.photoErr(id, err)
+		}
+		return response{ID: id, OK: true, Result: map[string]any{"deleted": req.Photo, "count": c.photos.Count()}}
+	}
+	return errResp(id, errUnknownCmd, req.Cmd, nil)
+}
+
+func (c *Controller) photoErr(id json.RawMessage, err error) response {
+	switch {
+	case errors.Is(err, errPhotoNotFound):
+		return errResp(id, errNotFound, err.Error(), nil)
+	case errors.Is(err, errTransferBad):
+		return errResp(id, errBadRequest, err.Error(), nil)
+	}
+	return errResp(id, errInternal, err.Error(), nil)
 }

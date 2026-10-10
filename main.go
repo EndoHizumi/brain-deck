@@ -853,6 +853,7 @@ func main() {
 	pngHomePage := flag.Int("render-home-page", 1, "-render-png で、ホーム画面に出すページ（1 から）")
 	pngLink := flag.String("render-link", "configured", "-render-png で、PC とのつながり（UDC の state か power。configured、suspended、power、not attached、空なら出さない）。configured と suspended のほかでは、PC に送るセルを休みと描く")
 	pngLastSync := flag.String("render-last-sync", "", "-render-png で、状態の帯に出す最後に同期した時刻（RFC 3339。省略すると未同期）")
+	pngPhoto := flag.String("render-photo", "", "-render-png で、格子の代わりに、この写真（.565）をフォトフレームと同じく描く（向きが違えば縮めて帯を入れる）")
 	pngQR := flag.String("render-qr", "", "-render-png で、QR コードのウィジェットに出す中身（qr.json の形のファイル）")
 	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
 	recGesture := flag.String("record-gesture", "", "-record-touch で、見出しに書く動きの名前（slow、tap など）")
@@ -1138,6 +1139,12 @@ func main() {
 		if *pngRotate != -1 {
 			rot = *pngRotate
 		}
+		if *pngPhoto != "" {
+			if err := renderPhotoPNG(*pngPhoto, *pngOut, w, h, rot); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
 		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, rot, *pngHomePage-1, offline, env, images); err != nil {
 			log.Fatal(err)
 		}
@@ -1238,6 +1245,13 @@ func main() {
 	guard.notify, guard.clear = prompt.NotifyFor, prompt.ClearNotice
 	gadgets.SetOnAlert(dim.Wake)
 	gadgets.SetOnBusy(dim.SetBusy) // プレゼン用タイマーが動いているあいだは暗くしない
+	photos := OpenPhotoStore(filepath.Join(*dataDir, "photos"))
+	photoP, _ := cfg.Photo.compile() // 検証済み
+	frame := NewPhotoFrame(photos, photoP)
+	photos.SetMax(photoP.max)
+	frame.SetSize(func() (int, int) { return rotatedSize(e.Rotation(), 800, 480) })
+	// 時刻が合っていない（再起動の直後など）、プレゼン用タイマーかポモドーロが動いているあいだは、写真を出さない
+	dim.SetPhotoFrame(frame, func() bool { return clock.Synced() && !gadgets.TimerRunning() })
 	images := OpenImageStore(imagesDir)
 	if ps := imageProblems(km, images, 800, 480); len(ps) > 0 {
 		for _, p := range ps {
@@ -1351,6 +1365,7 @@ func main() {
 				disp = d
 				addAtExit(d.Close)
 				term.SetDisplay(d)
+				frame.SetDisplay(d)
 				clock.SetOnChange(d.Poke)
 				texts.SetOnChange(d.Poke)
 				qrs.SetOnChange(d.Poke)
@@ -1398,6 +1413,8 @@ func main() {
 				guard.Apply(bp)
 				battery.SetCurve(bp.curve)
 				clock.SetRTCMode(c.Clock.rtcMode())
+				pp, _ := c.Photo.compile() // 検証済み
+				frame.SetParams(pp)
 				return nil
 			}},
 			engine:  e,
@@ -1419,6 +1436,8 @@ func main() {
 			term:    term,
 			link:    link,
 			guard:   guard,
+			photos:  photos,
+			frame:   frame,
 			dataDir: *dataDir,
 			started: time.Now(),
 		}
@@ -1430,6 +1449,7 @@ func main() {
 		ctl.uploads = NewUploads()
 		ctl.uploads.Register("update", upd.UploadKind())
 		ctl.uploads.Register("image", images.UploadKind())
+		ctl.uploads.Register("photo", photos.UploadKind())
 		ctl.uploads.Register(iconUploadKnd, icons.UploadKind())
 		icons.SetWanted(ctl.iconBoxes) // 上限を超えたら、今の設定で使わない大きさのアイコンから消す
 		if upd.Unit == "" {
@@ -1445,6 +1465,29 @@ func main() {
 	}
 	writeReady(*readyFile) // 更新の係は、これで新しい版が起動したことを知る
 	runKeyboard(kbd, e, mon, dim)
+}
+
+// renderPhotoPNG は、写真を出している画面を PNG に書く（-render-photo）。
+func renderPhotoPNG(in, out string, w, h, rot int) error {
+	b, err := os.ReadFile(in)
+	if err != nil {
+		return err
+	}
+	img, err := parseImage(b)
+	if err != nil {
+		return fmt.Errorf("%s: %w", in, err)
+	}
+	cv := NewCanvas(w, h, w*rgb565.Bpp, rgb565, rot)
+	full := image.Rect(0, 0, cv.W, cv.H)
+	img = photoForScreen(img, cv.W, cv.H)
+	cv.fill(full, colBG)
+	cv.blitImage(img, centered(img, full).dst, full)
+	f, err := os.Create(out)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return png.Encode(f, cv.Image())
 }
 
 // runReplay は、記録を再生して結果を書く（-replay-touch）。

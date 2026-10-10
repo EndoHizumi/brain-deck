@@ -32,6 +32,7 @@ type Config struct {
 	Offline   *OfflineConfig        `yaml:"offline,omitempty" json:"offline,omitempty"`       // PC から外したときの動き（offline.go）
 	Battery   *BatteryConfig        `yaml:"battery,omitempty" json:"battery,omitempty"`       // 電池が少ないときの知らせと電源断、記録（battery.go）
 	Clock     *ClockConfig          `yaml:"clock,omitempty" json:"clock,omitempty"`           // 時刻（内蔵 RTC。rtc.go）
+	Photo     *PhotoConfig          `yaml:"photo,omitempty" json:"photo,omitempty"`           // フォトフレーム（photo.go。backlight.photo で使う）
 }
 
 // TouchConfig はタッチパネルそのものの設定（どのレイヤーでも共通）。
@@ -757,6 +758,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	}
 	cfg.Battery.validate(fail)
 	cfg.Clock.validate(fail)
+	cfg.Photo.validate(fail)
 	if len(errs) > 0 {
 		errs.sort()
 		return nil, nil, errs
