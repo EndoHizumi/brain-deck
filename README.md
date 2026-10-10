@@ -300,7 +300,7 @@ cells:
 - **Todo**：項目は Brain のデータ（`/var/lib/lefthand/todo.json`）で、設定 GUI の「Todo」タブか [brain-deck todo](#todo) で書き換える。未完了の下に、完了した項目を薄く（取り消し線で）並べる。Brain では、**項目を 0.5 秒押し続けると完了を切り替える**（押しているあいだ、その行が黄色になる）。入りきらないときは、セルの下の帯の **▲ ▼ をタップしてページを送る**（画面右の帯の ▲▼ はレイヤーの切り替えに使っているため、別にした）。`rows: 3` で 1 ページの行数を決められる。見出しには残りの件数を出す（「Todo 残り 3」）。ページを送ったあと 1 分触らなければ、1 ページ目に戻る（`page_reset: 30s` で変えられる。`off` で戻らない）。Todo のセルには `key` や `layer_*` は書けない。
 - **カレンダー**：予定は Brain のデータ（`/var/lib/lefthand/calendar.json`）で、PC の [brain-deck calendar sync](#カレンダー) が ICS の URL から取ってきて送る。今日の予定（終日、時刻の順）と、今日より先の次の予定を 1 つ出す。**今の予定は行を青く塗り**、終わった予定は薄く出す。左の色の帯はカレンダーの色。いちばん下に**最終更新の時刻**を小さく出し、3 時間より古い（`stale: 3h` で変えられる）、取得に失敗した、Brain の時刻を合わせていない、のどれかなら橙色にする。入りきらないときは Todo と同じく下の ▲▼ でページを送り、触っていないときは「今かこれからの予定」があるページを出す。`calendars: [仕事]` で出すカレンダーを選べる。
 - **月の表示**：年と月、曜日、7 列の日付を並べる卓上カレンダー（2×2 のセル以上）。前後の月の日付は薄く、**今日は反転**、土曜は青、**日曜と祝日は赤**。予定のある日には、数字の下にカレンダーの色の点を出す（1 日 3 つまで。4 つ以上は 2 色と灰色の点）。下の帯の **▲▼ で前後の月**に送り、**日付をタップするとその日を選ぶ**（帯に日付、祝日の名前、予定の数が出る。帯の中央で今月に戻る。1 分触らなければ今月と今日に戻る）。同じレイヤーのカレンダーのセルに `follow: <月の表示の id>` を書くと、選んだ日の予定を出す。週の始まりは `week_start: monday` で月曜に。祝日は、calendars.yaml のカレンダーに `holiday: true` を書いて送る（[カレンダー](#カレンダー)）。例は [config/month-example.yaml](config/month-example.yaml)、書き方は [docs/config.md](docs/config.md) の「月の表示（month）」。
-- **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」と「Todo」のレイヤーを足したもの。
+- **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、2026-10-07 の本番の設定に、メニューから入る「情報」と「Todo」のレイヤーを足したもの。今の本番の設定（[config/current.yaml](config/current.yaml)）にも、Todo、カレンダー、天気、道具などのアプリがある。
 
 PC から送った値を描くグラフ（`graph`）もある。値は [brain-deck graph](#グラフ) で 1 つずつ足す（CPU、メモリ、温度を送る例は [contrib/graph/linux-stats.sh](contrib/graph/linux-stats.sh)）。例は [config/graph-example.yaml](config/graph-example.yaml)、書き方は [docs/config.md](docs/config.md) の「グラフ（graph）」。
 
@@ -1398,6 +1398,24 @@ lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタ
 - **再起動が要る項目**（`hid_device`、`keyboard`、`touch.device`、`display`）が変わるときは、何も書かずに終了コード 5 で、その項目を出す。`--restart` を付けると、書いてから lefthand を再起動する。新しい設定で lefthand が起動しなければ、前の設定（`.prev`）に戻して起動し直す。
 - **get**：今のファイルをそのまま出す（`--prev` で前の版）。戻すときは `brain-deck config get --prev > prev.yaml && brain-deck config put prev.yaml`。
 
+### 本番の設定（config/current.yaml）
+
+2026-10-10（フェーズ R）から、本番の設定は「PC のための手元の PDA」の形。起動するとホーム画面が出て、画面右の帯の HOME でどのレイヤーからもホーム画面に戻る。
+
+| ページ | アプリ（入る先のレイヤー） |
+| --- | --- |
+| 1 | 左手デバイス（base）、ダッシュボード、Todo、カレンダー、天気、電卓、道具、入力、発表、本体、画面の向き、メニュー |
+| 2 | コード、ブラウザ、デバッグ、記号、ウィンドウ |
+
+- **今までのレイヤー**（base、メニュー、コード、ブラウザ、デバッグ、記号、ウィンドウ、ダッシュボード、入力）の割り当ては変えていない。変わったのは HOME だけ（base では base に、入力ではメニューに戻っていた）。base の ▲▼ などのソフトキー、メニューのセルからの移り方はそのまま。
+- **状態の帯**：ホーム画面、ダッシュボード、Todo、カレンダー、天気、道具、本体、画面の向き。キーのレイヤー（base、メニュー、コードなど）と、入力、電卓、発表は、セルの大きさを優先して出さない。ダッシュボードのセルは帯の分だけ低くなり（152 → 143 ドット）、セルの背景画像は上下が少し（5〜10 ドット）切れる（`-check` の注意。設定 GUI でその大きさに切り抜き直せば消える）。
+- **画面の向き**：ホーム画面の「画面の向き」で、横向き、縦向き、回す、縦向き（逆）。足したアプリと画面の向きには縦向きの格子がある。今までのレイヤーは、縦向きでは列と行を入れ替えた格子になる。
+- **PC から外したとき**：ホーム画面に切り替え、つなぎ直したら前の画面に戻す（`offline.home`）。Todo のレイヤーの「Todo 追加」（と 決定）、「時刻合わせ」で Brain のキーボードから入れる（本体のレイヤーにも時刻合わせ）。
+- **自動減光**：つないでいるときは 3 分で暗く、15 分で消す。外しているときは 1 分で暗く、5 分で消す。本体キーで明るくなる（キーはそのまま PC に送る）。暗いときのタッチは明るくするだけ。端末モードのあいだと、プレゼン用タイマーが動いているあいだは暗くしない。
+- **電池**：電池だけで動いているあいだ、20% と 10% で知らせる。**電源は自動では切らない**（`poweroff` を書いていない。電池だけで動かした記録で見積もりを見直してから決める）。内蔵 RTC は読むだけ（`clock.rtc: read`）。
+- **PC 側の準備が要るもの**：天気（`~/.config/brain-deck/weather.yaml` の `city` と、`brain-deck weather sync` の定期実行。[天気](#天気)）、カレンダーと月の表示の予定（`brain-deck calendar sync` の定期実行。祝日を赤くするなら `holiday: true` のカレンダー。[カレンダー](#カレンダー)）、時刻（`brain-deck time sync`。[cron で時刻を合わせる](#cron-で時刻を合わせる)）、Todo と ダッシュボードの「お知らせ」（`brain-deck text notify …`）。定期実行の例は contrib/systemd/。
+- **元に戻す**：先に「画面の向き」→「横向き」で横向きに戻す（向きは Brain に残るので、縦向きのまま前の設定に戻すと縦向きのままになる）。そのあと、すぐ前の設定に戻すなら `brain-deck config get --prev > prev.yaml && brain-deck config put prev.yaml`（`.prev` は最後に書く前の版だけ。あとで設定を書き換えていたら使えない）。いつでも戻せる方法は、リポジトリから取り出すこと：`git show 00997a2:config/current.yaml > before-r.yaml && brain-deck config put before-r.yaml`（00997a2 はフェーズ R の前の本番の設定）。
+
 ### まだ ssh（か Brain 本体でのログイン）が要ること
 
 - カーネルの入れ替え（[docs/kernel-build.md](docs/kernel-build.md)）、Brainux そのものの更新（apt）。
@@ -2018,7 +2036,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則（70）、端末モードのときだけ getty を起動する規則（71）、スリープ解除を許す規則（72） |
 | contrib/systemd/brain-terminal-getty@.service、contrib/profile.d/brain-terminal.sh | PC 用。端末モードの getty と、端末の大きさを合わせるスクリプト |
 | config.yaml | 設定の例。実機と同じ値 |
-| config/current.yaml | Brain で動いている本番の設定の写し（2026-10-07 にダッシュボードのレイヤーを足して反映。メニューの「ダッシュボード」から入り、HOME で戻る） |
+| config/current.yaml | Brain で動いている本番の設定の写し（2026-10-10 のフェーズ R で、ホーム画面、PC から外したとき、自動減光、電池の知らせを入れた。[本番の設定](#本番の設定configcurrentyaml)）。下の「current.yaml に〜を足したもの」の例は、フェーズ R より前の本番の設定（ホーム画面なし）がもと |
 | config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |
 | config/background-example.yaml、config/background-images/ | 背景画像の例（current.yaml に背景を足したもの）と、式で描いた例の画像 |
 | tools/mkbg/ | 例の画像（グラデーションと模様）を作るツール |
