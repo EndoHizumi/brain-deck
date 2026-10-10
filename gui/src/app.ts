@@ -25,6 +25,7 @@ import { TEXT_ID_PATTERN, TEXT_STYLES, textExpired } from './textwidget'
 import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
 import { DEFAULT_MONTH_ID, MONTH_MIN_SPAN } from './monthwidget'
+import { parseIcon, type Icon } from './weatherwidget'
 import {
   DEFAULT_PRESENCE, QR_MAX_BYTES, parseColor, pomoDurations, pomoText, pomodoroView, presenceStates, stateId, stopwatchElapsed, stopwatchText,
 } from './gadgetwidget'
@@ -34,7 +35,7 @@ import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './por
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetTextResult, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode,
+  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -164,6 +165,9 @@ export class App {
   todo: TodoList | null = null
   // カレンダーの予定（Brain のデータ。接続したときに読む。brain-deck calendar sync が送る）
   calendar: CalendarData | null = null
+  // 天気予報とアイコン（Brain のデータ。接続したときに読む。brain-deck weather sync が送る）
+  weather: WeatherData | null = null
+  weatherIcons = new Map<string, Icon>()
   todoBusy = false
   todoNew = '' // 追加の欄に書きかけの文
   private todoDrafts: Record<string, string> = {} // 書き換えている途中の項目の文（通知で描き直しても消えない）
@@ -377,6 +381,8 @@ export class App {
       this.brainTerm = null
       this.todo = null
       this.calendar = null
+      this.weather = null
+      this.weatherIcons.clear()
       this.brainImages = null
       if (reason !== 'closed by user') this.say(`Brain との接続が切れました（${reason}）。編集中の内容は残っています`, 'error')
       this.validation = 'offline'
@@ -419,6 +425,8 @@ export class App {
     this.brainMouse = null
     this.todo = null
     this.calendar = null
+    this.weather = null
+    this.weatherIcons.clear()
     this.brainImages = null
     await c?.close()
     this.validation = 'offline'
@@ -450,9 +458,45 @@ export class App {
     if (this.hello?.commands?.includes('get_widgets')) this.widgetsState = (await c.request<GetWidgetsResult>('get_widgets')).widgets ?? {}
     await this.loadTodo()
     this.calendar = this.hello?.commands?.includes('get_calendar') ? await c.request<CalendarData>('get_calendar') : null
+    this.weather = this.hello?.commands?.includes('get_weather') ? await c.request<WeatherData>('get_weather') : null
     this.render()
     this.scheduleValidate(0)
     void this.loadImages()
+    void this.loadWeatherIcons()
+  }
+
+  // loadWeatherIcons は、Brain にある天気アイコン（予報の天気のもの）を読む。プレビューに使う。
+  private async loadWeatherIcons(): Promise<void> {
+    const c = this.client
+    const w = this.weather
+    if (!c || !w || !this.hello?.commands?.includes('get_weather_icon')) return
+    const codes = new Set(w.days.map((d) => d.icon).filter(Boolean))
+    for (const ic of w.icons ?? []) {
+      if (!codes.has(ic.name.slice(0, 3)) || this.weatherIcons.has(ic.name)) continue
+      const parts: Uint8Array[] = []
+      let got = 0
+      try {
+        for (;;) {
+          const r = await c.request<{ data: string; bytes: number }>('get_weather_icon', { name: ic.name, offset: got })
+          const chunk = Uint8Array.from(atob(r.data), (ch) => ch.charCodeAt(0))
+          parts.push(chunk)
+          got += chunk.length
+          if (got >= r.bytes || !chunk.length) break
+        }
+      } catch {
+        return // 切れた、古いデーモン：アイコンなしで描く
+      }
+      if (this.client !== c) return
+      const all = new Uint8Array(got)
+      let o = 0
+      for (const p of parts) {
+        all.set(p, o)
+        o += p.length
+      }
+      const parsed = parseIcon(all)
+      if (parsed) this.weatherIcons.set(ic.name, parsed)
+    }
+    this.render()
   }
 
   // ---------- 背景画像 ----------
@@ -1059,10 +1103,8 @@ export class App {
     const paged = w === 'todo' || w === 'calendar'
     if (!paged) delete a.rows
     if (!paged && w !== 'month') delete a.page_reset
-    if (w !== 'calendar') {
-      delete a.stale
-      delete a.follow
-    }
+    if (w !== 'calendar' && w !== 'weather') delete a.stale
+    if (w !== 'calendar') delete a.follow
     if (w !== 'calendar' && w !== 'month') delete a.calendars
     if (w !== 'month') delete a.week_start
     if (w !== 'trackpad') for (const f of PAD_FIELDS) delete a[f]
@@ -1765,7 +1807,7 @@ export class App {
         const pressed = new Set(t.kind === 'cell' && e.showPressed ? [cellKey(t.col, t.row)] : [])
         const { pixels } = renderPreview(this.font, { cfg, stack: editStack(t.layer), mode: this.previewMode(t.layer), pressed,
           w: pv.width, h: pv.height, now: new Date(), texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar,
-          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery,
+          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery, weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n),
           images: (id) => (id === '__edit__' ? img : this.images.get(id)?.img) })
         pctx.putImageData(new ImageData(pixels as any, pv.width, pv.height), 0, 0)
       }
@@ -2096,7 +2138,8 @@ export class App {
     const now = new Date()
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
       texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img,
-      mouseOff: this.brainMouse === false, widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery })
+      mouseOff: this.brainMouse === false, widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery,
+      weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n) })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
   }
@@ -2120,7 +2163,7 @@ export class App {
       wait = unit - (now.getTime() % unit) + 5
     }
     // カレンダーは、予定の始まりと終わりで描き直す（1 分ごとに見直せば十分）
-    if (g.cells.some((c) => c?.action.widget === 'calendar' || c?.action.widget === 'month')) wait = Math.min(wait, 60000 - (now.getTime() % 60000) + 5)
+    if (g.cells.some((c) => c?.action.widget === 'calendar' || c?.action.widget === 'month' || c?.action.widget === 'weather')) wait = Math.min(wait, 60000 - (now.getTime() % 60000) + 5)
     // テキストと QR コードの有効期限が切れたら、薄く描き直す
     for (const c of g.cells) {
       const a = c?.action
@@ -2233,6 +2276,7 @@ export class App {
         (Object.keys(WIDGET_LABELS) as WidgetKind[]).map((w) => h('option', { value: w, selected: own.widget === w }, WIDGET_LABELS[w])))),
       own.widget === 'text' ? this.viewTextEditor(own) : own.widget === 'todo' ? this.viewTodoEditor(own)
         : own.widget === 'calendar' ? this.viewCalendarEditor(own) : own.widget === 'month' ? this.viewMonthEditor(own)
+        : own.widget === 'weather' ? this.viewWeatherEditor(own)
         : own.widget === 'trackpad' ? this.viewPadEditor(own)
         : own.widget === 'clock' ? this.viewClockEditor(text, missing) : this.viewGadgetEditor(own),
     )
@@ -2480,6 +2524,41 @@ export class App {
       '予定は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。PC で「brain-deck calendar sync」を実行すると、' +
         '~/.config/brain-deck/calendars.yaml に書いたカレンダー（ICS の URL）から予定を取ってきて送ります。今日の予定と次の予定を出し、' +
         '今の予定は行を塗って目立たせます。入りきらないときは、セルの下の ▲ ▼ でページを送ります。設定 GUI が接続しているあいだは、brain-deck から送れません。'))
+    return out
+  }
+
+  // viewWeatherEditor は、天気のセルの欄。予報とアイコンは設定ではなく Brain のデータで、PC の brain-deck weather sync が送る。
+  private viewWeatherEditor(own: ActionSpec): HTMLElement[] {
+    const stale = own.stale ?? ''
+    const ms = stale === '' ? null : parseDuration(stale)
+    const staleBad = stale !== '' && !(ms !== null && ms >= 60_000 && ms <= 720 * 3600_000)
+    const out: HTMLElement[] = [
+      h('label', { class: 'row', title: '最終更新がこれより古いと、セルの下の「更新」を橙色にして「古い」と出します（1m〜720h。既定 3h）' }, '古いとみなすまで ',
+        h('input', { value: stale, placeholder: '3h', 'data-focus': 'stale', id: 'wth-stale', class: 'num',
+          onchange: (e: Event) => this.patchAction({ stale: (e.target as HTMLInputElement).value.trim() }) })),
+    ]
+    if (staleBad) out.push(h('div', { class: 'err' }, '「古いとみなすまで」は、3h、90m のような 1 分から 720 時間の時間です'))
+    if (this.connected && this.hello?.commands?.includes('get_weather')) {
+      const w = this.weather
+      if (w?.days.length) {
+        const pub = w.public_time ? `${new Date(w.public_time).toLocaleString()} 発表` : ''
+        const at = w.fetched_at ? new Date(w.fetched_at).toLocaleString() : 'なし'
+        const miss = w.icons_missing?.length ?? 0
+        out.push(h('p', { class: 'hint wth-now' }, `今の予報：${w.area ?? ''}（${pub}）。最終更新 ${at}` +
+          (w.error ? `。最後の取得に失敗：${w.error}` : '') +
+          (miss ? `。まだ Brain にないアイコンが ${miss} 個あります（次の brain-deck weather sync で送ります）` : '')))
+      } else {
+        out.push(h('p', { class: 'hint wth-now' }, w?.error ? `今の予報：まだありません（取得に失敗：${w.error}）` : '今の予報：まだありません（Brain では「天気を受け取っていません」と出ます）'))
+      }
+    } else if (this.connected) {
+      out.push(h('div', { class: 'warn' }, 'Brain の lefthand が天気に対応していません。lefthand を新しくしてください'))
+    }
+    out.push(h('p', { class: 'hint' },
+      '予報は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。PC で「brain-deck weather sync」を実行すると、' +
+        '天気予報 API（livedoor 天気互換。データの元は気象庁）から、~/.config/brain-deck/weather.yaml の地点の予報を取ってきて送ります。' +
+        '幅があれば今日と明日を並べ、大きさに応じて天気のアイコン、最高と最低の気温、6 時間ごとの降水確率を出します。' +
+        'アイコンはセルの大きさに合わせて PC が作るので、セルの大きさを変えたら、保存してから brain-deck weather sync を実行してください（プレビューでは、それまでアイコンが出ません）。' +
+        '出典：気象庁ホームページ（天気予報、天気アイコンを加工して作成）。'))
     return out
   }
 

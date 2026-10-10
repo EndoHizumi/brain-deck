@@ -7,6 +7,7 @@ import { parseConfigText } from '../src/yamlio'
 import { PAD_DEFAULTS } from '../src/model'
 import { decodePNG, repoFile, repoRoot, sampleConfig, testFont } from './helpers'
 import { decodeImageFile, type Image565 } from '../src/image'
+import { parseIcon } from '../src/weatherwidget'
 import { readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -196,6 +197,39 @@ describe('Brain の画面のプレビュー', () => {
       expect(diff).toBe(0)
     })
   }
+
+  // 天気のウィジェット。config/weather-example.yaml の「天気」「天気(小)」レイヤー、予報は fixtures/weather*.json（-render-weather）、
+  // アイコンは fixtures/weather-icons（-render-weather-icons。テスト用に描いた円と帯で、気象庁のアイコンではない）
+  const wcfg2 = parseConfigText(repoFile('config/weather-example.yaml').toString('utf8'))
+  const wlayer = (n: string) => wcfg2.layers.findIndex((l) => l.name === n)
+  const iconDir = resolve(repoRoot, 'gui/test/fixtures/weather-icons')
+  const icons = new Map(readdirSync(iconDir).filter((f) => f.endsWith('.lha'))
+    .map((f) => [f.slice(0, -4), parseIcon(new Uint8Array(repoFile(`gui/test/fixtures/weather-icons/${f}`)))!]))
+  const thcases: { file: string; layer: string; data?: string; at?: string; synced?: boolean; pressed?: string[]; pressStyle?: PressStyle }[] = [
+    { file: 'weather.png', layer: 'weather', data: 'weather.json' },
+    { file: 'weather-small.png', layer: 'weather-small', data: 'weather.json' },
+    { file: 'weather-night.png', layer: 'weather', data: 'weather-night.json', at: '2026-10-06T03:12:00+09:00' },
+    { file: 'weather-stale-fill.png', layer: 'weather', data: 'weather-stale.json', pressed: ['2,0', '2,1'], pressStyle: 'fill' },
+    { file: 'weather-none.png', layer: 'weather', synced: false },
+    { file: 'weather-failed.png', layer: 'weather-small', data: 'weather-failed.json' },
+  ]
+  for (const c of thcases) {
+    it(`天気も lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const { pixels } = renderPreview(font, { cfg: wcfg2, stack: [0, wlayer(c.layer)], mode: 'latched', now: c.at ? new Date(c.at) : now,
+        synced: c.synced, pressed: new Set(c.pressed), pressStyle: c.pressStyle, weather: c.data ? fx(c.data) : null, weatherIcons: (n) => icons.get(n) })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+  it('天気アイコンがなければ、アイコンなしで描く（Brain と同じ）', () => {
+    const p = { cfg: wcfg2, stack: [0, wlayer('weather')], mode: 'latched' as Mode, now, weather: fx('weather.json') }
+    const none = renderPreview(font, p).pixels
+    const some = renderPreview(font, { ...p, weatherIcons: (n: string) => icons.get(n) }).pixels
+    expect(Buffer.from(none).equals(Buffer.from(some))).toBe(false)
+  })
 
   it('Brain にない背景画像は、背景なしで描く（Brain と同じ）', () => {
     const none = renderPreview(font, { cfg: bcfg, stack: [0], mode: 'base', images: () => undefined }).pixels

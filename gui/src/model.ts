@@ -63,7 +63,7 @@ export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
 export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド',
-  battery: '電池', stopwatch: 'ストップウォッチ', pomodoro: 'ポモドーロ', counter: 'カウンター', qr: 'QR コード', presence: '在席ランプ', month: '月の表示' }
+  battery: '電池', stopwatch: 'ストップウォッチ', pomodoro: 'ポモドーロ', counter: 'カウンター', qr: 'QR コード', presence: '在席ランプ', month: '月の表示', weather: '天気' }
 // トラックパッドの項目（数）
 export const PAD_NUM_FIELDS = ['speed', 'accel', 'scroll_width', 'scroll_step', 'settle_ms', 'smooth', 'deadzone', 'min_pressure', 'tap_ms', 'tap_move', 'drag_ms'] as const
 // トラックパッドの項目

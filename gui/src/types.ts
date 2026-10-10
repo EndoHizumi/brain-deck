@@ -22,7 +22,7 @@ export interface ActionSpec {
   id?: string // text：中身の名前（set_text の name）
   rows?: number // todo、calendar：1 ページの行数。省略すると高さで決める
   page_reset?: string // todo、calendar、month：触らなければ最初のページ（今月と今日）に戻るまでの時間（30s、2m など）。off で戻らない
-  stale?: string // calendar：最終更新がこれより古ければ、古いと出す（3h など）
+  stale?: string // calendar、weather：最終更新がこれより古ければ、古いと出す（3h など）
   calendars?: string[] // calendar：出すカレンダーの名前。month：印を付けるカレンダー。省略するとすべて
   follow?: string // calendar：同じレイヤーの月の表示（その id）で選んだ日の予定を出す
   week_start?: 'sunday' | 'monday' // month：週の始まり。省略すると日曜
@@ -45,7 +45,7 @@ export interface ActionSpec {
   long_press?: 'none' | 'right' // 長押しで右クリック
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather'
 
 // 在席ランプの状態 1 つ（gadgetwidget.go の PresenceSpec）
 export interface PresenceSpec {
@@ -359,6 +359,33 @@ export interface CalendarData {
   source?: string
   calendars: Calendar[]
   shown?: boolean // 設定にカレンダーのセルがあるか（get_calendar）
+}
+
+// 天気予報（Brain の get_weather。weather.go の WeatherData）
+export interface WeatherDay {
+  date: string // YYYY-MM-DD
+  telop: string
+  icon?: string // 気象庁の天気アイコンの番号
+  max: number | null
+  min: number | null
+  rain: (number | null)[] // 0〜6、6〜12、12〜18、18〜24 時の降水確率（%）
+}
+
+export interface WeatherData {
+  rev: number
+  received_at?: string
+  area?: string
+  office?: string
+  public_time?: string
+  fetched_at?: string
+  error?: string
+  error_at?: string
+  source?: string
+  days: WeatherDay[]
+  shown?: boolean // 設定に天気のセルがあるか（get_weather）
+  icon_boxes?: [number, number][] // 今の設定で使うアイコンの箱
+  icons?: { name: string; w: number; h: number; bytes: number }[] // Brain にあるアイコン
+  icons_missing?: { name: string; icon: string; w: number; h: number }[]
 }
 
 export interface ValidateResult {

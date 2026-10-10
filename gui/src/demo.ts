@@ -8,7 +8,7 @@ import { ACTION_FIELDS, MOUSE_LABELS, PAD_FIELDS, actionKind, actionTarget, hasS
 import type { Transport } from './protocol'
 import { TEXT_ID_PATTERN } from './textwidget'
 import { parseDurationMs, presenceStates } from './gadgetwidget'
-import type { ActionSpec, BatteryInfo, CalendarData, Config, KeymapInfo, PresenceSpec, Problem, TextEntry, TodoItem, TodoList, WidgetsState } from './types'
+import type { ActionSpec, BatteryInfo, CalendarData, Config, KeymapInfo, PresenceSpec, Problem, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
 
 const keymap = keymapJSON as KeymapInfo
 const SOURCE_KEYS = new Set(keymap.keys.flatMap((k) => [k.code, k.symbol]).filter(Boolean) as string[])
@@ -31,6 +31,7 @@ export class FakeDaemon {
   battery: BatteryInfo | null = { percent: 87, voltage_mv: 4040, plugged: true, charging: true, source: 'demo', estimated: true }
   todo: TodoList = { rev: 0, items: [] } // Todo の一覧
   calendar: CalendarData = { rev: 0, calendars: [] } // カレンダーの予定（brain-deck calendar sync が送るもの）
+  weather: WeatherData = { rev: 0, days: [] } // 天気予報（brain-deck weather sync が送るもの。デモにアイコンはない）
   // 背景画像（id → 名前と中身）。image_begin〜image_end で受け取る
   images = new Map<string, { name: string; w: number; h: number; data: Uint8Array; added: string }>()
   private upload: { token: string; id: string; name: string; w: number; h: number; bytes: number; parts: Uint8Array[]; got: number } | null = null
@@ -76,7 +77,7 @@ export class FakeDaemon {
         return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
           commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
-            'set_calendar', 'get_calendar', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal',
+            'set_calendar', 'get_calendar', 'set_weather', 'get_weather', 'get_weather_icon', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal',
             'set_qr', 'get_qr', 'get_widgets', 'set_presence'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
@@ -162,6 +163,23 @@ export class FakeDaemon {
         if (!Array.isArray(req.calendars)) return err('bad_request', '"calendars" (an array) is required')
         this.calendar = { rev: this.calendar.rev + 1, received_at: new Date().toISOString(), from: req.from, days: req.days, calendars: req.calendars }
         return ok({ rev: this.calendar.rev, calendars: req.calendars.map((c: any) => ({ name: c.name, events: c.events?.length ?? 0 })) })
+      case 'get_weather':
+        return ok({ ...this.weather, shown: this.config.layers.some((l) => Object.values(l.touch?.cells ?? {}).some((a) => a.widget === 'weather')),
+          icon_boxes: [], icons: [], icons_bytes: 0, icons_missing: [] })
+      case 'set_weather': {
+        const w = req.weather
+        if (!w || typeof w !== 'object') return err('bad_request', '"weather" (an object) is required')
+        if (!w.days?.length) {
+          if (!w.error) return err('bad_request', 'bad weather: "days" (the forecast) or "error" (why it could not be fetched) is required')
+          this.weather = { ...this.weather, rev: this.weather.rev + 1, error: w.error, error_at: new Date().toISOString() }
+          return ok({ rev: this.weather.rev, kept: this.weather.days.length > 0, icons_missing: [] })
+        }
+        this.weather = { rev: this.weather.rev + 1, received_at: new Date().toISOString(), area: w.area, office: w.office, public_time: w.public_time,
+          fetched_at: w.fetched_at ?? new Date().toISOString(), days: w.days }
+        return ok({ rev: this.weather.rev, kept: false, icons_missing: [] })
+      }
+      case 'get_weather_icon':
+        return err('not_found', `weather icon ${req.name} is not on this Brain`)
       case 'subscribe_data':
         this.dataSubscribed = req.enable !== false
         return ok({ subscribed: this.dataSubscribed, events: ['todo', 'widgets'] })
@@ -414,7 +432,7 @@ export function validate(cfg: Config): Problem[] {
     if (!cell && (a.widget || a.span || a.background)) return out.push({ path, message: `${where}: widget, span and background can be used only in touch cells` })
     if (a.background !== undefined && !/^[0-9a-f]{16}$/.test(a.background))
       out.push({ path, message: `${where}: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got "${a.background}"` })
-    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month'].includes(a.widget))
+    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month', 'weather'].includes(a.widget))
       out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad, battery, stopwatch, pomodoro, counter, qr, presence, month)` })
     if (isTapWidget(a.widget) && n > 0)
       out.push({ path, message: `${where}: widget: ${a.widget} handles taps itself; remove key, layer_*, mouse, usb_mode and terminal` })
@@ -430,7 +448,7 @@ export function validate(cfg: Config): Problem[] {
     const paged = a.widget === 'todo' || a.widget === 'calendar'
     if (a.rows !== undefined && !paged) out.push({ path, message: `${where}: rows is for widget: todo and calendar` })
     if (a.page_reset !== undefined && !paged && a.widget !== 'month') out.push({ path, message: `${where}: page_reset is for widget: todo, calendar and month` })
-    if (a.stale !== undefined && a.widget !== 'calendar') out.push({ path, message: `${where}: stale is for widget: calendar` })
+    if (a.stale !== undefined && a.widget !== 'calendar' && a.widget !== 'weather') out.push({ path, message: `${where}: stale is for widget: calendar and weather` })
     if (a.calendars !== undefined && a.widget !== 'calendar' && a.widget !== 'month') out.push({ path, message: `${where}: calendars is for widget: calendar and month` })
     if (a.follow !== undefined && a.widget !== 'calendar') out.push({ path, message: `${where}: follow is for widget: calendar (the id of a widget: month cell in the same layer)` })
     if (a.week_start !== undefined && a.widget !== 'month') out.push({ path, message: `${where}: week_start is for widget: month` })

@@ -9,13 +9,14 @@ import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrde
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calCaption, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
 import { MONTH_MAX_OFFSET, monthFollowDay, monthLayout, monthWidgetOf, type MonthDay, type MonthState, type MonthWidget } from './monthwidget'
 import { unpack565, type Image565 } from './image'
+import { blend8, weatherWidgetOf, wthLayout, type Icon, type WeatherWidget } from './weatherwidget'
 import { encodeQR } from './qr'
 import {
   GAUGE_H, QR_NONE, QR_TOO_BIG, STOPWATCH_IDLE, batteryLines, colInkWarn, colQRDark, colQRDarkOld, colQRLight, colQRLitOld,
   contrastInk, pomoDurations, pomoInk, pomoText, pomodoroView, presenceStates, presenceView, qrFit, stateId, stopwatchElapsed,
   stopwatchText, type PresenceDef,
 } from './gadgetwidget'
-import type { ActionSpec, BatteryInfo, CalendarData, Config, PressStyle, TextEntry, TodoItem, TodoList, WidgetsState } from './types'
+import type { ActionSpec, BatteryInfo, CalendarData, Config, PressStyle, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
 type RGB = [number, number, number]
@@ -88,6 +89,7 @@ export interface CellView {
   todoRows?: number // Todo のウィジェット（0 なら高さで決める）
   cal?: CalWidget // カレンダーのウィジェット
   month?: MonthWidget // 月の表示のウィジェット
+  weather?: WeatherWidget // 天気のウィジェット
   padScroll?: number // トラックパッドのスクロールの帯の幅（0 なら帯なし）
   background?: string // セルの背景画像の id
   gadget?: Gadget // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ
@@ -132,6 +134,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'todo') v.todoRows = typeof a.rows === 'number' ? a.rows : 0
     if (a.widget === 'calendar') v.cal = calWidgetOf(a)
     if (a.widget === 'month') v.month = monthWidgetOf(a)
+    if (a.widget === 'weather') v.weather = weatherWidgetOf(a)
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
     if (['battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence'].includes(a.widget)) {
       v.gadget = { kind: a.widget as Gadget['kind'], id: stateId(a), work: pomoDurations(a).work, states: presenceStates(a.states) }
@@ -202,6 +205,31 @@ class Pixels {
     this.fill({ x0: r.x0, y0: r.y1 - t, x1: r.x1, y1: r.y1 }, c)
     this.fill({ x0: r.x0, y0: r.y0, x1: r.x0 + t, y1: r.y1 }, c)
     this.fill({ x0: r.x1 - t, y0: r.y0, x1: r.x1, y1: r.y1 }, c)
+  }
+  // blendIcon は、天気アイコンを箱 box の中央に、不透明度で重ねる（weathericon.go の blendIcon）。
+  // 下の色は Brain の画面と同じく RGB565 に丸めてから混ぜる。
+  blendIcon(ic: Icon, box: Rect, clip: Rect): void {
+    const x0 = box.x0 + Math.trunc((box.x1 - box.x0 - ic.w) / 2)
+    const y0 = box.y0 + Math.trunc((box.y1 - box.y0 - ic.h) / 2)
+    const r = intersect(intersect({ x0, y0, x1: x0 + ic.w, y1: y0 + ic.h }, clip), { x0: 0, y0: 0, x1: this.w, y1: this.h })
+    for (let y = r.y0; y < r.y1; y++) {
+      for (let x = r.x0; x < r.x1; x++) {
+        const i = (y - y0) * ic.w + (x - x0)
+        const a = ic.a[i]
+        if (a === 0) continue
+        let [R, G, B] = unpack565(ic.pix[i])
+        const o = (y * this.w + x) * 4
+        if (a < 255) {
+          const d = this.data
+          const [dr, dg, db] = unpack565(((d[o] >> 3) << 11) | ((d[o + 1] >> 2) << 5) | (d[o + 2] >> 3))
+          ;[R, G, B] = [blend8(R, dr, a), blend8(G, dg, a), blend8(B, db, a)]
+        }
+        this.data[o] = R
+        this.data[o + 1] = G
+        this.data[o + 2] = B
+        this.data[o + 3] = 255
+      }
+    }
   }
   // blit は、dst に置いた画像のうち clip に入る部分を写す（fb.go の blitImage）。
   blit(img: Image565, dst: Rect, clip: Rect): void {
@@ -288,6 +316,8 @@ export interface PreviewParams {
   widgets?: WidgetsState // ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（Brain の get_widgets）
   qr?: Record<string, TextEntry> // QR コードのウィジェットの中身（Brain の get_qr）
   battery?: BatteryInfo | null // 電池（Brain の get_status）。省略すると読めないとき
+  weather?: WeatherData | null // 天気予報（Brain の get_weather）
+  weatherIcons?: (name: string) => Icon | undefined // 天気アイコン（Brain の get_weather_icon）。ないアイコンは描かない
 }
 
 export interface WidgetEnv {
@@ -303,6 +333,8 @@ export interface WidgetEnv {
   widgets: WidgetsState
   qr: Record<string, TextEntry>
   battery: BatteryInfo | null
+  weather: WeatherData | null
+  weatherIcons: (name: string) => Icon | undefined
 }
 
 export interface PreviewLayout {
@@ -326,7 +358,8 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {}, todo: p.todo?.items ?? [],
     todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage,
     month: { offset: Math.max(Math.min(p.monthOffset ?? 0, MONTH_MAX_OFFSET), -MONTH_MAX_OFFSET), sel: p.monthSelect ?? '' }, mouseOff: p.mouseOff ?? false,
-    widgets: p.widgets ?? {}, qr: p.qr ?? {}, battery: p.battery ?? null }
+    widgets: p.widgets ?? {}, qr: p.qr ?? {}, battery: p.battery ?? null, weather: p.weather ?? null,
+    weatherIcons: p.weatherIcons ?? (() => undefined) }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -502,6 +535,10 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
   }
   if (v.month) {
     drawMonth(font, px, area, v.month, env)
+    return
+  }
+  if (v.weather) {
+    drawWeather(font, px, area, v.weather, env)
     return
   }
   if (v.gadget) {
@@ -844,4 +881,21 @@ function drawTodoRow(font: BitmapFont, px: Pixels, r: Rect, it: TodoItem, scale:
     const y = ty + Math.trunc((FONT_H * scale) / 2)
     px.fill({ x0: tx, y0: y, x1: Math.min(tx + font.textWidth(s) * scale, r.x1 - TODO_PAD), y1: y + Math.max(scale - 1, 1) }, textC)
   }
+}
+
+// drawWeather は weatherwidget.go の drawWeather と同じ。描くものの並びを順に描く。
+function drawWeather(font: BitmapFont, px: Pixels, area: Rect, w: WeatherWidget, env: WidgetEnv): void {
+  for (const it of wthLayout(font, area, w, env.weather, env.now.getTime(), env.synced)) {
+    if (it.kind === 'text') px.text(font, it.x, it.y, it.text!, it.s!, hexRGB(it.color!), area)
+    else if (it.kind === 'rule') px.fill({ x0: it.x, y0: it.y, x1: it.x + it.w!, y1: it.y + it.h! }, hexRGB(it.color!))
+    else {
+      const ic = env.weatherIcons(it.icon!)
+      if (ic) px.blendIcon(ic, { x0: it.x, y0: it.y, x1: it.x + it.w!, y1: it.y + it.h! }, area)
+    }
+  }
+}
+
+function hexRGB(s: string): RGB {
+  const v = parseInt(s.slice(1), 16)
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255]
 }
