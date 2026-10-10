@@ -470,7 +470,7 @@ battery:
 # 時刻：起動したとき、時刻が合っていなければ内蔵 RTC の時刻に合わせる（狂っていれば使わない）。RTC には書かない
 # （write は、純正のファームウェアの時計と比べてから）
 clock:
-  rtc: read
+  rtc: write
 display:
   enabled: true
   device: /dev/fb0
