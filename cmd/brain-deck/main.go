@@ -106,6 +106,10 @@ const usage = `使い方：
   brain-deck read add <ファイル | URL>...  読み物（青空文庫のテキストか zip、DRM のない EPUB、Web の記事）を取り込む
                                       （-o <ファイル> で送らずにファイルに書く）。read [list]、read rm <番号>
   brain-deck read feed add <URL> [--limit-items 10]、feed list、feed rm <番号>、feed sync   RSS の記事を取り込む
+  brain-deck files ls [<Brain のフォルダ>] [--sort size]   Brain のファイル（設定の files.roots の場所だけ）の一覧。
+                                      フォルダを書かなければ場所の一覧。--sort size は大きい順（フォルダは中の合計）
+  brain-deck files get <Brain のファイル> [-o <ファイル>] [--force]   取り出す。files put <ファイル>... <Brain のフォルダ>
+                                      で足す、files rm <Brain のファイル>... で消す（delete: true の場所だけ）
   brain-deck sync [--wait 90s] [--if-older 10m]   時刻、予定、天気、読み物の RSS、手書きメモの取り出しを、まとめて行う
                                       （~/.config/brain-deck/sync.yaml で選ぶ。--wait は Brain の準備を待つ。--if-older は、
                                       Brain がその時間のうちに同期していれば何もしない）。終了コードは、失敗があれば 9
@@ -485,6 +489,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = memoCommand(o)
 	case "read":
 		cmd, err = readCommand(o)
+	case "files":
+		cmd, err = filesCommand(o)
 	case "sync":
 		return runSync(o, stdout, stderr)
 	case "time":
