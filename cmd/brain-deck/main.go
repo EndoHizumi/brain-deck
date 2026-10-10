@@ -95,7 +95,9 @@ const usage = `使い方：
   brain-deck images put <ファイル.565|ディレクトリ>...  変換済みの画像を送る（PNG などは設定 GUI で変換する）
   brain-deck images prune [--dry-run] 今の設定で使っていない背景画像を消す
   brain-deck time sync                PC の時刻を Brain に送る
-  brain-deck status                   Brain の状態（版、時刻、レイヤー、USB の形）
+  brain-deck status                   Brain の状態（版、時刻と内蔵 RTC、PC とのつながり、レイヤー、USB の形、電池）
+  brain-deck battery log [-n 行数]    電池だけで動かしたときの電圧の記録（CSV。Brain の battery-log.csv）
+  brain-deck battery log --fit        記録から、残りの見積もりの表（設定の battery.curve）を作る
   brain-deck usb-mode [keyboard|mouse|toggle]  USB の形を見る・切り替える。keyboard はキーボードだけ（ブートキーボード。
                                       起動したときの形）、mouse はキーボードとマウス。USB を付け直すので、2〜3 秒切れる
   brain-deck terminal [on|off|toggle] 端末モード（Brain の画面とキーボードで PC にログインする）を見る・切り替える。
@@ -129,7 +131,8 @@ const usage = `使い方：
   --fetch-timeout <時間>  calendar sync、weather sync で取ってくる時間の上限（既定 30s。--timeout とは別）
   --usb              restart で、USB も付け直す
   --no-wait          reboot、poweroff で、頼んだら待たずに終わる
-  -n, --lines <数>   logs で、読む行数（既定 100）
+  -n, --lines <数>   logs で、読む行数（既定 100）。battery log で、最後の何行を読むか（既定はすべて）
+  --fit              battery log で、記録から残りの見積もりの表を作る
   -f, --follow       logs で、新しいログを待って出し続ける
   --prev             config get で、前の版（.prev）を読む
   --restart          config put で、再起動が要る項目を変えてもよい（書いて lefthand を再起動する）
@@ -173,6 +176,7 @@ type options struct {
 	noWait    bool // reboot、poweroff
 	follow    bool // logs -f
 	lines     int  // logs -n
+	fit       bool // battery log --fit
 	prev      bool // config get --prev
 	restartOK bool // config put --restart
 	// exec
@@ -268,6 +272,8 @@ func parseArgs(argv []string) (*options, error) {
 			if err == nil && (o.lines < 1 || o.lines > 2000) {
 				err = errors.New("must be 1..2000")
 			}
+		case "fit":
+			o.fit = true
 		case "prev":
 			o.prev = true
 		case "restart":
@@ -360,7 +366,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		name string
 		cmds string
 	}{{o.status || o.rollback, "--status、--rollback", "update"}, {o.usb, "--usb", "restart"}, {o.noWait, "--no-wait", "reboot poweroff"},
-		{o.follow || o.lines != 0, "-f、-n", "logs"}, {o.prev || o.restartOK, "--prev、--restart", "config"}, {o.result != "" || o.limit != 0, "--result、--limit", "exec"}} {
+		{o.follow, "-f", "logs"}, {o.lines != 0, "-n", "logs battery"}, {o.fit, "--fit", "battery"}, {o.prev || o.restartOK, "--prev、--restart", "config"}, {o.result != "" || o.limit != 0, "--result、--limit", "exec"}} {
 		if f.on && !strings.Contains(" "+f.cmds+" ", " "+o.args[0]+" ") {
 			fmt.Fprintf(stderr, "brain-deck: %s は %s で使います%s\n", f.name, f.cmds, hint)
 			return exitUsage
@@ -410,6 +416,11 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			err = usageError("status は引数を取りません")
 		}
 		cmd = status
+	case "battery":
+		if len(o.args) != 2 || o.args[1] != "log" {
+			err = usageError("battery のあとには log を書きます（brain-deck battery log）")
+		}
+		cmd = func(c *Client) (string, error) { return batteryLog(c, o) }
 	case "usb-mode":
 		cmd, err = usbModeCommand(o)
 	case "terminal":
@@ -669,9 +680,86 @@ func listTexts(c *Client, k textKind) (string, error) {
 // ---------- time ----------
 
 type timeInfo struct {
-	Now    time.Time `json:"now"`
-	Synced bool      `json:"synced"`
-	TZ     string    `json:"timezone"`
+	Now        time.Time  `json:"now"`
+	Synced     bool       `json:"synced"`
+	TZ         string     `json:"timezone"`
+	BootSource string     `json:"boot_source"`
+	LastKnown  *time.Time `json:"last_known"`
+}
+
+// sourceNames は、この起動で時刻を合わせた側の名前。
+var sourceNames = map[string]string{"gui": "設定 GUI", "brain-deck": "brain-deck", "brain": "Brain のキーボード", "rtc": "内蔵 RTC"}
+
+// rtcInfo は get_status の rtc（lefthand の timesync.go の RTCInfo）。
+type rtcInfo struct {
+	Mode      string     `json:"mode"`
+	Readable  bool       `json:"readable"`
+	Error     string     `json:"error"`
+	Time      *time.Time `json:"time"`
+	OffsetMS  int64      `json:"offset_ms"`
+	Boot      string     `json:"boot"`
+	LastWrite string     `json:"last_write"`
+}
+
+var rtcModeNames = map[string]string{"read": "読むだけ", "write": "時刻を合わせたら書き戻す", "off": "使わない"}
+
+// describe は、RTC の時刻と、PC との差（RTC − Brain + Brain − PC）を書く。
+func (r rtcInfo) describe(brainNow time.Time, brainMinusPC time.Duration) string {
+	mode := rtcModeNames[r.Mode]
+	if mode == "" {
+		mode = r.Mode
+	}
+	if !r.Readable {
+		if r.Error == "" {
+			return mode
+		}
+		return "読めません（" + r.Error + "）"
+	}
+	d := (time.Duration(r.OffsetMS)*time.Millisecond + brainMinusPC).Round(time.Second)
+	s := fmt.Sprintf("%s（PC との差 %s、%s", r.Time.Format("2006-01-02 15:04:05"), longDuration(d), mode)
+	if r.LastWrite != "" {
+		s += "。最後に書いた結果：" + r.LastWrite
+	}
+	s += "）"
+	if r.Boot != "" {
+		s += "\n\t起動したとき：" + r.Boot
+	}
+	return s
+}
+
+// longDuration は、日をまたぐ差を「−5日18時間13分48秒」の形で書く。
+func longDuration(d time.Duration) string {
+	sign := ""
+	if d < 0 {
+		sign, d = "−", -d
+	}
+	day := d / (24 * time.Hour)
+	d -= day * 24 * time.Hour
+	if day == 0 {
+		return sign + d.String()
+	}
+	return fmt.Sprintf("%s%d日%v", sign, day, d)
+}
+
+// linkInfo は get_status の link（lefthand の link.go）。
+type linkInfo struct {
+	State   string `json:"state"`
+	Online  bool   `json:"online"`
+	Offline bool   `json:"offline_mode"`
+}
+
+func (l linkInfo) describe() string {
+	switch l.State {
+	case "configured":
+		return "PC とつながっている"
+	case "suspended":
+		return "PC がスリープ中"
+	case "power":
+		return "電源だけ（PC と通信していない）"
+	case "":
+		return "分からない"
+	}
+	return "外れている（" + l.State + "）"
 }
 
 // syncIfNeeded は、Brain の時刻が合っていなければ合わせる（テキストの有効期限を正しくするため）。
@@ -742,16 +830,30 @@ func status(c *Client) (string, error) {
 		Term   *termInfo `json:"terminal"`
 		Bat    *battery  `json:"battery"`
 		Light  *dimInfo  `json:"backlight"`
+		RTC    *rtcInfo  `json:"rtc"`
+		Link   *linkInfo `json:"link"`
 	}
 	json.Unmarshal(raw, &st)
+	pcNow := time.Now()
 	sync := "合わせてある"
 	if !st.Time.Synced {
 		sync = "未設定（brain-deck time sync で合わせる）"
+	} else if s := sourceNames[st.Time.BootSource]; s != "" {
+		sync = "合わせてある：" + s
 	}
-	off := time.Until(st.Time.Now).Round(time.Second)
+	off := st.Time.Now.Sub(pcNow).Round(time.Second)
 	out := fmt.Sprintf("ポート\t%s\nlefthand\t%s（起動から %v）\nレイヤー\t%s\nBrain の時刻\t%s（%s、PC との差 %v）",
 		c.Port, c.Hello.Version, time.Duration(st.Uptime)*time.Second, st.Status.Label,
 		st.Time.Now.Format("2006-01-02 15:04:05 MST"), sync, off)
+	if !st.Time.Synced && st.Time.LastKnown != nil {
+		out += "\n最後に分かっていた時刻\t" + st.Time.LastKnown.Local().Format("2006-01-02 15:04:05")
+	}
+	if st.RTC != nil {
+		out += "\n内蔵 RTC\t" + st.RTC.describe(st.Time.Now, off)
+	}
+	if st.Link != nil {
+		out += "\nPC とのつながり\t" + st.Link.describe()
+	}
 	if st.HID != nil {
 		out += "\nUSB\t" + st.HID.describe()
 	}
