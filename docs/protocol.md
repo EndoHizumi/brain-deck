@@ -675,6 +675,7 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 | `update` | 24 MiB | 確かめ終えた更新（下の `update_*`） |
 | `image` | 768,008 バイト | `{"id":"<画像の id>"}`。`image_begin` と違い、幅と高さは受け取ったファイルのヘッダから読む。合計の上限と SD カードの空きは同じ |
 | `photo` | 768,008 バイト | `{"id":"<写真の id>","count":3,"max":10}`。800×480 か 480×800 の LHI1 だけ。`upload_begin` に `"of":"<横向きの写真の id>"` を付けると、その写真を縦向きに切り抜き直したもの（480×800 だけ）。枚数が `photo.max` に達していれば `quota_exceeded`、SD カードの空きが足りなければ `no_space`（同じ写真は数えない） |
+| `read` | 8 MiB | `{"id":"<読み物の id>","title":"…","chars":3127}`。gzip した読み物の JSON（下の「読み物」）。確かめて断るものは `bad_request`、合計が 32 MiB を超えるときは `quota_exceeded`、SD カードの空きが足りなければ `no_space` |
 | `weather_icon` | 460,808 バイト | `{"name":"101-87x58","w":77,"h":58,"bytes":13406}`（消したものがあれば `removed`）。`name` は `<番号>-<幅>x<高さ>`（箱の大きさ）。形は上の `get_weather_icon` の `.lha` |
 
 - **順番**：`offset` は、それまでに受け取った大きさと同じでなければ `bad_request`（受け取りは続く）。言った大きさを超えたら捨てる。
@@ -717,6 +718,33 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 - `get_memo` は、メモの JSON（下の形）を 96 KiB ずつ base64 で返す。`total` までくり返して読む。書いていない線も含む。
 - メモの JSON：`{"id":"m1","created":…,"updated":…,"pages":[{"w":776,"h":410,"strokes":[{"w":4,"p":[x0,y0,x1,y1,…]},{"w":20,"e":true,"p":[…]}]}]}`。`w`、`h` はページの大きさ（ドット）、線の `w` は太さ、`e` は消しゴム（紙の色で塗る）、`p` は点の列。描き方は `internal/ink`（丸いペン先を点と点のあいだに動かした跡）。
 - ない id は `not_found`。
+
+## 読み物（list_reads、delete_read）
+
+読み物のアプリ（widget: reader）の読み物（`/var/lib/lefthand/reader/<id>.json.gz`）。足すのは `upload_*` の `kind: read`（brain-deck read add）。
+
+```json
+→ {"id":1,"cmd":"list_reads"}
+← {"id":1,"ok":true,"result":{"reads":[{"id":"9e1f…","title":"蜘蛛の糸","author":"芥川龍之介","kind":"aozora","source":"kumono_ito_aozora.zip",
+     "bytes":5163,"chars":3127,"added":"…","pos":{"b":5,"c":120},"progress":0.31}],"total_bytes":5163,"limit_bytes":33554432,"free_bytes":…,"reserve_bytes":…}}
+→ {"id":2,"cmd":"delete_read","read":"9e1f…"}
+← {"id":2,"ok":true,"result":{"deleted":"9e1f…"}}
+```
+
+読み物の JSON（gzip する。`readdoc.go` の `ReadDoc`）：
+
+```json
+{"format":1,"title":"蜘蛛の糸","author":"芥川龍之介","kind":"aozora","source":"…","flow":"book","blocks":[
+  {"t":"h","l":2,"r":[{"s":"一"}]},
+  {"t":"p","i":0,"r":[{"s":"　ある日の事でございます。"},{"s":"御釈迦様","ruby":"おしゃかさま"},{"s":"は"},{"s":"強調","em":true},{"s":"12","tcy":true}]},
+  {"t":"pb"},
+  {"t":"info","r":[{"s":"底本：「芥川龍之介全集2」ちくま文庫、筑摩書房"}]}]}
+```
+
+- ブロック：`p`（段落）、`h`（見出し。`l` は 1〜3）、`pb`（改ページ）、`info`（底本などの情報。少し薄く描く）。`i` は字下げ（文字の数、すべての行）。
+- 文字の続き：`s`（文字）、`ruby`、`em`（傍点）、`tcy`（縦中横）。`flow` が `article` なら、段落のあいだを 1 行空ける。
+- 上限：1 つ 8 MiB（gzip）、戻して 32 MiB、ブロック 20 万。題名は 1〜200 文字。
+- 消すと、しおりも消す。開いていれば一覧に戻る。
 
 ## 更新、再起動、電源、ログ（ssh を使わない保守）
 

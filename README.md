@@ -48,14 +48,15 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 14. [時刻合わせ](#時刻合わせ)
 15. [PC から外して使う](#pc-から外して使う)
 16. [フォトフレーム](#フォトフレーム)
-17. [タッチのキャリブレーション](#タッチのキャリブレーション)
-18. [日常の操作](#日常の操作)
-19. [シリアルコンソール](#シリアルコンソール)
-20. [端末モード](#端末モード)
-21. [画面とコンソール](#画面とコンソール)
-22. [困ったとき](#困ったとき)
-23. [開発](#開発)
-24. [フォントとライセンス](#フォントとライセンス)
+17. [読み物](#読み物)
+18. [タッチのキャリブレーション](#タッチのキャリブレーション)
+19. [日常の操作](#日常の操作)
+20. [シリアルコンソール](#シリアルコンソール)
+21. [端末モード](#端末モード)
+22. [画面とコンソール](#画面とコンソール)
+23. [困ったとき](#困ったとき)
+24. [開発](#開発)
+25. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -1665,6 +1666,62 @@ i.MX28 は、USB の 5V があるときに電源を切ると、起動し直し�
 6. 15 分で画面が消えること。23:00 を過ぎてから試すと、3 分で（写真を出さずに）消えること。
 7. 終わったら `brain-deck config put config/current.yaml` で本番の設定に戻し、要らない写真は `brain-deck photo rm <番号>` で消す。
 
+## 読み物
+
+昔の PDA の AvantGo のように、PC につないでいるときに読み物を取り込み、PC から外しても読む（フェーズ I）。Brain の読み物のアプリ（`widget: reader`）で、縦書き（文庫本のように）か横書きで読む。例の設定は `config/reader-example.yaml`（本番の設定にレイヤー「読む」を足したもの）。**本番の設定には入れていない**。
+
+### 取り込む（brain-deck read）
+
+```sh
+brain-deck read add 作品_ruby.zip            # 青空文庫のテキスト版（zip のまま、Shift_JIS のまま）
+brain-deck read add https://www.aozora.gr.jp/cards/000879/files/92_ruby_164.zip
+brain-deck read add 本.epub                   # DRM のない EPUB
+brain-deck read add https://example.com/記事    # Web の記事（本文だけを取り出す）
+brain-deck read add 作品.zip -o x.json.gz      # Brain に送らずに、送る形をファイルに書く（確かめる）
+brain-deck read                               # 一覧（番号、id、種類、題名、大きさ、文字の数、しおり）
+brain-deck read rm 2
+brain-deck read feed add https://example.com/feed.xml --limit-items 10   # RSS を足す（~/.config/brain-deck/feeds.yaml）
+brain-deck read feed sync                      # RSS の新しい記事を取り込む
+brain-deck read feed list、feed rm <番号>
+```
+
+- **DRM のかかった電子書籍（Kindle など）は扱わない**。EPUB に暗号化の印（META-INF/encryption.xml、rights.xml）があれば断る。DRM を外す仕組みは作らない。
+- **青空文庫**：ルビ（《》と ｜）、字下げ、見出し、傍点、縦中横、改ページ、`U+` で書いた外字を解釈する。解釈できない注記は読み捨て、本文は残す。JIS X 0213 の面区点番号だけの外字は ※ のまま。末尾の「底本：」からあと（底本、入力者、校正者など）は消さずに残す（少し薄く描く）。
+- **EPUB**：spine の順に、見出し（h1〜h6）、段落、ルビ（`<ruby>`）、傍点（`em` と class の sesame など）、縦中横（class の tcy）。章の始まりは改ページ。画像は扱わない。
+- **Web の記事**：ライブラリを使わない自作の簡単な方法で本文を取り出す（`<article>` か `<main>`、なければ `<p>` の文字のいちばん多いところ。nav、header、footer、aside、script などは読まない）。題名は og:title、h1、title。画像は扱わない。うまく取り出せないページもある。
+- **Web のアクセス**：同じホストには 2 秒あけてアクセスする。User-Agent は `brain-deck/<版> (+https://github.com/endohizumi/brain-deck; reading for a handheld)`。
+- **RSS**：RSS 2.0、1.0、Atom。Brain にまだない URL の記事を、新しいものから取り込む。1 つの RSS で Brain に置く記事は `max_items`（既定 10。`--limit-items`）まで。超えたら足さずに知らせる（古い記事は `read rm` で消す。自動では消さない）。
+- **量**：Brain に置く読み物の合計は 32 MiB まで（gzip。青空文庫の長編 1 冊で 0.2 MB ほど）。SD カードの空きが 64 MiB を下回るときは断る。
+
+### 読む（Brain）
+
+- 一覧の行をタップして開く。左右のタップか、本体キーの ← → とスペースでめくる。真ん中のタップで道具（一覧、目次、文字の大きさ 24・32 ドット、縦書き・横書き）。
+- **縦書き**：行は右から左、ルビは右。句読点（、。）は右上へ、小さいかなは少し右上へ、長音（ー）、括弧（「」『』（）など）、ダッシュ、三点リーダーなどは 90 度回す。半角の英数字は 90 度回す。前後が全角の 1〜2 桁の数字と縦中横の注記は、横に並べて 1 文字の箱に入れる。
+- **禁則**：行の頭に句読点が来るときはぶら下げる。閉じ括弧、小さいかな、長音などは前の文字と一緒に次の行へ送る。開き括弧は行の終わりに置かない。ルビの付いた語は行をまたがない。
+- **しおり**：開いているページの始まりの位置で覚える。文字の大きさや向きを変えても、読んでいた位置を含むページを開く。
+- 実機の速さ（`TestHWReader`、16 万字の「こころ」）：開く 1.4 秒、文字を初めて使うとき 1.4 秒（24 ドット）・2.2 秒（32 ドット）、ページを数える 0.9〜1.2 秒、**ページめくりの描き直し 79〜80 ms（中央値）**。
+
+### フォント
+
+| ファイル | 内容 | ライセンス |
+| --- | --- | --- |
+| `font/reader-24.lrf.gz`、`reader-32.lrf.gz` | 本文（24、32 ドット）。JIS X 0208 のすべて（第一・第二水準の漢字、かな、記号）と ASCII など 7423 字。16 階調 | SIL Open Font License 1.1（`font/reader-OFL.txt`）。Noto Serif JP（Copyright 2017-2024 Adobe。Noto is a trademark of Google Inc.）を `tools/mkreadfont` でビットマップにしたもの。名前に Noto は使わない（「lefthand 読み物の明朝」） |
+| `font/reader-12.lrf.gz`、`reader-16.lrf.gz` | ルビ（12、16 ドット）。かなと ASCII と記号 311 字 | 同じ |
+
+- 作り直す：`go run ./tools/mkreadfont -otf NotoSerifJP-Regular.otf -o font`（OTF は https://github.com/notofonts/noto-cjk の Serif/SubsetOTF/JP）。
+- **大きさへの影響**：lefthand は 9.3 MB から 12.1 MB（+2.8 MB。フォントは gzip のまま埋め込む）。Brain の SD カードには、lefthand と前の版（.prev）で +5.6 MB まで。メモリは、使う大きさを初めて使うときに 2.2 MB（24 ドット）か 3.9 MB（32 ドット）を使う。
+- フォントにない文字は k8x12 を 2 倍にして描く。
+
+### 目で確かめる手順（フェーズ I）
+
+1. PC で `brain-deck read add testdata/reader/kumono_ito_aozora.zip`（青空文庫の「蜘蛛の糸」）と、好きな青空文庫の長編、DRM のない EPUB、Web の記事を 1 つずつ。`brain-deck read` に出ること。
+2. `brain-deck config put config/reader-example.yaml`。ホーム画面の 2 ページ目の「読む」。
+3. 縦向き（「画面の向き」→「縦向き」）で「蜘蛛の糸」を開き、文庫本のように読めること：ルビが右、句読点が右上、「」が縦向き、長音が縦、行の頭に「。」「」」が来ないこと。見出し「一」「二」「三」。最後に底本と入力者の情報。
+4. 左右のタップ、← → とスペースでめくれること。真ん中で道具：文字を大きく、横書き、目次。大きさや向きを変えても、読んでいたところが出ること。
+5. 一覧に戻って、別の読み物を開き、また戻ると、しおりの位置から開くこと。PC から外しても読めること。
+6. `brain-deck read feed add <RSS>` と `read feed sync` で、記事が足されること。
+7. 終わったら `brain-deck config put config/current.yaml`。要らない読み物は `brain-deck read rm`。
+
 ## タッチのキャリブレーション
 
 パネルの座標と画面の端の対応を測り、`touch` の min_x などに書く。
@@ -2096,6 +2153,11 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | memo.go | 手書きメモ：メモの置き場所、帯のボタン、描き足し、ページの変換、保存 |
 | stroke.go | スタイラスの線の読み取り（跳ね、平均、つなぎ）。penreplay.go は -replay-pen |
 | internal/ink | 線の描き方（丸いペン先）。lefthand と brain-deck memo get が使う |
+| readdoc.go | 読み物の形（ReadDoc）、置き場所、しおり、受け取り |
+| readlayout.go | 読み物のページの組み方（禁則、ルビ、縦中横、傍点、縦書き・横書き）とページの分け方 |
+| readerwidget.go | 読み物のアプリ（一覧、読む、道具、目次、キー） |
+| readfont.go | 読み物の文字（font/reader-*.lrf.gz）と、縦書きの文字の向き |
+| cmd/brain-deck/aozora.go、read.go、readweb.go | brain-deck read（青空文庫、EPUB、Web の記事、RSS） |
 | photo.go | フォトフレーム：写真の置き場所（/var/lib/lefthand/photos）、受け取り、一覧、削除、向きに合わせて縮める、順に出す係（自動減光の段階から呼ぶ） |
 | internal/imgconv | 画像の変換（縮小、切り抜き、面積の平均、明るさ、Floyd–Steinberg、帯を入れて縮める）。整数だけで計算し、gui/src/image.ts と同じ結果にする。brain-deck と lefthand が使う |
 | update.go | 更新のファイルの展開と確かめ（-version、-check-gadget、-check、GADGET_CHECK）、係の起動、restart、power、get_logs、起動の知らせ（-ready-file） |
@@ -2444,6 +2506,9 @@ lefthand -replay-touch file.touch ...        記録を再生し、トラック�
 ```
 
 ## フォントとライセンス
+
+- 読み物の文字（`font/reader-*.lrf.gz`）は SIL Open Font License 1.1（`font/reader-OFL.txt`）。Noto Serif JP（Copyright 2017-2024 Adobe）から作った。README の「読み物」→「フォント」。
+- WebP の読み込み（golang.org/x/image）、HTML と文字コード（golang.org/x/net、golang.org/x/text）は BSD ライセンス（Go の拡張ライブラリ）。
 
 ラベルの描画には、Num Kadoma（門真なむ）氏の 8×12 ドット日本語ビットマップフォント
 「k8x12」2021-05-05 版を使っている。JIS 第一・第二水準の漢字を含む。
