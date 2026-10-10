@@ -523,3 +523,33 @@ func TestRenderRotatedHome(t *testing.T) {
 		}
 	}
 }
+
+// 回した裏画面に描いたものは、論理の向きで見ると、回していない裏画面に描いたものと同じ（塗り、文字、画像）。
+func TestRotatedCanvasSameAsUnrotated(t *testing.T) {
+	img := &Image{W: 37, H: 23, Pix: make([]byte, 37*23*2)}
+	for i := range img.Pix {
+		img.Pix[i] = byte(i * 7)
+	}
+	draw := func(cv *Canvas) {
+		cv.fill(image.Rect(0, 0, cv.W, cv.H), RGB{10, 20, 30})
+		cv.fill(image.Rect(5, 7, 61, 40), RGB{200, 100, 50})
+		cv.frame(image.Rect(30, 20, 90, 70), 3, RGB{255, 255, 255})
+		cv.blitImage(img, image.Rect(11, 13, 48, 36), image.Rect(15, 0, 100, 30))
+		cv.text(3, 50, "回転Ag", 2, RGB{0, 255, 0}, image.Rect(0, 0, cv.W, cv.H))
+	}
+	for _, rot := range []int{90, 180, 270} {
+		pw, ph := 120, 80
+		cv := NewCanvas(pw, ph, pw*2, rgb565, rot)
+		ref := NewCanvas(cv.W, cv.H, cv.W*2, rgb565, 0)
+		draw(cv)
+		draw(ref)
+		a, b := cv.Image(), ref.Image()
+		for y := 0; y < cv.H; y++ {
+			for x := 0; x < cv.W; x++ {
+				if a.RGBAAt(x, y) != b.RGBAAt(x, y) {
+					t.Fatalf("rot %d: (%d,%d) %v, want %v", rot, x, y, a.RGBAAt(x, y), b.RGBAAt(x, y))
+				}
+			}
+		}
+	}
+}

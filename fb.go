@@ -233,22 +233,14 @@ func (cv *Canvas) fill(r image.Rectangle, c RGB) {
 	for i := range px {
 		px[i] = byte(v >> (8 * i))
 	}
-	if cv.rot == 0 {
-		// よく使う向きは行単位で埋める
-		row := cv.pix[r.Min.Y*cv.stride+r.Min.X*bpp : r.Min.Y*cv.stride+r.Max.X*bpp]
-		for i := 0; i < len(row); i += bpp {
-			copy(row[i:], px)
-		}
-		for y := r.Min.Y + 1; y < r.Max.Y; y++ {
-			copy(cv.pix[y*cv.stride+r.Min.X*bpp:], row)
-		}
-		return
+	// 塗りつぶす矩形は、回しても矩形なので、物理の座標で行単位に埋める
+	r = cv.physRect(r)
+	row := cv.pix[r.Min.Y*cv.stride+r.Min.X*bpp : r.Min.Y*cv.stride+r.Max.X*bpp]
+	for i := 0; i < len(row); i += bpp {
+		copy(row[i:], px)
 	}
-	for y := r.Min.Y; y < r.Max.Y; y++ {
-		for x := r.Min.X; x < r.Max.X; x++ {
-			X, Y := cv.phys(x, y)
-			copy(cv.pix[Y*cv.stride+X*bpp:], px)
-		}
+	for y := r.Min.Y + 1; y < r.Max.Y; y++ {
+		copy(cv.pix[y*cv.stride+r.Min.X*bpp:], row)
 	}
 }
 
@@ -324,6 +316,23 @@ func (cv *Canvas) blitImage(img *Image, dst, clip image.Rectangle) {
 		for y := r.Min.Y; y < r.Max.Y; y++ {
 			src := ((y-dst.Min.Y)*img.W + (r.Min.X - dst.Min.X)) * 2
 			copy(cv.pix[y*cv.stride+r.Min.X*2:], img.Pix[src:src+n])
+		}
+		return
+	}
+	if cv.pf == rgb565 {
+		// 回した RGB565：画素をそのまま写す。論理の x が 1 増えると、物理の位置は step バイト動く
+		x0, y0 := cv.phys(r.Min.X, r.Min.Y)
+		x1, y1 := cv.phys(r.Min.X+1, r.Min.Y)
+		step := (y1-y0)*cv.stride + (x1-x0)*2
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			X, Y := cv.phys(r.Min.X, y)
+			d := Y*cv.stride + X*2
+			src := ((y-dst.Min.Y)*img.W + (r.Min.X - dst.Min.X)) * 2
+			for x := r.Min.X; x < r.Max.X; x++ {
+				cv.pix[d], cv.pix[d+1] = img.Pix[src], img.Pix[src+1]
+				d += step
+				src += 2
+			}
 		}
 		return
 	}
