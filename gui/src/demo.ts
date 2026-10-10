@@ -57,8 +57,11 @@ export class FakeDaemon {
     const l = this.config.layers.find((x) => x.name === top) ?? this.config.layers[0]
     const g = l.touch?.cols ? l.touch : this.config.layers[0].touch
     const mode = !this.stack.length ? 'base' : ['layer_hold', 'layer_oneshot'].includes(this.stack[this.stack.length - 1].kind) ? 'temp' : 'latched'
-    return { layer: l.name, label: l.label || l.name, mode, stack: this.stack, cols: g?.cols ?? 0, rows: g?.rows ?? 0 }
+    return { layer: l.name, label: l.label || l.name, mode, stack: this.stack, cols: g?.cols ?? 0, rows: g?.rows ?? 0,
+      rotate: this.rotate, portrait: this.rotate === 90 || this.rotate === 270 }
   }
+
+  rotate = 0 // 画面の向き（set_rotate）
 
   // handle は 1 行を処理し、返す行を返す。
   handle(line: string): string {
@@ -78,15 +81,21 @@ export class FakeDaemon {
         return ok({ protocol: 1, daemon: 'lefthand', version: 'demo', max_line: 262144, config_path: this.path,
           commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
-            'set_calendar', 'get_calendar', 'set_weather', 'get_weather', 'get_weather_icon', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal',
+            'set_calendar', 'get_calendar', 'set_weather', 'get_weather', 'get_weather_icon', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal', 'set_rotate',
             'set_qr', 'get_qr', 'get_widgets', 'set_presence', 'add_graph', 'clear_graph', 'get_graph'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
         return ok(keymap)
       case 'get_status':
-        return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress, time: this.timeInfo(), hid: { mouse: this.mouse, switching: false },
+        return ok({ status: this.status(), uptime_sec: 1, subscribed: this.subscribed, suppressing: this.suppress, time: this.timeInfo(), hid: { mouse: this.mouse, switching: false, usb_state: 'configured' },
           terminal: this.termInfo(), battery: this.battery, backlight: { enabled: false } })
+      case 'set_rotate': {
+        const r = req.mode === 'next' ? (this.rotate + 90) % 360 : Number(req.mode)
+        if (![0, 90, 180, 270].includes(r)) return err('bad_request', '"mode" must be next, 0, 90, 180 or 270')
+        this.rotate = r
+        return ok({ status: this.status() })
+      }
       case 'set_terminal': {
         const want = req.mode === 'toggle' ? !this.terminal : req.mode === 'on' ? true : req.mode === 'off' ? false : null
         if (want === null) return err('bad_request', 'mode must be "on", "off" or "toggle"')
@@ -511,6 +520,8 @@ export function validate(cfg: Config): Problem[] {
         if (!ALL_KEYS.has(u) && !(MODIFIERS as readonly string[]).includes(u))
           out.push({ path, message: `${where}: unknown key "${u}" in "${a.key}"` })
       }
+    } else if (k === 'rotate') {
+      if (!['next', '0', '90', '180', '270'].includes(a.rotate!)) out.push({ path, message: `${where}: rotate must be next, 0, 90, 180 or 270` })
     } else if (k !== 'none' && k !== 'widget' && k !== 'mouse' && k !== 'usb_mode' && k !== 'terminal') {
       const t = actionTarget(a)!
       if (!names.has(t)) out.push({ path, message: `${where}: ${k} refers to unknown layer "${t}"` })
@@ -546,12 +557,36 @@ export function validate(cfg: Config): Problem[] {
           out.push({ path: `/layers/${i}/touch/cells/${k}`, message: `layer "${l.name}" touch cell "${k}": follow: no widget: month with id "${a.follow}" in this layer` })
       }
     }
+    if (l.touch_portrait) {
+      const p0 = l.touch_portrait
+      if (!l.touch) out.push({ path: `/layers/${i}/touch_portrait`, message: `layer "${l.name}": touch_portrait needs touch (the landscape grid) in the same layer` })
+      const cols = p0.cols ?? 0
+      const rows = p0.rows ?? 0
+      for (const [k, a] of Object.entries(p0.cells ?? {})) {
+        const p = parseCellKey(k)
+        const where = `layer "${l.name}" touch_portrait cell "${k}"`
+        if (cols && (!p || p[0] >= cols || p[1] >= rows)) out.push({ path: `/layers/${i}/touch_portrait/cells/${k}`, message: `${where}: out of the ${cols}x${rows} grid` })
+        else action(`/layers/${i}/touch_portrait/cells/${k}`, where, a, true)
+      }
+    }
     for (const [n, a] of Object.entries(l.soft_keys ?? {})) {
       const where = `layer "${l.name}" soft key "${n}"`
       if (!cfg.touch?.soft_areas?.[n]) out.push({ path: `/layers/${i}/soft_keys/${n}`, message: `${where}: not defined in touch.soft_areas` })
       else action(`/layers/${i}/soft_keys/${n}`, where, a)
     }
   })
+  if (cfg.home) {
+    if (names.has('home')) out.push({ path: '/home', message: 'home: a layer named "home" is reserved for the home screen; rename that layer' })
+    if (!cfg.home.apps?.length) out.push({ path: '/home/apps', message: 'home.apps must have 1..64 apps' })
+    cfg.home.apps?.forEach((a, i) => {
+      if (!a.name) out.push({ path: `/home/apps/${i}/name`, message: `home.apps[${i}]: name must be 1..16 characters` })
+      if (!names.has(a.layer)) out.push({ path: `/home/apps/${i}/layer`, message: `home.apps[${i}] "${a.name}": unknown layer "${a.layer}"` })
+    })
+    if (!cfg.touch?.soft_areas?.[cfg.home.soft_key ?? 'home'])
+      out.push({ path: '/home/soft_key', message: `home: soft key "${cfg.home.soft_key ?? 'home'}" (the way back to the home screen) is not defined in touch.soft_areas` })
+  }
+  for (const [i, it] of (cfg.status_bar?.items ?? []).entries())
+    if (!['time', 'battery', 'pc', 'mouse', 'sync'].includes(it)) out.push({ path: `/status_bar/items/${i}`, message: `status_bar.items must be distinct names from time, battery, pc, mouse and sync, got "${it}"` })
   return out
 }
 

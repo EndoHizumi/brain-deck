@@ -11,12 +11,14 @@ import {
   CLOCK_FIELDS, GRAPH_FIELDS, GRAPH_NUM_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MEDIA_LABELS, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
   PAD_NUM_FIELDS, TERM_LABELS, USB_LABELS, WIDGET_FIELDS, ACTION_FIELDS, WIDGET_LABELS, ownsTouch, hasStateId,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
-  isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
+  isIncomplete, gridSize, layerGrid, layerTitle, normalizeConfig, barShown, ROTATE_LABELS, ROTATE_VALUES, type Orient, parsePath, references, renameLayer, resolveCell, resolveGrid,
   resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
   type Location, type ResolvedAction,
 } from './model'
 import { hasSeconds } from './clock'
 import { CELL_GAP, cellSpan, renderPreview, type Mode } from './preview'
+import { HOME_IMAGE_ICON, HOME_LABEL, ICON_NAMES, homeGeometry, homeGrid, isImageId } from './home'
+import { BAR_H, BAR_ITEMS_DEFAULT, BAR_ITEM_LABELS } from './statusbar'
 import {
   DEFAULT_BRIGHTNESS, DITHER_LABELS, MAX_ZOOM, checkTarget, convert, decodeFile, decodeImageFile, encodeImageFile, fitCrop, fromBase64,
   sha256Hex, toBase64, type ConvertParams, type Crop, type Dither, type Image565, type SourceImage,
@@ -38,7 +40,7 @@ import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './por
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode,
+  BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -53,8 +55,12 @@ interface Message {
   level: 'info' | 'ok' | 'error'
 }
 
-// 背景画像を置く場所：セルか、レイヤーの壁紙
-export type BgTarget = { kind: 'cell'; layer: number; col: number; row: number } | { kind: 'wallpaper'; layer: number }
+// 背景画像を置く場所：セルか、レイヤーの壁紙（portrait なら縦向きの格子のもの）、ホーム画面のアイコンか壁紙
+export type BgTarget =
+  | { kind: 'cell'; layer: number; col: number; row: number; portrait?: boolean }
+  | { kind: 'wallpaper'; layer: number; portrait?: boolean }
+  | { kind: 'icon'; app: number }
+  | { kind: 'homewall' }
 
 // このタブで持っている背景画像。file は Brain に送るファイル（このタブで変換したもの、または Brain から読んだもの）
 interface LocalImage {
@@ -81,9 +87,13 @@ interface ImageEdit {
 export function referencedImages(cfg: Config | null): Set<string> {
   const out = new Set<string>()
   for (const l of cfg?.layers ?? []) {
-    if (l.touch?.background) out.add(l.touch.background)
-    for (const a of Object.values(l.touch?.cells ?? {})) if (a.background) out.add(a.background)
+    for (const g of [l.touch, l.touch_portrait]) {
+      if (g?.background) out.add(g.background)
+      for (const a of Object.values(g?.cells ?? {})) if (a.background) out.add(a.background)
+    }
   }
+  if (cfg?.home?.background) out.add(cfg.home.background)
+  for (const a of cfg?.home?.apps ?? []) if (isImageId(a.icon)) out.add(a.icon!)
   return out
 }
 
@@ -138,6 +148,12 @@ export class App {
   source = '' // 編集中の設定の出どころ
   layer = 0
   sel: Selection | null = null
+  // 画面の向き（プレビューと、縦向きの格子の編集）
+  orient: Orient = 'landscape'
+  // ホーム画面の編集（タブの「ホーム」）。homeSel は選んだアプリ、homePage はプレビューのページ
+  homeView = false
+  homeSel: number | null = null
+  homePage = 0
   symbolMode = false
   // 検証
   problems: Problem[] = []
@@ -160,6 +176,8 @@ export class App {
   widgetsState: WidgetsState = {}
   calcState: Record<string, CalcState> = {} // 電卓の状態（Brain の get_widgets。接続したときに読む）
   brainBattery: BatteryInfo | null = null
+  brainUSB: string | null = null // Brain の UDC の state（get_status の hid.usb_state）。状態の帯のプレビューに出す
+  brainLastSync: Date | null = null // Brain で最後に時刻を合わせた時刻（get_status の time.last_set）
   // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
   section: 'config' | 'todo' | 'console' = 'config'
   // コンソールのタブ（Brain の 1 つ目のシリアル。設定のタブとは別のポートで、同時に開いておける）
@@ -456,8 +474,12 @@ export class App {
       this.layer = 0
       this.sel = null
     }
-    const st = await c.request<{ status: EngineStatus; hid?: { mouse: boolean }; terminal?: TermInfo; battery?: BatteryInfo | null }>('get_status')
+    const st = await c.request<{ status: EngineStatus; hid?: { mouse: boolean; usb_state?: string }; terminal?: TermInfo; battery?: BatteryInfo | null;
+      time?: { last_set?: string } }>('get_status')
     this.brainStatus = st.status
+    this.brainUSB = st.hid?.usb_state ?? null
+    this.brainLastSync = st.time?.last_set ? new Date(st.time.last_set) : null
+    if (typeof st.status?.portrait === 'boolean') this.orient = st.status.portrait ? 'portrait' : 'landscape' // Brain の今の向きで始める
     this.brainMouse = st.hid ? st.hid.mouse : null
     this.brainTerm = st.terminal ?? null
     this.brainBattery = st.battery ?? null
@@ -582,40 +604,66 @@ export class App {
 
   // bgTargetSize は、背景画像の大きさ（セルの箱か、画面全体）。display.go と同じ範囲。
   bgTargetSize(t: BgTarget): { w: number; h: number } {
-    const W = this.keymap.screen.w
-    const H = this.keymap.screen.h
+    const { w: W0, h: H0 } = this.keymap.screen
+    const land = { w: Math.max(W0, H0), h: Math.min(W0, H0) }
+    if (t.kind === 'icon') return { w: HOME_IMAGE_ICON, h: HOME_IMAGE_ICON }
+    if (t.kind === 'homewall') return land
+    const portrait = !!t.portrait
+    const W = portrait ? land.h : land.w
+    const H = portrait ? land.w : land.h
     if (t.kind === 'wallpaper') return { w: W, h: H }
-    const g = resolveGrid(this.cfg!, editStack(t.layer))
-    const [sw, sh] = spanOf(this.cfg!.layers[t.layer].touch?.cells?.[cellKey(t.col, t.row)])
+    // 状態の帯を出すなら、セルは帯の下に並ぶ
+    const top = barShown(this.cfg!, editStack(t.layer)) ? BAR_H : 0
+    const g = resolveGrid(this.cfg!, editStack(t.layer), portrait ? 'portrait' : 'landscape')
+    const grid = portrait ? this.cfg!.layers[t.layer].touch_portrait : this.cfg!.layers[t.layer].touch
+    const [sw, sh] = spanOf(grid?.cells?.[cellKey(t.col, t.row)])
     const [x0] = cellSpan(t.col, g.cols, W)
     const [, x1] = cellSpan(Math.min(t.col + sw, g.cols) - 1, g.cols, W)
-    const [y0] = cellSpan(t.row, g.rows, H)
-    const [, y1] = cellSpan(Math.min(t.row + sh, g.rows) - 1, g.rows, H)
+    const [y0] = cellSpan(t.row, g.rows, H - top)
+    const [, y1] = cellSpan(Math.min(t.row + sh, g.rows) - 1, g.rows, H - top)
     return { w: x1 - x0 - 2 * CELL_GAP, h: y1 - y0 - 2 * CELL_GAP }
   }
 
   bgOf(t: BgTarget): string | undefined {
+    if (t.kind === 'icon') {
+      const ic = this.cfg?.home?.apps[t.app]?.icon
+      return isImageId(ic) ? ic : undefined
+    }
+    if (t.kind === 'homewall') return this.cfg?.home?.background
     const l = this.cfg?.layers[t.layer]
-    if (t.kind === 'wallpaper') return l?.touch?.background
-    return l?.touch?.cells?.[cellKey(t.col, t.row)]?.background
+    const g = t.portrait ? l?.touch_portrait : l?.touch
+    if (t.kind === 'wallpaper') return g?.background
+    return g?.cells?.[cellKey(t.col, t.row)]?.background
   }
 
   // setBg は背景画像を設定する（id が undefined なら外す）。描き直しと検証は呼び出し側で。
-  setBg(t: BgTarget, id: string | undefined): void {
-    const l = this.cfg?.layers[t.layer]
+  setBg(t: BgTarget, id: string | undefined, cfg: Config | null = this.cfg): void {
+    if (t.kind === 'icon') {
+      const a = cfg?.home?.apps[t.app]
+      if (a) a.icon = id ?? 'app'
+      return
+    }
+    if (t.kind === 'homewall') {
+      const hc = cfg?.home
+      if (hc && id) hc.background = id
+      else if (hc) delete hc.background
+      return
+    }
+    const l = cfg?.layers[t.layer]
     if (!l) return
+    const f = t.portrait ? 'touch_portrait' : 'touch'
     if (t.kind === 'cell') {
-      const a = l.touch?.cells?.[cellKey(t.col, t.row)]
+      const a = l[f]?.cells?.[cellKey(t.col, t.row)]
       if (!a) return
       if (id) a.background = id
       else delete a.background
       return
     }
-    if (id) (l.touch ??= {}).background = id
-    else if (l.touch) {
-      delete l.touch.background
+    if (id) (l[f] ??= {}).background = id
+    else if (l[f]) {
+      delete l[f]!.background
       // 壁紙のためだけに作った touch は消す（base と同じ大きさで、セルもない）
-      if (t.layer !== 0 && Object.keys(l.touch).length === 0) delete l.touch
+      if (f === 'touch' && t.layer !== 0 && Object.keys(l.touch!).length === 0) delete l.touch
     }
   }
 
@@ -671,7 +719,8 @@ export class App {
     this.setBg(e.target, id)
     this.imageEdit = null
     this.editSrcCanvas = null
-    this.say(`背景画像「${e.name}」を${e.target.kind === 'wallpaper' ? '壁紙に' : 'セルに'}しました。「Brain に保存」で送ります`, 'ok')
+    const where = { wallpaper: '壁紙に', homewall: 'ホーム画面の壁紙に', icon: 'アプリのアイコンに', cell: 'セルに' }[e.target.kind]
+    this.say(`画像「${e.name}」を${where}しました。「Brain に保存」で送ります`, 'ok')
     this.changed()
   }
 
@@ -872,7 +921,11 @@ export class App {
       }
       scan(`/layers/${li}/keys`, l.keys)
       scan(`/layers/${li}/touch/cells`, l.touch?.cells)
+      scan(`/layers/${li}/touch_portrait/cells`, l.touch_portrait?.cells)
       scan(`/layers/${li}/soft_keys`, l.soft_keys)
+    })
+    this.cfg?.home?.apps.forEach((a, i) => {
+      if (!a.layer) out.push({ path: `/home/apps/${i}/layer`, message: 'アプリの入る先のレイヤーを選んでください' })
     })
     return out
   }
@@ -890,6 +943,7 @@ export class App {
     for (const l of c.layers) {
       strip(l.keys)
       strip(l.touch?.cells)
+      strip(l.touch_portrait?.cells)
       strip(l.soft_keys)
     }
     return clean(c)
@@ -924,6 +978,161 @@ export class App {
 
   selectLayer(i: number): void {
     this.layer = i
+    this.homeView = false
+    this.changed()
+  }
+
+  // ---------- 画面の向き、ホーム画面、状態の帯 ----------
+
+  // setOrient は、プレビューと格子の編集の向きを変える。
+  setOrient(o: Orient): void {
+    if (this.orient === o) return
+    this.orient = o
+    this.sel = null
+    this.render()
+  }
+
+  // screenSize は、今の向きの画面の大きさ。
+  get screen(): { w: number; h: number } {
+    const { w, h: hh } = this.keymap.screen
+    return this.orient === 'portrait' ? { w: Math.min(w, hh), h: Math.max(w, hh) } : { w: Math.max(w, hh), h: Math.min(w, hh) }
+  }
+
+  // cropScreen は、切り抜きの画面のプレビューの大きさ（縦向きの格子のものなら縦長）。
+  cropScreen(): { w: number; h: number } {
+    const t = this.imageEdit?.target
+    const { w, h: hh } = this.keymap.screen
+    const portrait = (t?.kind === 'cell' || t?.kind === 'wallpaper') && !!t.portrait || (t?.kind === 'icon' || t?.kind === 'homewall') && this.orient === 'portrait'
+    return portrait ? { w: Math.min(w, hh), h: Math.max(w, hh) } : { w: Math.max(w, hh), h: Math.min(w, hh) }
+  }
+
+  // homePer は、今の向きのホーム画面の 1 ページのアプリの数。
+  homePer(): number {
+    const hc = this.cfg?.home
+    if (!hc) return 1
+    const [c, r] = homeGrid(hc, this.orient === 'portrait')
+    return Math.max(c * r, 1)
+  }
+
+  // portraitOwn は、レイヤー li が縦向きの独自の格子（touch_portrait）を持つか。
+  portraitOwn(li = this.layer): boolean {
+    return !!this.cfg?.layers[li]?.touch_portrait
+  }
+
+  // editingDerived は、縦向きで、横向きの格子から作った（編集できない）格子を出しているか。
+  get editingDerived(): boolean {
+    return this.orient === 'portrait' && !this.portraitOwn() && !!this.layerCfg?.touch
+  }
+
+  // makePortraitGrid は、今の縦向きの並び（横向きから作ったもの）を写して、このレイヤーの touch_portrait にする。
+  makePortraitGrid(): void {
+    const l = this.layerCfg
+    if (!l || !this.cfg) return
+    const g = layerGrid(this.cfg, this.layer, 'portrait')
+    if (!g) return
+    l.touch_portrait = { cols: g.cols, rows: g.rows, cells: structuredClone(g.cells) }
+    this.changed()
+  }
+
+  removePortraitGrid(): void {
+    const l = this.layerCfg
+    if (!l?.touch_portrait) return
+    const n = Object.keys(l.touch_portrait.cells ?? {}).length
+    if (n && !this.deps.confirm(`縦向きの格子のセル ${n} 個を消し、横向きの格子から作るようにします。よいですか？`)) return this.render()
+    delete l.touch_portrait
+    this.sel = null
+    this.changed()
+  }
+
+  // setLayerBar は、レイヤーの status_bar を変える（undefined で書かない）。
+  setLayerBar(v: boolean | undefined): void {
+    const l = this.layerCfg
+    if (!l) return
+    if (v === undefined) delete l.status_bar
+    else l.status_bar = v
+    this.changed()
+  }
+
+  // enableHome は、ホーム画面を作る（今のレイヤーを、それぞれアプリにする）。off なら消す。
+  enableHome(on: boolean): void {
+    const cfg = this.cfg
+    if (!cfg) return
+    if (!on) {
+      if (cfg.home && !this.deps.confirm(`ホーム画面（アプリ ${cfg.home.apps.length} 個）を消しますか？`)) return this.render()
+      delete cfg.home
+      this.homeView = false
+      this.homeSel = null
+      return this.changed()
+    }
+    const guess = (n: string): string => ICON_NAMES.find((i) => n.toLowerCase().includes(i)) ?? (n === 'base' ? 'keyboard' : 'app')
+    cfg.home = { apps: cfg.layers.map((l) => ({ name: layerTitle(l).replace(/\n/g, '').slice(0, 16), icon: guess(l.name), layer: l.name })) }
+    this.homeView = true
+    this.homeSel = 0
+    this.homePage = 0
+    this.changed()
+  }
+
+  showHome(): void {
+    this.homeView = true
+    this.sel = null
+    this.render()
+  }
+
+  patchHome(p: Partial<HomeConfig>): void {
+    const hc = this.cfg?.home
+    if (!hc) return
+    Object.assign(hc, p)
+    for (const k of Object.keys(p) as (keyof HomeConfig)[]) if (hc[k] === undefined || hc[k] === '') delete hc[k]
+    this.changed()
+  }
+
+  patchApp(i: number, p: Partial<HomeApp>): void {
+    const a = this.cfg?.home?.apps[i]
+    if (!a) return
+    Object.assign(a, p)
+    if (a.icon === '') delete a.icon
+    this.changed()
+  }
+
+  addApp(): void {
+    const hc = this.cfg?.home
+    if (!hc) return
+    hc.apps.push({ name: 'アプリ', icon: 'app', layer: this.cfg!.layers[0].name })
+    this.homeSel = hc.apps.length - 1
+    this.changed()
+  }
+
+  moveApp(i: number, d: number): void {
+    const apps = this.cfg?.home?.apps
+    if (!apps || i + d < 0 || i + d >= apps.length) return
+    ;[apps[i], apps[i + d]] = [apps[i + d], apps[i]]
+    this.homeSel = i + d
+    this.changed()
+  }
+
+  deleteApp(i: number): void {
+    const apps = this.cfg?.home?.apps
+    if (!apps) return
+    apps.splice(i, 1)
+    this.homeSel = apps.length ? Math.min(i, apps.length - 1) : null
+    this.changed()
+  }
+
+  // setBarItems は status_bar.items を変える（既定と同じなら書かない）。show は status_bar.show。
+  patchBar(p: { show?: boolean; items?: BarItem[] }): void {
+    const cfg = this.cfg
+    if (!cfg) return
+    const b = (cfg.status_bar ??= {})
+    if ('show' in p) {
+      if (p.show) b.show = true
+      else delete b.show
+    }
+    if (p.items) {
+      const same = p.items.length === BAR_ITEMS_DEFAULT.length && p.items.every((x, i) => x === BAR_ITEMS_DEFAULT[i])
+      if (same) delete b.items
+      else b.items = p.items
+    }
+    if (Object.keys(b).length === 0) delete cfg.status_bar
     this.changed()
   }
 
@@ -977,6 +1186,7 @@ export class App {
     if (!l || !sel) return null
     if (sel.kind === 'key') return l.keys?.[sel.code] ?? null
     if (sel.kind === 'soft') return l.soft_keys?.[sel.name] ?? null
+    if (this.orient === 'portrait') return l.touch_portrait?.cells?.[cellKey(sel.col, sel.row)] ?? null
     return l.touch?.cells?.[cellKey(sel.col, sel.row)] ?? null
   }
 
@@ -985,7 +1195,7 @@ export class App {
     const st = editStack(this.layer)
     if (sel.kind === 'key') return resolveKey(this.cfg, st, sel.code)
     if (sel.kind === 'soft') return resolveSoft(this.cfg, st, sel.name)
-    return resolveCell(this.cfg, st, sel.col, sel.row)
+    return resolveCell(this.cfg, st, sel.col, sel.row, this.orient)
   }
 
   setAction(a: ActionSpec | null): void {
@@ -994,7 +1204,10 @@ export class App {
     if (!l || !s) return
     if (s.kind === 'key') setKeyAction(l, s.code, a)
     else if (s.kind === 'soft') setSoftAction(l, s.name, a)
-    else setCellAction(l, s.col, s.row, a)
+    else {
+      if (this.editingDerived) return this.say('この縦向きの格子は横向きの格子から作っています。編集するには「縦向きの格子を作る」を押してください', 'error')
+      setCellAction(l, s.col, s.row, a, this.orient)
+    }
     this.changed()
   }
 
@@ -1024,6 +1237,9 @@ export class App {
       case 'terminal':
         a = { terminal: cur?.terminal ?? 'toggle' }
         break
+      case 'rotate':
+        a = { rotate: cur?.rotate ?? 'next' }
+        break
       case 'key':
         a = { key: cur && actionKind(cur) === 'key' ? cur.key : '' }
         break
@@ -1050,6 +1266,7 @@ export class App {
     else if (kind === 'media') a.media = cur.media ?? 'play_pause'
     else if (kind === 'usb_mode') a.usb_mode = cur.usb_mode ?? 'toggle'
     else if (kind === 'terminal') a.terminal = cur.terminal ?? 'toggle'
+    else if (kind === 'rotate') a.rotate = cur.rotate ?? 'next'
     else if (LAYER_KINDS.includes(kind as LayerKind)) {
       const others = this.cfg!.layers.filter((_, i) => i !== this.layer && !(kind === 'layer_toggle' && i === 0))
       a[kind as LayerKind] = actionTarget(cur) || others[0]?.name || ''
@@ -1062,12 +1279,13 @@ export class App {
     const cur = this.ownAction()
     const s = this.sel
     if (!cur || s?.kind !== 'cell') return
-    const g = resolveGrid(this.cfg!, editStack(this.layer))
+    const g = resolveGrid(this.cfg!, editStack(this.layer), this.orient)
     w = Math.max(1, Math.min(Math.trunc(w) || 1, g.cols - s.col))
     h = Math.max(1, Math.min(Math.trunc(h) || 1, g.rows - s.row))
     // 広げた範囲にある、このレイヤーのセルは覆われて使えなくなる（デーモンの検証で誤りになる）ので消す
     const l = this.layerCfg!
-    const covered = Object.keys(l.touch?.cells ?? {}).filter((k) => {
+    const grid = this.orient === 'portrait' ? l.touch_portrait : l.touch
+    const covered = Object.keys(grid?.cells ?? {}).filter((k) => {
       const m = k.match(/^(\d+),(\d+)$/)
       if (!m || (+m[1] === s.col && +m[2] === s.row)) return false
       return +m[1] >= s.col && +m[1] < s.col + w && +m[2] >= s.row && +m[2] < s.row + h
@@ -1076,7 +1294,7 @@ export class App {
       this.render()
       return
     }
-    for (const k of covered) delete l.touch!.cells![k]
+    for (const k of covered) delete grid!.cells![k]
     const a = { ...cur }
     if (w === 1 && h === 1) delete a.span
     else a.span = [w, h]
@@ -1515,11 +1733,17 @@ export class App {
         : [
             h('div', { class: 'source' }, `編集中：${this.source}`, this.dirty ? h('span', { class: 'dirty' }, '（未保存の変更あり）') : null),
             this.viewTabs(),
-            this.viewLayerProps(),
-            h('div', { class: 'columns' },
-              h('div', { class: 'left' }, this.viewKeyboard(), this.viewTouch()),
-              h('div', { class: 'right' }, this.viewInspector(), this.viewProblems(), this.viewDeviceInfo()),
-            ),
+            this.homeView && this.cfg?.home
+              ? h('div', { class: 'columns' },
+                h('div', { class: 'left' }, this.viewHomePreview()),
+                h('div', { class: 'right' }, this.viewHomeEditor(), this.viewBarEditor(), this.viewProblems(), this.viewDeviceInfo()))
+              : [
+                  this.viewLayerProps(),
+                  h('div', { class: 'columns' },
+                    h('div', { class: 'left' }, this.viewKeyboard(), this.viewTouch()),
+                    h('div', { class: 'right' }, this.viewInspector(), this.viewProblems(), this.viewDeviceInfo()),
+                  ),
+                ],
           ],
     )
   }
@@ -1630,16 +1854,24 @@ export class App {
 
   private viewTabs(): HTMLElement {
     const cfg = this.cfg!
+    const homeErrs = this.problemsAt((loc) => loc.kind === 'home').length
     return h(
       'nav',
       { class: 'tabs', role: 'tablist' },
+      cfg.home
+        ? h('button', { role: 'tab', class: ['tab', 'home-tab', this.homeView && 'active'], 'aria-selected': this.homeView ? 'true' : 'false', id: 'home-tab',
+          onclick: () => this.showHome() }, cfg.home.label || HOME_LABEL, h('small', null, ' home'), homeErrs ? h('span', { class: 'badge' }, String(homeErrs)) : null)
+        : null,
       cfg.layers.map((l, i) => {
         const n = this.problemsAt((loc) => 'layer' in loc && loc.layer === i).length
-        return h('button', { role: 'tab', class: ['tab', i === this.layer && 'active'], 'aria-selected': i === this.layer ? 'true' : 'false',
+        const active = !this.homeView && i === this.layer
+        return h('button', { role: 'tab', class: ['tab', active && 'active'], 'aria-selected': active ? 'true' : 'false',
           onclick: () => this.selectLayer(i), dataset: { layer: String(i) } },
           layerTitle(l), i === 0 ? h('small', null, ' base') : null, n ? h('span', { class: 'badge' }, String(n)) : null)
       }),
       h('button', { class: 'tab add', onclick: () => this.addLayer(), title: 'レイヤーを追加' }, '＋ レイヤー'),
+      cfg.home || !cfg.touch ? null : h('button', { class: 'tab add', id: 'home-add', onclick: () => this.enableHome(true),
+        title: 'アプリ（入る先のレイヤー）のアイコンを並べた画面を作ります。HOME のソフトキーで、どこからでも戻れます' }, '＋ ホーム画面'),
     )
   }
 
@@ -1664,9 +1896,30 @@ export class App {
             h('span', { class: 'hint' }, how ? `入り方：${how}` : ''),
             h('button', { class: 'danger', onclick: () => this.deleteLayer() }, 'このレイヤーを消す'),
           ],
-      this.cfg!.touch ? this.viewBgEditor({ kind: 'wallpaper', layer: this.layer }) : null,
+      this.cfg!.touch ? this.viewLayerBar() : null,
+      this.cfg!.touch
+        ? this.orient === 'portrait'
+          ? this.portraitOwn() ? this.viewBgEditor({ kind: 'wallpaper', layer: this.layer, portrait: true }) : null
+          : this.viewBgEditor({ kind: 'wallpaper', layer: this.layer })
+        : null,
       errs.map((p) => h('div', { class: 'err' }, p.message)),
     )
+  }
+
+  // viewLayerBar は、このレイヤーで状態の帯を出すかの欄（status_bar）。
+  private viewLayerBar(): HTMLElement {
+    const l = this.layerCfg!
+    const cur = l.status_bar === undefined ? 'inherit' : l.status_bar ? 'on' : 'off'
+    const def = l.touch ? (this.cfg!.status_bar?.show ? '出す' : '出さない') : '下のレイヤーのとおり'
+    return h('label', { title: '画面の上に、時刻、電池、PC とのつながりなどを出す細い帯。出すと、格子はその分だけ小さくなります' }, '状態の帯 ',
+      h('select', { id: 'layer-bar', 'data-focus': 'layer-bar',
+        onchange: (e: Event) => {
+          const v = (e.target as HTMLSelectElement).value
+          this.setLayerBar(v === 'inherit' ? undefined : v === 'on')
+        } },
+        h('option', { value: 'inherit', selected: cur === 'inherit' }, `書かない（${def}）`),
+        h('option', { value: 'on', selected: cur === 'on' }, '出す'),
+        h('option', { value: 'off', selected: cur === 'off' }, '出さない')))
   }
 
   // ---------- 背景画像の欄 ----------
@@ -1675,7 +1928,7 @@ export class App {
   private viewBgEditor(t: BgTarget): HTMLElement {
     const id = this.bgOf(t)
     const { w, h: hh } = this.bgTargetSize(t)
-    const what = t.kind === 'wallpaper' ? '壁紙' : '背景画像'
+    const what = t.kind === 'wallpaper' || t.kind === 'homewall' ? '壁紙' : t.kind === 'icon' ? 'アイコンの画像' : '背景画像'
     const input = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/*', class: 'hidden', id: `bg-file-${t.kind}`,
       onchange: (e: Event) => {
         const el = e.target as HTMLInputElement
@@ -1707,6 +1960,8 @@ export class App {
       state ? h('div', { class: 'hint' }, state) : null,
       h('div', { class: 'hint' }, t.kind === 'wallpaper'
         ? `格子全体（${w}×${hh}）に敷きます。セルの背景画像があれば、そちらを上に描きます。`
+        : t.kind === 'homewall' ? `ホーム画面全体（${w}×${hh}）に敷きます。縦向きでは、中央を切り取って描きます。`
+        : t.kind === 'icon' ? `${w}×${hh} に切り抜いて、組み込みのアイコンの代わりに描きます。外すと組み込みのアイコン（app）に戻ります。`
         : `セルの枠の内側（${w}×${hh}）に合わせて切り抜きます。`),
     )
   }
@@ -1720,7 +1975,7 @@ export class App {
     const size = e.result ? kb(e.result.file.length) : ''
     return h('div', { class: 'modal-back' },
       h('div', { class: 'modal image-edit', role: 'dialog', 'aria-label': '背景画像を切り抜く' },
-        h('h2', null, `${e.target.kind === 'wallpaper' ? '壁紙' : 'セルの背景画像'}を切り抜く（${e.name}）`),
+        h('h2', null, `${e.target.kind === 'wallpaper' || e.target.kind === 'homewall' ? '壁紙' : e.target.kind === 'icon' ? 'アイコン' : 'セルの背景画像'}を切り抜く（${e.name}）`),
         h('div', { class: 'crop-row' },
           h('div', { class: 'crop-box' },
             h('canvas', { class: 'crop-src', width: 480, height: 320,
@@ -1752,7 +2007,7 @@ export class App {
                 onchange: (ev: Event) => { e.showPressed = (ev.target as HTMLInputElement).checked; this.drawImageEdit() } }), ' 押したときの枠を重ねる')
               : null,
             h('p', { class: 'hint' }, `Brain に送る大きさ：${e.tw}×${e.th}、${size}`))),
-        h('canvas', { class: 'crop-preview', width: this.keymap.screen.w, height: this.keymap.screen.h }),
+        h('canvas', { class: 'crop-preview', width: this.cropScreen().w, height: this.cropScreen().h }),
         h('p', { class: 'hint' }, '下は Brain の画面のプレビュー（ラベル、文字の縁取り、押したときの枠も Brain と同じに描きます）。'),
         h('div', { class: 'buttons' },
           h('button', { id: 'img-cancel', onclick: () => this.cancelImageEdit() }, 'やめる'),
@@ -1831,15 +2086,16 @@ export class App {
       if (pv && pctx && this.font && this.cfg && e.result) {
         const cfg = structuredClone(this.cfg)
         const t = e.target
-        const l = cfg.layers[t.layer]
-        if (t.kind === 'wallpaper') (l.touch ??= {}).background = '__edit__'
-        else if (l.touch?.cells?.[cellKey(t.col, t.row)]) l.touch.cells[cellKey(t.col, t.row)].background = '__edit__'
+        this.setBg(t, '__edit__', cfg)
         const img = e.result.img
         const pressed = new Set(t.kind === 'cell' && e.showPressed ? [cellKey(t.col, t.row)] : [])
-        const { pixels } = renderPreview(this.font, { cfg, stack: editStack(t.layer), mode: this.previewMode(t.layer), pressed,
+        const home = t.kind === 'icon' || t.kind === 'homewall'
+        const li = home ? 0 : t.layer
+        const { pixels } = renderPreview(this.font, { cfg, stack: editStack(li), mode: this.previewMode(li), pressed,
+          home: home ? (t.kind === 'icon' ? Math.floor(t.app / this.homePer()) : this.homePage) : undefined,
+          images: (id) => (id === '__edit__' ? img : this.images.get(id)?.img),
           w: pv.width, h: pv.height, now: new Date(), texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar,
-          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery, weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph, calc: this.calcState,
-          images: (id) => (id === '__edit__' ? img : this.images.get(id)?.img) })
+          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery, weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph, calc: this.calcState })
         pctx.putImageData(new ImageData(pixels as any, pv.width, pv.height), 0, 0)
       }
     }
@@ -1938,9 +2194,9 @@ export class App {
     const cfg = this.cfg!
     if (!cfg.touch) return h('section', { class: 'panel' }, h('h2', null, 'タッチ'), h('p', { class: 'hint' }, 'この設定にはタッチパネルの設定（touch）がありません'))
     const st = editStack(this.layer)
-    const g = resolveGrid(cfg, st)
-    const W = this.keymap.screen.w
-    const H = this.keymap.screen.h
+    const g = resolveGrid(cfg, st, this.orient)
+    const { w: W, h: H } = this.screen
+    const top = barShown(cfg, st) ? BAR_H : 0
     const cells: HTMLElement[] = []
     for (let r = 0; r < g.rows; r++) {
       for (let c = 0; c < g.cols; c++) {
@@ -1949,8 +2205,9 @@ export class App {
         const [w, hh] = g.anchor[i] === i ? spanOf(g.cells[i]?.action) : [1, 1]
         const [x0] = cellSpan(c, g.cols, W)
         const [, x1] = cellSpan(Math.min(c + w, g.cols) - 1, g.cols, W)
-        const [y0] = cellSpan(r, g.rows, H)
-        const [, y1] = cellSpan(Math.min(r + hh, g.rows) - 1, g.rows, H)
+        const [y0a] = cellSpan(r, g.rows, H - top)
+        const [, y1a] = cellSpan(Math.min(r + hh, g.rows) - 1, g.rows, H - top)
+        const [y0, y1] = [y0a + top, y1a + top]
         const sel: Selection = { kind: 'cell', col: c, row: r }
         const selected = this.sel?.kind === 'cell' && this.sel.col === c && this.sel.row === r
         const flash = this.flash?.kind === 'cell' && this.flash.col === c && this.flash.row === r
@@ -1970,7 +2227,7 @@ export class App {
             e.preventDefault()
             const f = e.dataTransfer?.files?.[0]
             this.sel = sel
-            if (f && this.ownAction(sel)) void this.openBgFile({ kind: 'cell', layer: this.layer, col: c, row: r }, f)
+            if (f && this.ownAction(sel)) void this.openBgFile({ kind: 'cell', layer: this.layer, col: c, row: r, portrait: this.orient === 'portrait' }, f)
             else if (f) this.say('このレイヤーに割り当てのあるセルにだけ、背景画像を置けます。先に割り当ててください', 'error')
             this.render()
           },
@@ -1984,11 +2241,14 @@ export class App {
     return h(
       'section',
       { class: 'panel touch-panel' },
-      h('div', { class: 'panel-head' }, h('h2', null, 'タッチ'), this.viewGridControls(), this.viewPressStyle()),
-      h('div', { class: 'screen-row' },
+      h('div', { class: 'panel-head' }, h('h2', null, 'タッチ'), this.viewOrient(), this.viewGridControls(), this.viewPressStyle()),
+      h('div', { class: ['screen-row', this.orient === 'portrait' && 'portrait'] },
         h('div', { class: 'screen', style: { aspectRatio: `${W} / ${H}` } }, h('canvas', { width: W, height: H, class: 'preview' }), cells),
         this.viewSoftStrip(),
       ),
+      this.editingDerived ? h('p', { class: 'hint', id: 'portrait-derived' },
+        `このレイヤーの縦向きの格子は、横向きの格子から作っています（${cfg.display?.portrait_grid === 'stretch' ? 'そのまま縦に伸ばす' : '列と行を入れ替える'}）。`,
+        '縦向き用に並べ直すときは「縦向きの格子を作る」を押します。') : null,
       this.viewTouchSettings(),
       this.viewImagesPanel(),
     )
@@ -2018,7 +2278,33 @@ export class App {
     this.drawPreview()
   }
 
+  // viewOrient は、プレビューと格子の編集の向き（横向き 800×480、縦向き 480×800）を選ぶ欄。
+  private viewOrient(): HTMLElement {
+    const b = (o: Orient, t: string) => h('button', { class: ['small', this.orient === o && 'active'], id: `orient-${o}`, 'aria-pressed': this.orient === o ? 'true' : 'false',
+      onclick: () => this.setOrient(o) }, t)
+    const brainPortrait = this.brainStatus?.portrait
+    const canRotate = this.connected && !!this.hello?.commands?.includes('set_rotate')
+    return h('span', { class: 'orient', title: 'Brain の画面の向き。縦向きでは、縦向きの格子（touch_portrait）を編集します。画面右の帯のソフトキーは、向きによらず同じです' },
+      b('landscape', '横向き'), b('portrait', '縦向き'),
+      canRotate && typeof brainPortrait === 'boolean' && brainPortrait !== (this.orient === 'portrait')
+        ? h('button', { class: 'small', id: 'rotate-brain', onclick: () => void this.rotateBrain(this.orient === 'portrait' ? '90' : '0'),
+          title: '保存した設定のまま、Brain の画面の向きだけを変えます（rotate の割り当てと同じ）' }, 'Brain もこの向きにする')
+        : null)
+  }
+
+  // rotateBrain は、Brain の画面の向きを変える（set_rotate）。
+  async rotateBrain(mode: string): Promise<void> {
+    try {
+      const r = await this.client!.request<{ status: EngineStatus }>('set_rotate', { mode })
+      this.brainStatus = r.status
+      this.render()
+    } catch (e: any) {
+      this.say(`向きを変えられません：${e?.message ?? e}`, 'error')
+    }
+  }
+
   private viewGridControls(): HTMLElement {
+    if (this.orient === 'portrait') return this.viewPortraitControls()
     const cfg = this.cfg!
     const l = this.layerCfg!
     const li = this.layer
@@ -2078,6 +2364,175 @@ export class App {
     return h('div', { class: 'grid-controls' }, parts, errs.map((p) => h('div', { class: 'err' }, p.message)))
   }
 
+  // viewHomePreview は、ホーム画面のプレビュー。アイコンをクリックすると、そのアプリを選ぶ。
+  private viewHomePreview(): HTMLElement {
+    const hc = this.cfg!.home!
+    const { w: W, h: H } = this.screen
+    const top = (hc.status_bar ?? true) ? BAR_H : 0
+    const g = homeGeometry({ x0: 0, y0: top, x1: W, y1: H }, hc, this.orient === 'portrait', this.homePage)
+    if (g.page !== this.homePage) this.homePage = g.page
+    const pct = (r: { x0: number; y0: number; x1: number; y1: number }) =>
+      ({ left: `${(r.x0 / W) * 100}%`, top: `${(r.y0 / H) * 100}%`, width: `${((r.x1 - r.x0) / W) * 100}%`, height: `${((r.y1 - r.y0) / H) * 100}%` })
+    const slots = g.slots.map((r, i) => {
+      const ai = g.first + i
+      if (ai >= g.last) return null
+      const err = this.problemsAt((loc) => loc.kind === 'home' && (loc.field ?? '').startsWith(`apps/${ai}`)).length > 0
+      return h('button', { class: ['cell', this.homeSel === ai && 'selected', err && 'error'], style: pct(r), dataset: { app: String(ai) },
+        title: `アプリ ${ai + 1}：${hc.apps[ai].name}`, onclick: () => { this.homeSel = ai; this.render() },
+        ondragover: (e: DragEvent) => e.preventDefault(),
+        ondrop: (e: DragEvent) => {
+          e.preventDefault()
+          const f = e.dataTransfer?.files?.[0]
+          this.homeSel = ai
+          if (f) void this.openBgFile({ kind: 'icon', app: ai }, f)
+        } }, this.font ? '' : h('span', { class: 'cell-text' }, hc.apps[ai].name))
+    })
+    const nav = (r: typeof g.prev, d: number, id: string) => r ? h('button', { class: 'cell nav', id, style: pct(r), title: d < 0 ? '前のページ' : '次のページ',
+      onclick: () => { this.homePage = Math.min(Math.max(this.homePage + d, 0), g.pages - 1); this.render() } }, '') : null
+    return h('section', { class: 'panel touch-panel' },
+      h('div', { class: 'panel-head' }, h('h2', null, 'ホーム画面'), this.viewOrient(),
+        h('span', { class: 'hint' }, ` ${g.pages > 1 ? `${g.page + 1}/${g.pages} ページ。` : ''}アイコンをクリックすると選べます。画像ファイルをアイコンにドロップすると、そのアプリのアイコンにします`)),
+      h('div', { class: ['screen-row', this.orient === 'portrait' && 'portrait'] },
+        h('div', { class: 'screen', style: { aspectRatio: `${W} / ${H}` } }, h('canvas', { width: W, height: H, class: 'preview' }), slots,
+          nav(g.prev, -1, 'home-prev'), nav(g.next, +1, 'home-next')),
+        this.viewSoftStrip()),
+      this.viewImagesPanel())
+  }
+
+  // viewHomeEditor は、ホーム画面の設定とアプリの一覧の欄。
+  private viewHomeEditor(): HTMLElement {
+    const cfg = this.cfg!
+    const hc = cfg.home!
+    const errs = (field: string) => this.problemsAt((loc) => loc.kind === 'home' && loc.field === field).map((p) => h('div', { class: 'err' }, p.message))
+    const num = (v: number | undefined, f: (n: number) => void, id: string, ph?: number) =>
+      h('input', { type: 'number', min: 1, max: 8, value: v ?? '', placeholder: ph !== undefined ? String(ph) : '', class: 'num', id, 'data-focus': id,
+        onchange: (e: Event) => f(Number((e.target as HTMLInputElement).value)) })
+    const [lc, lr] = homeGrid(hc, false)
+    const [pc, pr] = homeGrid(hc, true)
+    const softs = Object.keys(cfg.touch?.soft_areas ?? {})
+    const app = this.homeSel !== null ? hc.apps[this.homeSel] : null
+    const ai = this.homeSel ?? -1
+    const iconIsImage = isImageId(app?.icon)
+    return h('section', { class: 'panel inspector home-editor' },
+      h('h2', null, 'ホーム画面'),
+      h('p', { class: 'hint' }, 'アプリ（入る先のレイヤー）のアイコンと名前を並べた画面。Brain を起動するとこの画面が出て、アイコンをタップするとそのレイヤーに入ります。' +
+        '画面右の帯の HOME（soft_key）は、どのレイヤーからでもこの画面に戻ります（レイヤーの HOME の割り当ては使われません）。'),
+      h('label', { class: 'row' }, '名前 ', h('input', { id: 'home-label', 'data-focus': 'home-label', value: hc.label ?? '', placeholder: HOME_LABEL, size: 10,
+        oninput: (e: Event) => this.patchHome({ label: (e.target as HTMLInputElement).value }) })),
+      h('div', { class: 'row' }, '1 ページ：横向き ', num(hc.cols, (n) => this.patchHome({ cols: n, rows: hc.rows ?? lr }), 'home-cols', lc), ' × ',
+        num(hc.rows, (n) => this.patchHome({ rows: n, cols: hc.cols ?? lc }), 'home-rows', lr),
+        '　縦向き ', num(hc.portrait?.cols, (n) => this.patchHome({ portrait: { cols: n, rows: hc.portrait?.rows ?? pr } }), 'home-pcols', pc), ' × ',
+        num(hc.portrait?.rows, (n) => this.patchHome({ portrait: { cols: hc.portrait?.cols ?? pc, rows: n } }), 'home-prows', pr)),
+      errs('cols'), errs('portrait'),
+      h('label', { class: 'row' }, '起動したとき ', h('select', { id: 'home-start', 'data-focus': 'home-start',
+        onchange: (e: Event) => this.patchHome({ start: (e.target as HTMLSelectElement).value === 'base' ? 'base' : undefined }) },
+        h('option', { value: 'home', selected: hc.start !== 'base' }, 'ホーム画面'),
+        h('option', { value: 'base', selected: hc.start === 'base' }, `base（${layerTitle(cfg.layers[0])}）`))),
+      h('label', { class: 'row' }, '戻るソフトキー ', h('select', { id: 'home-soft', 'data-focus': 'home-soft',
+        onchange: (e: Event) => this.patchHome({ soft_key: (e.target as HTMLSelectElement).value === 'home' ? undefined : (e.target as HTMLSelectElement).value }) },
+        softs.map((n) => h('option', { value: n, selected: (hc.soft_key ?? 'home') === n }, `${SOFT_TITLES[n] ?? n}（${n}）`)))),
+      errs('soft_key'),
+      h('label', { class: 'row' }, h('input', { type: 'checkbox', id: 'home-bar', checked: hc.status_bar !== false,
+        onchange: (e: Event) => this.patchHome({ status_bar: (e.target as HTMLInputElement).checked ? undefined : false }) }), ' 状態の帯を出す'),
+      this.viewBgEditor({ kind: 'homewall' }),
+      h('h3', null, `アプリ（${hc.apps.length} 個）`),
+      h('ol', { class: 'apps' }, hc.apps.map((a, i) => h('li', { class: [this.homeSel === i && 'selected'], dataset: { app: String(i) } },
+        h('button', { class: 'link', onclick: () => { this.homeSel = i; this.homePage = Math.floor(i / this.homePer()); this.render() } },
+          `${a.name || '（名前なし）'} → ${cfg.layers.find((l) => l.name === a.layer) ? layerTitle(cfg.layers.find((l) => l.name === a.layer)!) : a.layer || '（未選択）'}`)))),
+      errs('apps'),
+      h('button', { class: 'small', id: 'app-add', onclick: () => this.addApp() }, 'アプリを足す'),
+      app
+        ? h('div', { class: 'app-editor', id: 'app-editor' },
+          h('h3', null, `アプリ ${ai + 1}`),
+          h('label', { class: 'row' }, '名前 ', h('input', { id: 'app-name', 'data-focus': 'app-name', value: app.name, maxlength: 16,
+            oninput: (e: Event) => this.patchApp(ai, { name: (e.target as HTMLInputElement).value }) })),
+          errs(`apps/${ai}/name`),
+          h('label', { class: 'row' }, '入る先 ', h('select', { id: 'app-layer', 'data-focus': 'app-layer',
+            onchange: (e: Event) => this.patchApp(ai, { layer: (e.target as HTMLSelectElement).value }) },
+            h('option', { value: '', selected: !app.layer }, '（選んでください）'),
+            cfg.layers.map((l, i) => h('option', { value: l.name, selected: app.layer === l.name }, `${layerTitle(l)}（${l.name}）${i === 0 ? ' base' : ''}`)))),
+          errs(`apps/${ai}/layer`),
+          h('label', { class: 'row' }, 'アイコン ', h('select', { id: 'app-icon', 'data-focus': 'app-icon',
+            onchange: (e: Event) => this.patchApp(ai, { icon: (e.target as HTMLSelectElement).value }) },
+            iconIsImage ? h('option', { value: app.icon, selected: true }, `画像（${this.imageName(app.icon!)}）`) : null,
+            ICON_NAMES.map((n) => h('option', { value: n, selected: !iconIsImage && (app.icon ?? 'app') === n }, n)))),
+          errs(`apps/${ai}/icon`),
+          this.viewBgEditor({ kind: 'icon', app: ai }),
+          h('div', { class: 'row' },
+            h('button', { class: 'small', id: 'app-up', disabled: ai === 0, onclick: () => this.moveApp(ai, -1) }, '前へ'),
+            h('button', { class: 'small', id: 'app-down', disabled: ai === hc.apps.length - 1, onclick: () => this.moveApp(ai, +1) }, '後ろへ'),
+            h('button', { class: 'small danger', id: 'app-delete', onclick: () => this.deleteApp(ai) }, 'このアプリを消す')))
+        : h('p', { class: 'hint' }, 'アプリを選ぶと、名前、入る先、アイコンを変えられます'),
+      h('button', { class: 'danger', id: 'home-remove', onclick: () => this.enableHome(false) }, 'ホーム画面をやめる'),
+    )
+  }
+
+  // viewBarEditor は、状態の帯（status_bar）の欄。
+  private viewBarEditor(): HTMLElement {
+    const b = this.cfg!.status_bar
+    const items = b?.items ?? BAR_ITEMS_DEFAULT
+    const all = [...BAR_ITEMS_DEFAULT]
+    return h('section', { class: 'panel bar-editor' },
+      h('h2', null, '状態の帯'),
+      h('p', { class: 'hint' }, '画面の上の細い帯に、レイヤーの名前と次の項目を出します。帯を出すレイヤーでは、格子がその分だけ小さくなります。' +
+        'レイヤーごとに「状態の帯」で出す・出さないを決められます。'),
+      h('label', { class: 'row' }, h('input', { type: 'checkbox', id: 'bar-show', checked: !!b?.show,
+        onchange: (e: Event) => this.patchBar({ show: (e.target as HTMLInputElement).checked }) }), ' 書いていないレイヤーでも出す（show）'),
+      h('div', { class: 'row bar-items' }, '項目（左から） ', all.map((k) => h('label', { title: BAR_ITEM_LABELS[k] },
+        h('input', { type: 'checkbox', id: `bar-${k}`, checked: items.includes(k),
+          onchange: (e: Event) => {
+            const on = (e.target as HTMLInputElement).checked
+            this.patchBar({ items: all.filter((x) => (x === k ? on : items.includes(x))) })
+          } }), ` ${BAR_ITEM_LABELS[k]} `))),
+      this.problemsAt((loc) => loc.kind === 'home' && !!loc.field?.startsWith('items')).map((p) => h('div', { class: 'err' }, p.message)))
+  }
+
+  // viewPortraitControls は、縦向きの格子の欄（独自の格子を作る・やめる、大きさ、書いていないレイヤーの扱い）。
+  private viewPortraitControls(): HTMLElement {
+    const cfg = this.cfg!
+    const l = this.layerCfg!
+    const li = this.layer
+    const errs = this.problemsAt((loc) => loc.kind === 'grid' && loc.layer === li && !!loc.portrait)
+    const g = layerGrid(cfg, li, 'portrait')
+    const parts: (HTMLElement | string | null)[] = []
+    if (!l.touch) parts.push(h('span', { class: 'hint' }, '下のレイヤーの格子のまま（touch なし）'))
+    else if (l.touch_portrait) {
+      const num = (v: number | undefined, f: 'cols' | 'rows') =>
+        h('input', { type: 'number', min: 1, max: 16, value: v ?? '', 'data-focus': `p${f}-${li}`, id: `portrait-${f}`, class: 'num',
+          onchange: (e: Event) => {
+            const n = Number((e.target as HTMLInputElement).value)
+            const p = l.touch_portrait!
+            const cols = f === 'cols' ? n : p.cols ?? g?.cols ?? 1
+            const rows = f === 'rows' ? n : p.rows ?? g?.rows ?? 1
+            const out = cellsOutside(p, cols, rows)
+            if (out.length && !this.deps.confirm(`格子からはみ出すセル ${out.length} 個（${out.join('、')}）の割り当てを消します。よいですか？`)) return this.render()
+            for (const k of out) delete p.cells?.[k]
+            p.cols = cols
+            p.rows = rows
+            this.changed()
+          } })
+      parts.push(h('span', { class: 'hint' }, '縦向きの格子 '))
+      parts.push(h('label', null, ' 列 ', num(l.touch_portrait.cols ?? g?.cols, 'cols')))
+      parts.push(h('label', null, ' 行 ', num(l.touch_portrait.rows ?? g?.rows, 'rows')))
+      parts.push(h('button', { class: 'small danger', id: 'portrait-remove', onclick: () => this.removePortraitGrid() }, '横向きから作るのに戻す'))
+    } else {
+      parts.push(h('span', { class: 'hint' }, g ? ` ${g.cols}×${g.rows}（横向きから作ったもの） ` : ''))
+      parts.push(h('button', { class: 'small', id: 'portrait-make', onclick: () => this.makePortraitGrid(),
+        title: '今の並びを写して、縦向き用の格子（touch_portrait）にします。そのあと自由に並べ直せます' }, '縦向きの格子を作る'))
+    }
+    parts.push(h('label', { title: '縦向きの格子を書いていないレイヤーを、縦向きでどう並べるか（display.portrait_grid。すべてのレイヤーに効きます）' }, ' 書いていないレイヤー ',
+      h('select', { id: 'portrait-grid', 'data-focus': 'portrait-grid',
+        onchange: (e: Event) => {
+          const v = (e.target as HTMLSelectElement).value
+          if (v === 'stretch') (cfg.display ??= {}).portrait_grid = 'stretch'
+          else if (cfg.display) delete cfg.display.portrait_grid
+          this.changed()
+        } },
+        h('option', { value: 'transpose', selected: cfg.display?.portrait_grid !== 'stretch' }, '列と行を入れ替える（transpose）'),
+        h('option', { value: 'stretch', selected: cfg.display?.portrait_grid === 'stretch' }, 'そのまま縦に伸ばす（stretch）'))))
+    return h('div', { class: 'grid-controls' }, parts, errs.map((p) => h('div', { class: 'err' }, p.message)))
+  }
+
   private softNames(): string[] {
     const t = this.cfg!.touch!
     const areas = Object.entries(t.soft_areas ?? {})
@@ -2095,6 +2550,9 @@ export class App {
       'div',
       { class: 'soft-strip', title: '画面右に印刷された帯。割り当てた区画だけがセルより優先されます' },
       names.map((n) => {
+        if (cfg.home && n === (cfg.home.soft_key ?? 'home'))
+          return h('button', { class: ['soft', 'own'], dataset: { soft: n }, disabled: true, title: 'ホーム画面があるときは、どのレイヤーでもホーム画面に戻ります' },
+            h('span', { class: 'cap' }, SOFT_TITLES[n] ?? n), h('span', { class: 'act' }, 'ホームへ'))
         const r = resolveSoft(cfg, st, n)
         const sel: Selection = { kind: 'soft', name: n }
         const selected = this.sel?.kind === 'soft' && this.sel.name === n
@@ -2167,7 +2625,9 @@ export class App {
     const mode = this.previewMode(li)
     const pressed = new Set(this.previewPress ? [this.previewPress] : [])
     const now = new Date()
-    const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
+    const home = this.homeView && this.cfg.home ? this.homePage : undefined
+    const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now, home,
+      link: this.connected ? this.brainUSB ?? 'configured' : 'configured', lastSync: this.brainLastSync,
       texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img,
       mouseOff: this.brainMouse === false, widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery,
       weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph, calc: this.calcState })
@@ -2185,9 +2645,11 @@ export class App {
   private schedulePreviewTick(now: Date): void {
     if (this.previewTimer) clearTimeout(this.previewTimer)
     this.previewTimer = null
-    const g = resolveGrid(this.cfg!, editStack(this.layer))
+    const g = resolveGrid(this.cfg!, editStack(this.layer), this.orient)
     const clocks = g.cells.filter((c) => c?.action.widget === 'clock').map((c) => c!.action)
     let wait = Infinity
+    // 状態の帯とホーム画面の時刻は、分が変わるたびに描き直す
+    if (this.homeView || barShown(this.cfg!, editStack(this.layer))) wait = 60000 - (now.getTime() % 60000) + 5
     if (clocks.length) {
       const sec = clocks.some((a) => hasSeconds(a.format || DEFAULT_CLOCK_FORMAT) || hasSeconds(a.date_format && a.date_format !== 'none' ? a.date_format : ''))
       const unit = sec ? 1000 : 60000
@@ -2244,6 +2706,9 @@ export class App {
     const notes = sel.kind === 'key' ? this.keymap.keys.filter((k) => k.code === sel.code || k.symbol === sel.code).map((k) => k.note).filter(Boolean) : []
 
     const body: (HTMLElement | null)[] = []
+    if (sel.kind === 'cell' && this.editingDerived)
+      body.push(h('p', { class: 'warn', id: 'derived-note' }, 'このセルは、横向きの格子から作った縦向きの並びです。縦向きだけ変えるときは、先に縦向きの格子を作ります。 ',
+        h('button', { class: 'small', onclick: () => this.makePortraitGrid() }, '縦向きの格子を作る')))
     if (!own && r && r.from !== this.layer)
       body.push(h('p', { class: 'inherit-note' }, `今は「${layerTitle(cfg.layers[r.from])}」の ${describeAction(r.action)} を使っています`))
     body.push(h('label', { class: 'row' }, '種類 ', h('select', { 'data-focus': 'kind', id: 'kind',
@@ -2265,6 +2730,7 @@ export class App {
     if (own && act === 'media') body.push(...this.viewMediaEditor(own))
     if (own && act === 'usb_mode') body.push(...this.viewUsbModeEditor(own))
     if (own && act === 'terminal') body.push(...this.viewTermEditor(own))
+    if (own && act === 'rotate') body.push(...this.viewRotateEditor(own))
     if (own && LAYER_KINDS.includes(act as LayerKind)) {
       const lk = act as LayerKind
       body.push(h('label', { class: 'row' }, '行き先 ', h('select', { 'data-focus': 'target', id: 'target',
@@ -2284,7 +2750,7 @@ export class App {
     }
     if (own && kind !== 'inherit' && kind !== 'none' && sel.kind === 'cell') {
       body.push(this.viewSpanEditor(own))
-      body.push(this.viewBgEditor({ kind: 'cell', layer: this.layer, col: sel.col, row: sel.row }))
+      body.push(this.viewBgEditor({ kind: 'cell', layer: this.layer, col: sel.col, row: sel.row, portrait: this.orient === 'portrait' }))
     }
     for (const n of notes) body.push(h('p', { class: 'hint' }, n!))
     for (const p of errs) body.push(h('div', { class: 'err' }, p.message))
@@ -2754,6 +3220,18 @@ export class App {
       h('p', { class: 'hint' }, '端末モードでは、Brain の画面とキーボードで PC にログインして操作します（PC 側の設定が要ります。README の「端末モード」）。' +
         '端末モードのあいだ、本体キーは PC にキーとして送らず、端末の入力になります。抜けるのは、画面右の帯の HOME か、文字切り替え + 戻る。' +
         '入るとき・抜けるときに USB を付け直すので、数秒、キー入力、SSH、設定 GUI の接続が切れます。'),
+    ]
+  }
+
+  // viewRotateEditor は、画面の向きを変える割り当ての欄。
+  private viewRotateEditor(own: ActionSpec): HTMLElement[] {
+    const desc: Record<string, string> = { next: '押すたびに 90 度回す（next）', '0': '横向き（0）', '90': '縦向き、帯が上（90）', '180': '横向き、上下逆（180）', '270': '縦向き、帯が下（270）' }
+    return [
+      h('label', { class: 'row' }, '向き ', h('select', { 'data-focus': 'rotate', id: 'rotate',
+        onchange: (e: Event) => this.patchAction({ rotate: (e.target as HTMLSelectElement).value }) },
+        ROTATE_VALUES.map((v) => h('option', { value: v, selected: own.rotate === v }, `${desc[v]}：${ROTATE_LABELS[v]}`)))),
+      h('p', { class: 'hint' }, 'Brain の画面の向きを変えます。変えた向きは Brain に残り、再起動しても続きます。縦向きでは、レイヤーの縦向きの格子を使います' +
+        '（プレビューの「縦向き」で確かめられます）。画面右の帯のソフトキーは、ベゼルに印刷されているので、向きによらず同じ区画です。'),
     ]
   }
 

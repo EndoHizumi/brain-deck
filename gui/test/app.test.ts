@@ -948,3 +948,140 @@ describe('マウスとトラックパッド', () => {
     await vi.waitFor(() => expect(t.$<HTMLButtonElement>('#console-connect').disabled).toBe(false))
   })
 })
+describe('ホーム画面、状態の帯、縦向きの格子、画面の向き', () => {
+  const pick = (t: ReturnType<typeof setup>, sel: string, name = 'icon.png') => {
+    const input = t.$<HTMLInputElement>(sel)
+    Object.defineProperty(input, 'files', { value: [new File([new Uint8Array([1, 2, 3])], name, { type: 'image/png' })], configurable: true })
+    input.dispatchEvent(new Event('change'))
+  }
+
+  it('ホーム画面を作り、アプリを編集し、画像のアイコンを付けて保存できる', async () => {
+    const t = await connected()
+    t.click('#home-add')
+    const home = t.app.cfg!.home!
+    expect(home.apps.map((a) => a.layer)).toEqual(t.app.cfg!.layers.map((l) => l.name))
+    expect(t.app.homeView).toBe(true)
+    expect(t.$('#home-tab').classList.contains('active')).toBe(true)
+    // プレビューのアイコンをクリックして選び、名前、入る先、アイコンを変える
+    t.click('.screen .cell[data-app="1"]')
+    expect(t.app.homeSel).toBe(1)
+    const name = t.$<HTMLInputElement>('#app-name')
+    name.value = '編集する'
+    name.dispatchEvent(new Event('input'))
+    t.change('#app-layer', 'view')
+    t.change('#app-icon', 'memo')
+    expect(home.apps[1]).toEqual({ name: '編集する', icon: 'memo', layer: 'view' })
+    t.click('#app-up')
+    expect(home.apps[0].name).toBe('編集する')
+    t.click('#app-add')
+    expect(home.apps.length).toBe(4)
+    t.click('#app-delete')
+    expect(home.apps.length).toBe(3)
+    // 1 ページの格子と、起動したときの画面
+    t.change('#home-cols', '2')
+    expect([home.cols, home.rows]).toEqual([2, 3])
+    t.change('#home-start', 'base')
+    expect(home.start).toBe('base')
+    // 画像のアイコン（64×64）
+    t.click('.screen .cell[data-app="0"]')
+    expect(t.$('.bg-icon').textContent).toContain('64×64')
+    pick(t, '#bg-file-icon')
+    await vi.waitFor(() => expect(t.app.imageEdit?.result).toBeTruthy())
+    t.click('#img-apply')
+    await vi.waitFor(() => expect(t.app.imageEdit).toBeNull())
+    const id = home.apps[0].icon!
+    expect(id).toMatch(/^[0-9a-f]{16}$/)
+    expect(t.app.images.get(id)!.img.w).toBe(64)
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.click('#save')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect(t.daemon.config.home!.apps[0]).toEqual({ name: '編集する', icon: id, layer: 'view' })
+    expect(t.daemon.images.has(id)).toBe(true)
+    // 入る先のレイヤーを消すと、そのアプリも消える。名前を変えるとアプリも変わる
+    t.click('[data-layer="2"]')
+    expect(t.app.homeView).toBe(false)
+    t.app.renameLayer('view2')
+    expect(t.app.cfg!.home!.apps[0].layer).toBe('view2')
+    t.app.deleteLayer()
+    expect(t.app.cfg!.home!.apps.some((a) => a.layer === 'view2')).toBe(false)
+    t.click('#home-tab')
+    t.click('#home-remove')
+    expect(t.app.cfg!.home).toBeUndefined()
+  })
+
+  it('知らないレイヤーのアプリは誤りになり、ホームのタブに出る', async () => {
+    const t = await connected()
+    t.click('#home-add')
+    t.app.cfg!.home!.apps[0].layer = 'nowhere'
+    t.app.changed()
+    await vi.waitFor(() => expect(t.app.validation).toBe('invalid'))
+    expect(t.$('#home-tab .badge').textContent).toBe('1')
+    expect(t.$('.screen .cell[data-app="0"]').classList.contains('error')).toBe(true)
+  })
+
+  it('状態の帯を、全体とレイヤーごとに決められる。帯を出すとセルの範囲が小さくなる', async () => {
+    const t = await connected()
+    const cellTop = () => parseFloat(t.$<HTMLElement>('.screen .cell[data-cell="0,0"]').style.top)
+    expect(cellTop()).toBe(0)
+    t.change('#layer-bar', 'on')
+    expect(t.app.cfg!.layers[0].status_bar).toBe(true)
+    expect(cellTop()).toBeCloseTo((28 / 480) * 100)
+    t.click('[data-cell="0,0"]')
+    expect(t.$('.bg-cell').textContent).toContain('192×143') // (480-28)/3 のセル
+    t.change('#layer-bar', 'inherit')
+    expect(t.app.cfg!.layers[0].status_bar).toBeUndefined()
+    t.click('#home-add')
+    const bar = t.$<HTMLInputElement>('#bar-time')
+    bar.checked = false
+    bar.dispatchEvent(new Event('change'))
+    expect(t.app.cfg!.status_bar).toEqual({ items: ['sync', 'mouse', 'pc', 'battery'] })
+    const show = t.$<HTMLInputElement>('#bar-show')
+    show.checked = true
+    show.dispatchEvent(new Event('change'))
+    expect(t.app.cfg!.status_bar!.show).toBe(true)
+  })
+
+  it('縦向きでは、横向きから作った格子を出し、縦向きの格子を作って編集できる。rotate を割り当てられる', async () => {
+    const t = await connected()
+    t.click('#orient-portrait')
+    expect(t.app.orient).toBe('portrait')
+    expect(t.$('canvas.preview').getAttribute('width')).toBe('480')
+    // base（4×3）は列と行を入れ替えた 3×4
+    expect(t.root.querySelectorAll('.screen .cell').length).toBeGreaterThanOrEqual(12)
+    expect(t.root.querySelector('.screen .cell[data-cell="2,3"]')).not.toBeNull()
+    t.click('[data-cell="0,0"]')
+    expect(t.$('#derived-note')).toBeTruthy()
+    t.change('#kind', 'key')
+    expect(t.app.cfg!.layers[0].touch_portrait).toBeUndefined() // 作るまでは編集しない
+    t.click('#portrait-make')
+    const p = t.app.cfg!.layers[0].touch_portrait!
+    expect([p.cols, p.rows]).toEqual([3, 4])
+    expect(Object.keys(p.cells!).length).toBe(Object.keys(t.app.cfg!.layers[0].touch!.cells!).length)
+    t.click('[data-cell="2,3"]')
+    t.change('#kind', 'rotate')
+    expect(p.cells!['2,3']).toMatchObject({ rotate: 'next' })
+    t.change('#rotate', '90')
+    expect(p.cells!['2,3'].rotate).toBe('90')
+    t.change('#portrait-rows', '5')
+    expect(p.rows).toBe(5)
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.click('#save')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect(t.daemon.config.layers[0].touch_portrait!.cells!['2,3']).toMatchObject({ rotate: '90' })
+    // 横向きに戻すと、横向きの格子を編集する
+    t.click('#orient-landscape')
+    t.click('[data-cell="0,0"]')
+    expect(t.app.ownAction()).toEqual(t.app.cfg!.layers[0].touch!.cells!['0,0'])
+    // Brain の向きを変える
+    t.click('#orient-portrait')
+    t.click('#rotate-brain')
+    await vi.waitFor(() => expect(t.app.brainStatus?.portrait).toBe(true))
+    expect(t.cmds()).toContain('set_rotate')
+    t.change('#portrait-grid', 'stretch')
+    expect(t.app.cfg!.display!.portrait_grid).toBe('stretch')
+    t.click('#portrait-remove')
+    expect(t.app.cfg!.layers[0].touch_portrait).toBeUndefined()
+  })
+})

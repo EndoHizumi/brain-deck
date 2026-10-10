@@ -112,6 +112,16 @@ main.start { max-width: 720px; }
 /* タッチ */
 .screen-row { display: flex; gap: 6px; align-items: stretch; }
 .screen { position: relative; flex: 1; max-width: 720px; background: #000; border: 6px solid #2b2f36; border-radius: 4px; }
+.screen-row.portrait .screen { max-width: 330px; }
+.orient { display: inline-flex; gap: 2px; margin-left: 8px; }
+.orient button.active { background: #3a6ea5; color: #fff; }
+.screen .cell.nav { border-style: dashed; }
+.home-tab { font-weight: bold; }
+ol.apps { margin: 4px 0; padding-left: 1.6em; max-height: 220px; overflow: auto; }
+ol.apps li.selected button { font-weight: bold; }
+button.link { background: none; border: none; padding: 1px 2px; color: inherit; text-align: left; cursor: pointer; }
+.app-editor { border-top: 1px solid #3a3f48; margin-top: 8px; padding-top: 4px; }
+.bar-items label { margin-right: 6px; white-space: nowrap; }
 .screen canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
 .cell { position: absolute; background: transparent; border: none; border-radius: 0; padding: 0; color: #fff; }
 .cell:hover { background: #ffffff1a; }

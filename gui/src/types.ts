@@ -336,6 +336,10 @@ export interface EngineStatus {
   stack: { layer: string; kind: string }[]
   cols: number
   rows: number
+  rotate?: number // 画面の向き（P1 より前の lefthand にはない）
+  portrait?: boolean
+  status_bar?: boolean
+  home?: boolean // ホーム画面を出している
 }
 
 export interface HelloResult {

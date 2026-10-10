@@ -58,8 +58,26 @@ function leaves(cfg: Config, km?: KeymapInfo, imageName?: (id: string) => string
         put(`${lp}/cells/${c}/background`, `${lw} / セル ${c} の背景画像`, a.background ? img(a.background) : undefined)
       }
     }
+    if (l.touch_portrait) {
+      const p = l.touch_portrait
+      put(`${lp}/touch_portrait`, `${lw} / 縦向きの格子`, p.cols && p.rows ? `${p.cols}×${p.rows}` : 'base と同じ大きさ')
+      put(`${lp}/touch_portrait/background`, `${lw} / 縦向きの壁紙`, p.background ? img(p.background) : undefined)
+      for (const [c, a] of Object.entries(p.cells ?? {})) {
+        act(`${lp}/portrait_cells/${c}`, `${lw} / 縦向きのセル ${c}`, a)
+        put(`${lp}/portrait_cells/${c}/background`, `${lw} / 縦向きのセル ${c} の背景画像`, a.background ? img(a.background) : undefined)
+      }
+    }
+    put(`${lp}/status_bar`, `${lw} / 状態の帯`, l.status_bar === undefined ? undefined : l.status_bar ? '出す' : '出さない')
     for (const [n, a] of Object.entries(l.soft_keys ?? {})) act(`${lp}/soft/${n}`, `${lw} / ソフトキー ${n}`, a)
   })
+  const hm = cfg.home
+  if (hm) {
+    for (const f of ['cols', 'rows', 'portrait', 'label', 'start', 'soft_key', 'status_bar'] as const) put(`/home/${f}`, `ホーム画面 / ${f}`, hm[f])
+    put('/home/background', 'ホーム画面 / 壁紙', hm.background ? img(hm.background) : undefined)
+    hm.apps.forEach((a, i) =>
+      put(`/home/apps/${i}`, `ホーム画面 / アプリ ${i + 1}`, `${a.name} → ${a.layer}（アイコン ${a.icon && /^[0-9a-f]{16}$/.test(a.icon) ? img(a.icon) : a.icon ?? 'app'}）`))
+  }
+  for (const [f, v] of Object.entries(cfg.status_bar ?? {})) put(`/status_bar/${f}`, `状態の帯 / ${f}`, v)
   return out
 }
 
