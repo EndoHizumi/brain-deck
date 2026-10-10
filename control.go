@@ -468,7 +468,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
 				"set_calendar", "get_calendar", "set_weather", "get_weather", "get_weather_icon",
-				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_terminal",
+				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_terminal", "set_rotate",
 				"set_qr", "get_qr", "get_widgets", "set_presence", "add_graph", "clear_graph", "get_graph",
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
@@ -528,6 +528,13 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		}
 		// シリアルの端末モードでは、入るとき・抜けるときに USB を付け直す（数秒後）。このシリアルも一度切れる
 		return ok(map[string]any{"terminal": on, "info": c.term.Info()})
+	case "set_rotate":
+		r, okr := parseRotate(req.Mode)
+		if !okr {
+			return errResp(id, errBadRequest, `"mode" must be next, 0, 90, 180 or 270`, nil)
+		}
+		c.engine.Rotate(r)
+		return ok(map[string]any{"status": c.engine.Status()})
 	case "set_usb_mode":
 		mouse, changed, err := c.usb.Request(req.Mode)
 		switch {

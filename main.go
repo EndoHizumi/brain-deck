@@ -700,6 +700,9 @@ func cellView(km *Keymap, a *Action) CellView {
 	if a.Kind == actTerminal {
 		keys = termLabels[a.Spec.Terminal]
 	}
+	if a.Kind == actRotate {
+		keys = rotateLabels[a.Spec.Rotate]
+	}
 	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background, Media: a.Kind == actMedia}
 	if v.Label == "" || v.Label == keys {
 		v.Label, v.Sub = keys, ""
@@ -710,7 +713,8 @@ func cellView(km *Keymap, a *Action) CellView {
 // buildLayout は今の重なりから、画面に描くセルの内容を作る。
 func buildLayout(km *Keymap, v *View) *Layout {
 	l := &Layout{Cols: v.Cols, Rows: v.Rows, Cells: make([]CellView, len(v.Cells)),
-		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode, Press: km.Press, Wallpaper: v.Wallpaper}
+		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode, Press: km.Press, Wallpaper: v.Wallpaper,
+		Rotate: v.Rot, Bar: v.Bar, BarItems: km.Bar.Items}
 	for i, a := range v.Cells {
 		switch anc := v.Anchor[i]; {
 		case anc == i:
@@ -727,7 +731,9 @@ func buildLayout(km *Keymap, v *View) *Layout {
 // layer を指定すると、そのレイヤーを base の上に重ねた画面を描く（hold なら一時的な色）。
 // env はウィジェットを描くときの時刻など（-render-time、-render-unsynced）。
 // images は背景画像の読み込み先（-render-images。省略すると -data-dir の images）。
-func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h int, env WidgetEnv, images ImageSource) error {
+// w×h は物理の画面の大きさで、rot の向きに回して描く。
+// homePage はホーム画面に出すページ（0 から）。
+func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h, rot, homePage int, env WidgetEnv, images ImageSource) error {
 	if cfg.Touch == nil {
 		return errors.New("config has no touch section")
 	}
@@ -739,6 +745,10 @@ func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle stri
 		return fmt.Errorf("-render-press-style %q: must be border or fill", pressStyle)
 	}
 	e := NewEngine(km, &State{hid: NewHIDWriter(os.DevNull), active: map[string]Combo{}})
+	e.SetRotation(rot, w, h, nil)
+	if km.Home != nil {
+		km.Home.SetPage(homePage)
+	}
 	if layer != "" {
 		name, kind, _ := strings.Cut(layer, ":")
 		a := &Action{Kind: actToggle}
@@ -758,12 +768,19 @@ func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle stri
 		if a.Layer < 0 {
 			return fmt.Errorf("-render-layer: unknown layer %q", name)
 		}
-		if a.Layer != 0 {
+		if km.Home == nil || a.Layer != km.Home.Layer {
+			e.mu.Lock()
+			e.stack = nil // ホーム画面から始まる設定でも、base の上に重ねる
+			e.view = nil
+			e.refresh()
+			e.mu.Unlock()
+		}
+		if a.Layer != 0 && (km.Home == nil || a.Layer != km.Home.Layer || !km.Home.Start) {
 			e.press("render", a)
 		}
 	}
 	l := buildLayout(km, e.View())
-	cv := NewCanvas(w, h, w*rgb565.Bpp, rgb565, cfg.Display.Rotate)
+	cv := NewCanvas(w, h, w*rgb565.Bpp, rgb565, l.Rotate)
 	l.W, l.H, l.Env, l.Images = cv.W, cv.H, env, images
 	pressed := make([]bool, len(l.Cells))
 	for _, p := range strings.Fields(strings.ReplaceAll(pressedSpec, ";", " ")) {
@@ -815,6 +832,10 @@ func main() {
 	pngCalc := flag.String("render-calc", "", "-render-png で、電卓のセルに出す状態（{\"<id>\": CalcState} の JSON。get_widgets の calculator と同じ形）")
 	pngCalcPressed := flag.String("render-calc-pressed", "", "-render-png で、電卓で押しているボタン（行,列。例: 4,4 は =）")
 	pngGraph := flag.String("render-graph", "", "-render-png で、グラフのセルに出す値（graph.json の形のファイル）")
+	pngRotate := flag.Int("render-rotate", -1, "-render-png で、画面の向き（0、90、180、270。-render-size は物理の大きさ）。省略すると設定の display.rotate")
+	pngHomePage := flag.Int("render-home-page", 1, "-render-png で、ホーム画面に出すページ（1 から）")
+	pngLink := flag.String("render-link", "configured", "-render-png で、状態の帯に出す PC とのつながり（UDC の state。configured、suspended、not attached、空なら出さない）")
+	pngLastSync := flag.String("render-last-sync", "", "-render-png で、状態の帯に出す最後に同期した時刻（RFC 3339。省略すると未同期）")
 	pngQR := flag.String("render-qr", "", "-render-png で、QR コードのウィジェットに出す中身（qr.json の形のファイル）")
 	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
 	recGesture := flag.String("record-gesture", "", "-record-touch で、見出しに書く動きの名前（slow、tap など）")
@@ -938,7 +959,18 @@ func main() {
 		if _, err := fmt.Sscanf(*pngSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 			log.Fatalf("bad -render-size %q", *pngSize)
 		}
-		env := WidgetEnv{Now: time.Now(), TimeSynced: !*pngUnsynced, MouseOff: *pngMouseOff}
+		env := WidgetEnv{Now: time.Now(), TimeSynced: !*pngUnsynced, MouseOff: *pngMouseOff, Link: *pngLink}
+		if *pngLastSync != "" {
+			t, err := time.Parse(time.RFC3339, *pngLastSync)
+			if err != nil {
+				log.Fatalf("bad -render-last-sync %q: %v", *pngLastSync, err)
+			}
+			env.LastSync = &t
+		}
+		if *pngRotate != -1 && !validRotate(*pngRotate) {
+			log.Fatalf("bad -render-rotate %d (0, 90, 180 or 270)", *pngRotate)
+		}
+
 		if *pngTime != "" {
 			t, err := time.Parse(time.RFC3339, *pngTime)
 			if err != nil {
@@ -1081,7 +1113,11 @@ func main() {
 		for _, p := range imageProblems(km, images, w2, h2) {
 			log.Printf("warning: %s  [%s]", p.Message, p.Path)
 		}
-		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, env, images); err != nil {
+		rot := cfg.Display.Rotate
+		if *pngRotate != -1 {
+			rot = *pngRotate
+		}
+		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, rot, *pngHomePage-1, env, images); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -1155,6 +1191,9 @@ func main() {
 			log.Printf("warning: %s", p.Message)
 		}
 	}
+	link := NewLinkMonitor()
+	rotStore := NewRotateStore(store)
+	e.SetRotation(rotStore.Initial(km.Rotate), 800, 480, rotStore)
 	widgetRT := NewWidgetRT(todos)
 	widgetRT.gadgets = gadgets
 	widgetRT.calc = calc
@@ -1173,6 +1212,10 @@ func main() {
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
+		env.Link = link.State()
+		if ti := clock.Info(); ti.LastSet != nil {
+			env.LastSync = ti.LastSet
+		}
 		return env
 	}
 	widgetRT.SetEnv(widgetEnv)
@@ -1222,6 +1265,10 @@ func main() {
 				weather.SetOnChange(d.Poke)
 				graphs.SetOnChange(d.Poke)
 				calc.SetOnChange(d.Poke)
+				link.SetOnChange(d.Poke)
+				if pw, ph := d.PhysSize(); pw != 800 || ph != 480 {
+					e.SetRotation(e.Rotation(), pw, ph, rotStore)
+				}
 				icons.SetOnChange(d.Poke)
 				images.SetOnChange(d.Invalidate)
 				usb.OnChange(d.Invalidate) // トラックパッドの「マウスはオフ」と、メディアキーのセルを描き直す

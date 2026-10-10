@@ -129,6 +129,9 @@ func (rt *WidgetRT) screen() (int, int) {
 }
 
 func (rt *WidgetRT) redraw() {
+	if rt == nil {
+		return
+	}
 	rt.mu.Lock()
 	f := rt.poke
 	rt.mu.Unlock()
@@ -145,7 +148,7 @@ type widgetTouch struct {
 
 // ownsTouch は、ウィジェットがタップを自分で処理し、押した位置で働くか（セル全体を光らせない）。
 func (w *WidgetDef) ownsTouch() bool {
-	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc)
+	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc || w.Kind == widgetHome)
 }
 
 // todoGeom は、Todo のセルの中の配置。

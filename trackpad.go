@@ -202,10 +202,9 @@ type Pad struct {
 
 	p       *PadParams
 	cell    image.Rectangle // セルの画面上の範囲（span を含む）
-	tc      *TouchConfig
-	W, H    int
-	active  bool // 指が触れている
-	pending bool // 触れたが、まだ押す強さの足りるサンプルがない（なければ、そのタッチはなかったことにする）
+	tm      touchMap        // タッチの生の座標から画面のドットへの変換（向きを含む）
+	active  bool            // 指が触れている
+	pending bool            // 触れたが、まだ押す強さの足りるサンプルがない（なければ、そのタッチはなかったことにする）
 	st      padState
 
 	tDown    time.Time // 触れた時刻（着地の跳ねの続きなら、最初に触れた時刻）
@@ -264,9 +263,9 @@ func (g *Pad) State() padState {
 	return g.st
 }
 
-// Down は、トラックパッドのセルに触れたときに呼ぶ。cell はセルの画面上の範囲、W×H は画面の大きさ。
+// Down は、トラックパッドのセルに触れたときに呼ぶ。cell はセルの画面上の範囲、m は生の座標から画面のドットへの変換。
 // 状態は、押す強さの足りる最初のサンプル（begin）で変える。
-func (g *Pad) Down(p *PadParams, cell image.Rectangle, tc *TouchConfig, W, H int, t time.Time) {
+func (g *Pad) Down(p *PadParams, cell image.Rectangle, m touchMap, t time.Time) {
 	if g == nil {
 		return
 	}
@@ -284,7 +283,7 @@ func (g *Pad) Down(p *PadParams, cell image.Rectangle, tc *TouchConfig, W, H int
 		g.out.Release(padSourceL) // 離したのを受け取れなかった
 		g.st = padIdle
 	}
-	g.p, g.cell, g.tc, g.W, g.H = p, cell, tc, W, H
+	g.p, g.cell, g.tm = p, cell, m
 	g.active, g.pending = true, true
 	if g.st != padTapUp {
 		g.tDown = t // 跳ねの続きなら、最初に触れた時刻のまま（タップの長さは、最初から測る）
@@ -633,20 +632,8 @@ func (g *Pad) arm() {
 	g.mu.Unlock()
 }
 
-// screen は、タッチの生座標を画面のドット（小数）にする。touchPoint と同じ割り方。
-func (g *Pad) screen(x, y int32) fpt {
-	tc := g.tc
-	if tc.SwapXY {
-		x, y = y, x
-	}
-	f := func(v, lo, hi int32, n int) float64 {
-		if hi == lo {
-			return 0
-		}
-		return float64(v-lo) * float64(n) / float64(hi-lo)
-	}
-	return fpt{f(x, tc.MinX, tc.MaxX, g.W), f(y, tc.MinY, tc.MaxY, g.H)}
-}
+// screen は、タッチの生座標を画面のドット（小数）にする。touchPoint と同じ割り方で、向きに合わせて回す。
+func (g *Pad) screen(x, y int32) fpt { return g.tm.fpoint(x, y) }
 
 func abs(v int) int {
 	if v < 0 {

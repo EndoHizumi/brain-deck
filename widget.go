@@ -88,6 +88,7 @@ type WidgetDef struct {
 	Colors     []PresenterColor // presenter：残り時間に応じた色（残りの長い順）
 	Prefix     bool             // calculator：16 進と 2 進の結果を、0x と 0b を付けて打ち込む
 	calc       *calcCell        // calculator：押しているボタン
+	home       *HomeDef         // home：ホーム画面（設定の home から作る）
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -106,6 +107,8 @@ type WidgetEnv struct {
 	WeatherIcons *IconStore
 	Graph        map[string]GraphSeries // graph：id ごとの値（写し。書き換えない）
 	Calc         map[string]CalcState   // calculator：id ごとの状態（写し）
+	Link         string                 // 状態の帯：PC とのつながり（UDC の state。分からなければ空）
+	LastSync     *time.Time             // 状態の帯：最後に PC から時刻を合わせた時刻。nil なら一度もない
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
@@ -390,6 +393,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return calcKey(w, env)
 	case widgetPad:
 		return fmt.Sprintf("trackpad\x00%v", env.MouseOff) // マウスのオンとオフで描き直す
+	case widgetHome:
+		return fmt.Sprintf("home\x00%d", w.home.Page())
 	}
 	return gadgetKey(v, env)
 }
@@ -418,6 +423,8 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		return wthNext(v.Widget, env)
 	case widgetGraph:
 		return graphNext(v.Widget, env)
+	case widgetHome:
+		return time.Time{}
 	}
 	return gadgetNext(v, env)
 }

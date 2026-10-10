@@ -270,7 +270,7 @@ func replayTouch(rec *TouchRecording, p *PadParams) ReplayResult {
 			if !down {
 				continue
 			}
-			pt := (&Pad{tc: tc, W: W, H: H}).screen(x, y)
+			pt := (&Pad{tm: touchMap{tc: tc, pw: W, ph: H}}).screen(x, y)
 			if !pressed {
 				pressed = true
 				cur = &TouchSummary{Start: ev.T, X0: pt.X, Y0: pt.Y, MinP: pr, MaxP: pr, FirstJump: -1}
@@ -278,7 +278,7 @@ func replayTouch(rec *TouchRecording, p *PadParams) ReplayResult {
 				onPad = ip.In(cell)
 				cur.InCell = onPad
 				if onPad {
-					pad.Down(p, cell, tc, W, H, t)
+					pad.Down(p, cell, touchMap{tc: tc, pw: W, ph: H}, t)
 				} else {
 					pad.Interrupt()
 				}
@@ -484,7 +484,7 @@ func runRecord(cfg *Config, km *Keymap, o recordOptions) error {
 		down    bool
 		pressed bool
 	)
-	conv := &Pad{tc: tc, W: W, H: H}
+	conv := &Pad{tm: touchMap{tc: tc, pw: W, ph: H}}
 	go func() {
 		defer close(done)
 		for {

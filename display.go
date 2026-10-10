@@ -52,8 +52,25 @@ type Layout struct {
 	Env        WidgetEnv // ウィジェットを描くときの状態。描く側が描く前に入れる
 	Wallpaper  string    // 格子全体に敷く壁紙の id。空ならなし
 	// Images は背景画像の読み込み先。描く側が描く前に入れる。nil なら背景画像を描かない
-	Images ImageSource
+	Images   ImageSource
+	Rotate   int      // 画面の向き。描く側は、裏画面をこの向きにする
+	Bar      bool     // 上に状態の帯を出す（statusbar.go）。格子はその下に並ぶ
+	BarItems []string // 帯の項目
 }
+
+// top は、格子の上に空ける高さ（状態の帯）。
+func (l *Layout) top() int {
+	if l.Bar {
+		return barH
+	}
+	return 0
+}
+
+// hasWall は、壁紙の画像があるか。
+func (l *Layout) hasWall() bool { return l.image(l.Wallpaper) != nil }
+
+// gridArea は、W×H の画面で格子を並べる範囲（上の top ドットを除く）。
+func gridArea(W, H, top int) image.Rectangle { return image.Rect(0, top, W, H) }
 
 // image は id の背景画像を返す。id が空、画像がないときは nil。
 func (l *Layout) image(id string) *Image {
@@ -117,7 +134,7 @@ func pressName(l *Layout) string {
 
 // badgeRect は、レイヤー名を出す右上の札の範囲を返す。
 func (l *Layout) badgeRect() image.Rectangle {
-	if l.Title == "" {
+	if l.Title == "" || l.Bar {
 		return image.Rectangle{}
 	}
 	w := font.textWidth(l.Title)*badgeScale + 2*badgePad
@@ -131,16 +148,21 @@ func (l *Layout) rect(col, row int) image.Rectangle {
 	if i := row*l.Cols + col; i < len(l.Cells) {
 		w, h = l.Cells[i].SpanW, l.Cells[i].SpanH
 	}
-	return cellRect(col, row, w, h, l.Cols, l.Rows, l.W, l.H)
+	return cellRectIn(col, row, w, h, l.Cols, l.Rows, gridArea(l.W, l.H, l.top()))
 }
 
 // cellRect は、cols×rows の格子で (col, row) から spanW×spanH のセルの、W×H の画面上の範囲を返す。
 func cellRect(col, row, spanW, spanH, cols, rows, W, H int) image.Rectangle {
-	x0, _ := cellSpan(col, cols, W)
-	_, x1 := cellSpan(col+max(spanW, 1)-1, cols, W)
-	y0, _ := cellSpan(row, rows, H)
-	_, y1 := cellSpan(row+max(spanH, 1)-1, rows, H)
-	return image.Rect(x0, y0, x1, y1)
+	return cellRectIn(col, row, spanW, spanH, cols, rows, image.Rect(0, 0, W, H))
+}
+
+// cellRectIn は、area に並べた cols×rows の格子で、(col, row) から spanW×spanH のセルの範囲を返す。
+func cellRectIn(col, row, spanW, spanH, cols, rows int, area image.Rectangle) image.Rectangle {
+	x0, _ := cellSpan(col, cols, area.Dx())
+	_, x1 := cellSpan(col+max(spanW, 1)-1, cols, area.Dx())
+	y0, _ := cellSpan(row, rows, area.Dy())
+	_, y1 := cellSpan(row+max(spanH, 1)-1, rows, area.Dy())
+	return image.Rect(x0, y0, x1, y1).Add(area.Min)
 }
 
 var (
@@ -220,6 +242,11 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 	v := l.Cells[row*l.Cols+col]
 	wall, own, hasImg := l.cellBack(&v, box)
 	paintBack(cv, cell, colBG, wall)
+	if v.Widget != nil && v.Widget.Kind == widgetHome {
+		// ホーム画面：枠も塗りも描かず、壁紙（なければ黒）の上にアプリを並べる
+		drawHome(cv, l, cell, v.Widget.home)
+		return cell.Union(redrawBadge(cv, l, cell))
+	}
 	if !v.Mapped {
 		cv.frame(box, 1, colEmptyBorder)
 		return cell.Union(redrawBadge(cv, l, cell))
@@ -375,6 +402,10 @@ func drawAll(cv *Canvas, l *Layout, pressed []bool) {
 			}
 		}
 	}
+	if l.Bar {
+		drawBar(cv, l, l.Env)
+		return
+	}
 	drawBadge(cv, l)
 }
 
@@ -396,7 +427,8 @@ type Display struct {
 
 	fb         *Framebuffer
 	vt         *VT
-	cv         *Canvas
+	cv         *Canvas // 格子を描く裏画面（今の向き）
+	tcv        *Canvas // 端末モードの裏画面（設定の display.rotate の向き）
 	layout     *Layout // 描画側だけが触る
 	layoutCols int     // 描いている格子の列数（d.mu で守る）
 	vtSig      chan os.Signal
@@ -414,6 +446,12 @@ type Display struct {
 	env    func() WidgetEnv // 今の時刻など。nil なら時刻だけ
 	wkeys  []string         // セルごとに、前に描いたウィジェットの中身（widgetKey）
 	wakeAt time.Time        // 次にウィジェットの中身が変わる時刻。ゼロなら起きなくてよい
+	barKey string           // 前に描いた状態の帯の中身（barKey）
+}
+
+// newCanvas は、フレームバッファに合わせた、向き rot の裏画面を作る。
+func newCanvas(fb *Framebuffer, rot int) *Canvas {
+	return NewCanvas(fb.Info.XRes, fb.Info.YRes, fb.Info.XRes*fb.Info.Format.Bpp, fb.Info.Format, rot)
 }
 
 // StartDisplay はフレームバッファと専用 VT を開き、描画 goroutine を起動する。
@@ -425,12 +463,12 @@ func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv, images Ima
 		return nil, fmt.Errorf("open %s: %w", dc.Device, err)
 	}
 	log.Printf("display: %s", fb.Info)
-	cv := NewCanvas(fb.Info.XRes, fb.Info.YRes, fb.Info.XRes*fb.Info.Format.Bpp, fb.Info.Format, dc.Rotate)
+	cv := newCanvas(fb, l.Rotate)
 	l.W, l.H = cv.W, cv.H
 
 	d := &Display{
 		want: make([]bool, len(l.Cells)), wantGen: l.Gen, drawn: make([]bool, len(l.Cells)),
-		wake: make(chan struct{}, 1), fb: fb, cv: cv, layout: l, layoutCols: l.Cols,
+		wake: make(chan struct{}, 1), fb: fb, cv: cv, tcv: newCanvas(fb, dc.Rotate), layout: l, layoutCols: l.Cols,
 		vtSig: make(chan os.Signal, 4), env: env, images: images,
 	}
 	// VT_PROCESS のシグナルは VT を設定する前に受けられるようにしておく
@@ -449,7 +487,7 @@ func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv, images Ima
 	if err := vt.Activate(); err != nil {
 		log.Printf("display: %v", err)
 	}
-	log.Printf("display: tty%d (was tty%d), %dx%d, rotate %d", vt.num, vt.orig, cv.W, cv.H, dc.Rotate)
+	log.Printf("display: tty%d (was tty%d), %dx%d, rotate %d", vt.num, vt.orig, cv.W, cv.H, l.Rotate)
 	d.drawMu.Lock()
 	d.acquireLocked()
 	d.drawMu.Unlock()
@@ -457,12 +495,28 @@ func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv, images Ima
 	return d, nil
 }
 
-// Size は画面の論理の大きさ。
+// Size は、端末モードの画面の論理の大きさ（設定の display.rotate の向き）。
 func (d *Display) Size() (int, int) {
 	if d == nil {
 		return 800, 480
 	}
-	return d.cv.W, d.cv.H
+	return d.tcv.W, d.tcv.H
+}
+
+// PhysSize は、物理の画面の大きさ。
+func (d *Display) PhysSize() (int, int) {
+	if d == nil {
+		return 800, 480
+	}
+	return d.cv.pw, d.cv.ph
+}
+
+// shownCV は、今フレームバッファに出している裏画面。
+func (d *Display) shownCV() *Canvas {
+	if d.termShown {
+		return d.tcv
+	}
+	return d.cv
 }
 
 // SetTerminal は、端末モードの画面に切り替える（nil で元の格子に戻す）。描画は待たない。
@@ -554,7 +608,8 @@ func (d *Display) acquireLocked() {
 	}
 	d.active = true
 	t := time.Now()
-	d.fb.Blit(d.cv, image.Rect(0, 0, d.cv.pw, d.cv.ph))
+	cv := d.shownCV()
+	d.fb.Blit(cv, image.Rect(0, 0, cv.pw, cv.ph))
 	vlogf("display: full blit %v", time.Since(t))
 }
 
@@ -618,6 +673,11 @@ func (d *Display) drawAllLocked(l *Layout) {
 	drawAll(d.cv, l, d.drawn)
 	d.wkeys = make([]string, len(l.Cells))
 	d.wakeAt = time.Time{}
+	d.barKey = ""
+	if l.Bar {
+		d.barKey = barKey(l, l.Env)
+		d.scheduleAt(barNext(l, l.Env))
+	}
 	for i := range l.Cells {
 		if v := &l.Cells[i]; v.Widget != nil && !v.Covered {
 			d.wkeys[i] = widgetKey(v, l.Env)
@@ -626,8 +686,11 @@ func (d *Display) drawAllLocked(l *Layout) {
 	}
 }
 
-func (d *Display) scheduleWidget(v *CellView, env WidgetEnv) {
-	if t := widgetNext(v, env); !t.IsZero() && (d.wakeAt.IsZero() || t.Before(d.wakeAt)) {
+func (d *Display) scheduleWidget(v *CellView, env WidgetEnv) { d.scheduleAt(widgetNext(v, env)) }
+
+// scheduleAt は、t（ゼロなら何もしない）に起きるようにする。
+func (d *Display) scheduleAt(t time.Time) {
+	if !t.IsZero() && (d.wakeAt.IsZero() || t.Before(d.wakeAt)) {
 		d.wakeAt = t
 	}
 }
@@ -637,6 +700,18 @@ func (d *Display) redrawWidgets() {
 	l := d.layout
 	l.Env = d.widgetEnv()
 	d.wakeAt = time.Time{}
+	if l.Bar {
+		d.scheduleAt(barNext(l, l.Env))
+		if k := barKey(l, l.Env); k != d.barKey {
+			t := time.Now()
+			r := drawBar(d.cv, l, l.Env)
+			d.barKey = k
+			if d.active {
+				d.fb.Blit(d.cv, d.cv.physRect(r))
+			}
+			vlogf("display: status bar redraw %v", time.Since(t))
+		}
+	}
 	for i := range l.Cells {
 		v := &l.Cells[i]
 		if v.Widget == nil || v.Covered {
@@ -721,6 +796,9 @@ func (d *Display) redraw() bool {
 	d.termShown = false
 	if next != nil {
 		t := time.Now()
+		if next.Rotate != d.cv.rot {
+			d.cv = newCanvas(d.fb, next.Rotate) // 向きが変わった：裏画面を作り直し、全体を描く
+		}
 		next.W, next.H = d.cv.W, d.cv.H
 		d.layout = next
 		d.drawn = make([]bool, len(next.Cells))
@@ -780,10 +858,10 @@ func (d *Display) redrawTerminal(tm *TermMode, full bool) bool {
 	d.termShown = true
 	d.wakeAt = time.Time{} // ウィジェットは描かない
 	t := time.Now()
-	rs := d.termR.render(d.cv, full, tm.takeFrame)
+	rs := d.termR.render(d.tcv, full, tm.takeFrame)
 	if d.active {
 		for _, r := range rs {
-			d.fb.Blit(d.cv, d.cv.physRect(r))
+			d.fb.Blit(d.tcv, d.tcv.physRect(r))
 		}
 	}
 	if len(rs) > 0 {

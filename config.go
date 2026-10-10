@@ -25,8 +25,10 @@ type Config struct {
 	Touch     *TouchConfig          `yaml:"touch,omitempty" json:"touch,omitempty"`
 	Layers    []LayerConfig         `yaml:"layers,omitempty" json:"layers,omitempty"`
 	Display   *DisplayConfig        `yaml:"display,omitempty" json:"display,omitempty"`
-	Terminal  *TerminalConfig       `yaml:"terminal,omitempty" json:"terminal,omitempty"`   // 端末モード（termmode.go）。省略すると既定値
-	Backlight *BacklightConfig      `yaml:"backlight,omitempty" json:"backlight,omitempty"` // 自動減光（backlight.go）。省略すると減光しない
+	Terminal  *TerminalConfig       `yaml:"terminal,omitempty" json:"terminal,omitempty"`     // 端末モード（termmode.go）。省略すると既定値
+	Backlight *BacklightConfig      `yaml:"backlight,omitempty" json:"backlight,omitempty"`   // 自動減光（backlight.go）。省略すると減光しない
+	Home      *HomeConfig           `yaml:"home,omitempty" json:"home,omitempty"`             // ホーム画面（home.go）。省略すると使わない
+	StatusBar *StatusBarConfig      `yaml:"status_bar,omitempty" json:"status_bar,omitempty"` // 画面の上の状態の帯（statusbar.go）
 }
 
 // TouchConfig はタッチパネルそのものの設定（どのレイヤーでも共通）。
@@ -62,6 +64,11 @@ type LayerConfig struct {
 	Keys     map[string]ActionSpec `yaml:"keys,omitempty" json:"keys,omitempty"`
 	Touch    *GridConfig           `yaml:"touch,omitempty" json:"touch,omitempty"`
 	SoftKeys map[string]ActionSpec `yaml:"soft_keys,omitempty" json:"soft_keys,omitempty"`
+	// TouchPortrait は縦向き（480x800）のときの格子。省略すると display.portrait_grid のとおり横向きの格子から作る（rotate.go）
+	TouchPortrait *GridConfig `yaml:"touch_portrait,omitempty" json:"touch_portrait,omitempty"`
+	// StatusBar は、このレイヤーで画面の上に状態の帯を出すか。省略すると、格子（touch）を持つレイヤーなら status_bar.show、
+	// 持たないレイヤーなら下のレイヤーのとおり
+	StatusBar *bool `yaml:"status_bar,omitempty" json:"status_bar,omitempty"`
 }
 
 // GridConfig はレイヤーのタッチの格子。cols/rows を省略すると base と同じ大きさ。
@@ -94,8 +101,10 @@ type ActionSpec struct {
 	UsbMode string `yaml:"usb_mode,omitempty" json:"usb_mode,omitempty"`
 	// Terminal は端末モードの切り替え（on、off、toggle。termmode.go）
 	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
-	Label    string `yaml:"label,omitempty" json:"label,omitempty"`
-	Span     Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
+	// Rotate は画面の向きを変える（next で 90 度ずつ、0、90、180、270 でその向き。rotate.go）
+	Rotate string `yaml:"rotate,omitempty" json:"rotate,omitempty"`
+	Label  string `yaml:"label,omitempty" json:"label,omitempty"`
+	Span   Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
 	// Background はセルの背景画像の id（/var/lib/lefthand/images/<id>.565）。タッチのセルだけ
 	Background string `yaml:"background,omitempty" json:"background,omitempty"`
 
@@ -163,7 +172,7 @@ var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 	"page_reset": true, "stale": true, "calendars": true, "follow": true, "week_start": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
-	"terminal": true, "work": true, "break": true, "states": true,
+	"terminal": true, "rotate": true, "work": true, "break": true, "states": true,
 	"unit": true, "min": true, "max": true, "chart": true, "points": true, "decimals": true, "duration": true, "colors": true, "prefix": true,
 	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
@@ -180,7 +189,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, duration, colors, prefix, background, and the trackpad fields)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, rotate, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, duration, colors, prefix, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -189,7 +198,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	if c := a.count(); c > 1 || (c == 0 && a.Widget == "") {
-		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal (a widget cell may omit them)", n.Line)
+		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, rotate (a widget cell may omit them)", n.Line)
 	}
 	return nil
 }
@@ -227,7 +236,7 @@ func (a ActionSpec) hasGraphFields() bool {
 
 func (a ActionSpec) count() int {
 	n := 0
-	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.Media, a.UsbMode, a.Terminal} {
+	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.Media, a.UsbMode, a.Terminal, a.Rotate} {
 		if s != "" {
 			n++
 		}
@@ -244,6 +253,9 @@ type DisplayConfig struct {
 	// 押しているセルの見せ方。border（既定）は枠を光らせ、fill はセルを塗りつぶす。
 	// 動いているデーモンにも、設定 GUI からの保存ですぐ反映する
 	PressStyle string `yaml:"press_style,omitempty" json:"press_style,omitempty"`
+	// PortraitGrid は、touch_portrait を書いていないレイヤーを縦向きでどう並べるか。
+	// transpose（既定）は列と行を入れ替え、stretch は横向きの格子をそのまま縦に伸ばす（rotate.go）
+	PortraitGrid string `yaml:"portrait_grid,omitempty" json:"portrait_grid,omitempty"`
 }
 
 // 押しているセルの見せ方（display.press_style）
@@ -299,6 +311,11 @@ func parseConfig(raw []byte) (*Config, error) {
 	case 0, 90, 180, 270:
 	default:
 		return nil, Problems{{Path: "/display/rotate", Message: "display.rotate must be 0, 90, 180 or 270"}}
+	}
+	switch cfg.Display.PortraitGrid {
+	case "", portraitTranspose, portraitStretch:
+	default:
+		return nil, Problems{{Path: "/display/portrait_grid", Message: "display.portrait_grid must be transpose or stretch"}}
 	}
 	switch cfg.Display.PressStyle {
 	case "", pressBorder, pressFill:
@@ -386,9 +403,11 @@ const (
 	actUSB                     // USB の形の切り替え
 	actTerminal                // 端末モードの切り替え
 	actMedia                   // メディアキー
+	actRotate                  // 画面の向きを変える
+	actHomePage                // ホーム画面のページを送る（ホーム画面の ◀ ▶ のソフトキー。設定には書けない）
 )
 
-var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal", "media"}
+var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal", "media", "rotate", "home_page"}
 
 func (k ActKind) String() string { return actNames[k] }
 
@@ -401,6 +420,7 @@ type Action struct {
 	Mouse        mouseAction // actMouse のとき
 	Media        mediaAction // actMedia のとき
 	Layer        int         // layer_* の行き先
+	Rotate       int         // actRotate：向き（0、90、180、270）。rotateNext なら 90 度回す。actHomePage：-1 か +1
 	Spec         ActionSpec
 	SpanW, SpanH int        // セルの大きさ（タッチのセル）。1 以上
 	Widget       *WidgetDef // ウィジェットのセルなら、その中身
@@ -429,7 +449,12 @@ type Layer struct {
 	Name, Label string
 	Keys        map[evdev.EvCode]*Action
 	Grid        *Grid // nil なら下のレイヤーの格子をそのまま使う
-	Soft        map[string]*Action
+	// PGrid は縦向きのときの格子。touch_portrait か、Grid から作ったもの。Grid が nil なら nil
+	PGrid *Grid
+	Soft  map[string]*Action
+	// StatusBar は、このレイヤーで状態の帯を出すか（nil なら下のレイヤーに任せる）
+	StatusBar *bool
+	home      bool // ホーム画面（設定の home から作ったレイヤー）
 }
 
 func (l *Layer) title() string {
@@ -450,6 +475,14 @@ type Keymap struct {
 	Areas  []namedArea // 名前順。重なったときは先のものを使う
 	Touch  *TouchConfig
 	Press  string // display.press_style。空なら border
+	// Home はホーム画面。nil ならホーム画面を使わない
+	Home *HomeDef
+	// Bar は状態の帯の中身と、書いていないレイヤーで出すか
+	Bar BarDef
+	// Rotate は display.rotate（設定に書いた向き。保存した向きがなければ、これで始める）
+	Rotate int
+	// cfgPortrait は、レイヤーごとに touch_portrait を書いたか（画像の大きさの確かめに使う）
+	cfgPortrait []bool
 }
 
 func (km *Keymap) area(name string) (SoftArea, bool) {
@@ -580,6 +613,13 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			default:
 				fail(path, "%s: terminal must be on, off or toggle", where)
 			}
+		case s.Rotate != "":
+			a.Kind = actRotate
+			r, ok := parseRotate(s.Rotate)
+			if !ok {
+				fail(path, "%s: rotate must be next, 0, 90, 180 or 270", where)
+			}
+			a.Rotate = r
 		default:
 			fail(path, "%s: empty assignment", where)
 		}
@@ -596,8 +636,15 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		return a
 	}
 
-	var baseGrid *Grid
+	var baseGrid, basePGrid *Grid
 	var monthWarns []string
+	portraitMode := ""
+	if cfg.Display != nil {
+		portraitMode = cfg.Display.PortraitGrid
+		km.Rotate = cfg.Display.Rotate
+	}
+	cfg.StatusBar.validate(fail)
+	km.Bar = cfg.StatusBar.compile()
 	for li, lc := range cfg.Layers {
 		lp := fmt.Sprintf("/layers/%d", li)
 		l := &Layer{Name: lc.Name, Label: lc.Label, Keys: map[evdev.EvCode]*Action{}, Soft: map[string]*Action{}}
@@ -611,28 +658,25 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			}
 			l.Keys[code] = action(path, where, li, s, false)
 		}
-		if lc.Touch != nil {
-			tp := lp + "/touch"
-			if cfg.Touch == nil {
-				fail("/touch", "layer %q has touch, but the touch section (device and calibration) is missing", lc.Name)
-			}
-			g := &Grid{Cols: lc.Touch.Cols, Rows: lc.Touch.Rows, Cells: map[cellPos]*Action{}, Background: lc.Touch.Background}
+		// grid は、格子 gc を組み立てる。def は cols と rows を省略したときの大きさ（nil なら書かなければ誤り）
+		grid := func(gc *GridConfig, tp, what string, def *Grid) *Grid {
+			g := &Grid{Cols: gc.Cols, Rows: gc.Rows, Cells: map[cellPos]*Action{}, Background: gc.Background}
 			if g.Background != "" && !validImageID(g.Background) {
-				fail(tp+"/background", "layer %q touch background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got %q", lc.Name, g.Background)
+				fail(tp+"/background", "layer %q %s background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got %q", lc.Name, what, g.Background)
 			}
 			if (g.Cols == 0) != (g.Rows == 0) {
-				fail(tp, "layer %q touch: write both cols and rows, or neither", lc.Name)
+				fail(tp, "layer %q %s: write both cols and rows, or neither", lc.Name, what)
 			}
-			if g.Cols == 0 && baseGrid != nil {
-				g.Cols, g.Rows = baseGrid.Cols, baseGrid.Rows
+			if g.Cols == 0 && def != nil {
+				g.Cols, g.Rows = def.Cols, def.Rows
 			}
 			if g.Cols <= 0 || g.Rows <= 0 || g.Cols > 16 || g.Rows > 16 {
-				fail(tp, "layer %q touch: cols and rows must be 1..16", lc.Name)
+				fail(tp, "layer %q %s: cols and rows must be 1..16", lc.Name, what)
 				g.Cols, g.Rows = max(g.Cols, 1), max(g.Rows, 1)
 			}
-			for k, s := range lc.Touch.Cells {
+			for k, s := range gc.Cells {
 				path := tp + "/cells/" + pointerEscape(k)
-				where := fmt.Sprintf("layer %q touch cell %q", lc.Name, k)
+				where := fmt.Sprintf("layer %q %s cell %q", lc.Name, what, k)
 				var p cellPos
 				if _, err := fmt.Sscanf(k, "%d,%d", &p.Col, &p.Row); err != nil ||
 					p.Col < 0 || p.Col >= g.Cols || p.Row < 0 || p.Row >= g.Rows {
@@ -652,13 +696,35 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			checkOverlaps(g, tp, lc.Name, fail)
 			monthWarns = append(monthWarns, linkFollows(g, tp, lc.Name, fail)...)
 			monthWarns = append(monthWarns, calcWarns(g, lc.Name)...)
-			l.Grid = g
+			return g
+		}
+		if lc.Touch != nil {
+			if cfg.Touch == nil {
+				fail("/touch", "layer %q has touch, but the touch section (device and calibration) is missing", lc.Name)
+			}
+			l.Grid = grid(lc.Touch, lp+"/touch", "touch", baseGrid)
 			if li == 0 {
-				baseGrid = g
+				baseGrid = l.Grid
 			}
 		} else if li == 0 && cfg.Touch != nil {
 			fail(lp+"/touch", "base layer %q needs touch cols and rows", lc.Name)
 		}
+		if lc.TouchPortrait != nil {
+			tp := lp + "/touch_portrait"
+			switch {
+			case lc.Touch == nil:
+				fail(tp, "layer %q: touch_portrait needs touch (the landscape grid) in the same layer", lc.Name)
+			default:
+				l.PGrid = grid(lc.TouchPortrait, tp, "touch_portrait", basePGrid)
+			}
+		} else if l.Grid != nil {
+			l.PGrid = portraitOf(l.Grid, portraitMode)
+		}
+		if li == 0 {
+			basePGrid = l.PGrid
+		}
+		l.StatusBar = lc.StatusBar
+		km.cfgPortrait = append(km.cfgPortrait, lc.TouchPortrait != nil)
 		for name, s := range lc.SoftKeys {
 			path := lp + "/soft_keys/" + pointerEscape(name)
 			where := fmt.Sprintf("layer %q soft key %q", lc.Name, name)
@@ -669,6 +735,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		}
 		km.Layers = append(km.Layers, l)
 	}
+	homeWarns := compileHome(cfg, km, index, fail)
 	if len(errs) > 0 {
 		errs.sort()
 		return nil, nil, errs
@@ -678,6 +745,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		return nil, nil, err
 	}
 	warns = append(km.unreachable(), monthWarns...)
+	warns = append(warns, homeWarns...)
 	return km, warns, nil
 }
 
@@ -753,6 +821,9 @@ func (km *Keymap) checkWayBack() error {
 	}
 	good := make([]bool, n)
 	good[0] = true
+	if km.Home != nil {
+		good[km.Home.Layer] = true // ホーム画面へは、どのレイヤーからも HOME で戻れる。ホーム画面が出発点になる
+	}
 	exits := func(acts []*Action, self int) bool {
 		for _, a := range acts {
 			switch {
@@ -818,6 +889,12 @@ func (km *Keymap) allActions(l *Layer) []*Action {
 func (km *Keymap) unreachable() []string {
 	used := make([]bool, len(km.Layers))
 	used[0] = true
+	if h := km.Home; h != nil {
+		used[h.Layer] = true
+		for _, a := range h.Apps {
+			used[a.Layer] = true
+		}
+	}
 	for _, l := range km.Layers {
 		for _, a := range km.allActions(l) {
 			if a.Kind.isLayer() {

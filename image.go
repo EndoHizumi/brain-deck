@@ -258,18 +258,28 @@ func preloadOrder(cfg *Config) []string {
 			out = append(out, id)
 		}
 	}
+	if h := cfg.Home; h != nil { // ホーム画面は起動したときに出すので、先に読む
+		add(h.Wall)
+		for _, a := range h.Apps {
+			if validImageID(a.Icon) {
+				add(a.Icon)
+			}
+		}
+	}
 	for _, l := range cfg.Layers {
-		if l.Touch == nil {
-			continue
-		}
-		add(l.Touch.Background)
-		keys := make([]string, 0, len(l.Touch.Cells))
-		for k := range l.Touch.Cells {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			add(l.Touch.Cells[k].Background)
+		for _, g := range []*GridConfig{l.Touch, l.TouchPortrait} {
+			if g == nil {
+				continue
+			}
+			add(g.Background)
+			keys := make([]string, 0, len(g.Cells))
+			for k := range g.Cells {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				add(g.Cells[k].Background)
+			}
 		}
 	}
 	return out
@@ -826,20 +836,48 @@ func imageProblems(km *Keymap, store *ImageStore, W, H int) Problems {
 		}
 	}
 	for li, l := range km.Layers {
-		if l.Grid == nil {
+		if l.Grid == nil || l.home {
 			continue
 		}
-		tp := fmt.Sprintf("/layers/%d/touch", li)
-		if l.Grid.Background != "" {
-			check(tp+"/background", fmt.Sprintf("layer %q wallpaper", l.Name), l.Grid.Background, W, H)
+		// 状態の帯を出すレイヤーでは、セルは帯の下の範囲に並ぶ（このレイヤーを base の上に出したとき）
+		top := 0
+		if bar := km.Bar.Show; l.StatusBar != nil && *l.StatusBar || l.StatusBar == nil && bar {
+			top = barH
 		}
-		for p, a := range l.Grid.Cells {
-			if a.Spec.Background == "" {
-				continue
+		grids := []struct {
+			g    *Grid
+			tp   string
+			w, h int
+		}{{l.Grid, fmt.Sprintf("/layers/%d/touch", li), W, H}}
+		if l.PGrid != nil && l.PGrid != l.Grid && len(l.PGrid.Cells) > 0 && li < len(km.cfgPortrait) && km.cfgPortrait[li] {
+			grids = append(grids, struct {
+				g    *Grid
+				tp   string
+				w, h int
+			}{l.PGrid, fmt.Sprintf("/layers/%d/touch_portrait", li), H, W})
+		}
+		for _, gg := range grids {
+			if gg.g.Background != "" {
+				check(gg.tp+"/background", fmt.Sprintf("layer %q wallpaper", l.Name), gg.g.Background, gg.w, gg.h)
 			}
-			box := cellRect(p.Col, p.Row, a.SpanW, a.SpanH, l.Grid.Cols, l.Grid.Rows, W, H).Inset(cellGap)
-			check(fmt.Sprintf("%s/cells/%d,%d", tp, p.Col, p.Row), fmt.Sprintf("layer %q touch cell \"%d,%d\"", l.Name, p.Col, p.Row),
-				a.Spec.Background, box.Dx(), box.Dy())
+			for p, a := range gg.g.Cells {
+				if a.Spec.Background == "" {
+					continue
+				}
+				box := cellRectIn(p.Col, p.Row, a.SpanW, a.SpanH, gg.g.Cols, gg.g.Rows, gridArea(gg.w, gg.h, top)).Inset(cellGap)
+				check(fmt.Sprintf("%s/cells/%d,%d", gg.tp, p.Col, p.Row), fmt.Sprintf("layer %q touch cell \"%d,%d\"", l.Name, p.Col, p.Row),
+					a.Spec.Background, box.Dx(), box.Dy())
+			}
+		}
+	}
+	if h := km.Home; h != nil {
+		if wall := km.Layers[h.Layer].Grid.Background; wall != "" {
+			check("/home/background", "home wallpaper", wall, W, H)
+		}
+		for i, a := range h.Apps {
+			if a.Image != "" {
+				check(fmt.Sprintf("/home/apps/%d/icon", i), fmt.Sprintf("home app %q icon", a.Name), a.Image, homeImageIcon, homeImageIcon)
+			}
 		}
 	}
 	out.sort()

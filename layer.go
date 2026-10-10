@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"log"
 	"strings"
 	"sync"
@@ -31,6 +32,9 @@ type View struct {
 	// Wallpaper は格子に敷く壁紙の id。格子を作ったレイヤーから下へ、セルと同じく透過する範囲で、
 	// いちばん上にある touch.background
 	Wallpaper string
+	Rot       int     // 画面の向き（0、90、180、270）
+	Portrait  bool    // 縦向き（格子は PGrid）
+	Bar       bool    // 上に状態の帯を出す
 	km        *Keymap // この View を作った割り当て（設定を差し替えると変わる）
 	stackKey  string
 }
@@ -62,12 +66,20 @@ const (
 //
 // span のあるセルは、覆う範囲がすべて上のレイヤーで空いているときだけ使う。
 // 一部でも上のレイヤーのセル（none を含む）に隠れると、そのセルは出さず、隠れていない範囲は空になる。
-func (km *Keymap) view(stack []int) *View {
+//
+// portrait なら、各レイヤーの縦向きの格子（PGrid）を使う。
+func (km *Keymap) view(stack []int, portrait ...bool) *View {
 	v := &View{Top: stack[len(stack)-1], Soft: map[string]*Action{}, km: km}
+	if len(portrait) > 0 {
+		v.Portrait = portrait[0]
+	}
 	var taken []bool // 上のレイヤーまでで、だれかが書いた（覆った）位置
 	var anchors map[cellPos]*Action
 	for i := len(stack) - 1; i >= 0; i-- {
 		g := km.Layers[stack[i]].Grid
+		if v.Portrait {
+			g = km.Layers[stack[i]].PGrid
+		}
 		if g == nil {
 			continue
 		}
@@ -125,9 +137,24 @@ func (km *Keymap) view(stack []int) *View {
 			}
 		}
 	}
+	if h := km.Home; h != nil {
+		v.Soft[h.SoftKey] = h.goHome // HOME は、どのレイヤーでもホーム画面へ
+	}
 	for name, a := range v.Soft {
 		if a.Kind == actNone {
 			delete(v.Soft, name)
+		}
+	}
+	// 状態の帯：上から見て、status_bar を書いたレイヤーか、格子を持つレイヤーで決める（格子を持つレイヤーが書いていなければ status_bar.show）
+	v.Bar = km.Bar.Show
+	for i := len(stack) - 1; i >= 0; i-- {
+		l := km.Layers[stack[i]]
+		if l.StatusBar != nil {
+			v.Bar = *l.StatusBar
+			break
+		}
+		if l.Grid != nil {
+			break
 		}
 	}
 	return v
@@ -180,6 +207,86 @@ type Engine struct {
 	usb      *USBMode     // USB の形の切り替え。nil なら usb_mode は何もしない
 	term     *TermMode    // 端末モード。nil なら terminal は何もしない。端末モードのあいだ、入力はここに回す
 	pressing string       // press の途中で、押している入力（レイヤーが変わっても、この入力のマウスのボタンは離さない）
+	rot      int          // 画面の向き（rotate.go）
+	pw, ph   int          // 物理の画面の大きさ。0 なら 800x480
+	rotStore *RotateStore // 向きの保存。nil なら保存しない
+	onRotate func(int)    // 向きが変わったとき（ログと設定 GUI への通知）。ロックを持ったまま呼ぶので、待たずに返ること
+}
+
+// SetRotation は、画面の向きと、物理の画面の大きさを決める（起動したとき）。rs は向きの保存（nil なら保存しない）。
+func (e *Engine) SetRotation(rot, pw, ph int, rs *RotateStore) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.rot, e.pw, e.ph, e.rotStore = rot, pw, ph, rs
+	e.view = nil
+	e.refresh()
+}
+
+// SetOnRotate は、向きが変わったときの通知先を設定する。
+func (e *Engine) SetOnRotate(f func(int)) {
+	e.mu.Lock()
+	e.onRotate = f
+	e.mu.Unlock()
+}
+
+// Rotation は今の画面の向き。
+func (e *Engine) Rotation() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.rot
+}
+
+// Rotate は、画面の向きを変える（rotateNext なら 90 度回す）。設定 GUI の set_rotate からも使う。
+func (e *Engine) Rotate(r int) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.rotateLocked(r)
+	e.refresh()
+	return e.rot
+}
+
+func (e *Engine) rotateLocked(r int) {
+	if r == rotateNext {
+		r = (e.rot + 90) % 360
+	}
+	if r == e.rot || !validRotate(r) {
+		return
+	}
+	e.rot = r
+	e.pad.Cancel()
+	e.rotStore.Save(r, e.km.Rotate)
+	log.Printf("rotate: %d", r)
+	if e.onRotate != nil {
+		e.onRotate(r)
+	}
+}
+
+// physSize は物理の画面の大きさ。
+func (e *Engine) physSize() (int, int) {
+	if e.pw == 0 {
+		return 800, 480
+	}
+	return e.pw, e.ph
+}
+
+// touchMap は、今の向きでのタッチの座標の変換。ロックを持って呼ぶ。
+func (e *Engine) touchMapLocked() touchMap {
+	pw, ph := e.physSize()
+	return touchMap{tc: e.km.Touch, rot: e.rot, pw: pw, ph: ph}
+}
+
+// portraitLocked は、今の向きが縦向きか。
+func (e *Engine) portraitLocked() bool {
+	pw, ph := e.physSize()
+	return isPortrait(e.rot, pw, ph)
+}
+
+// barTop は、View で格子の上に空ける高さ（状態の帯）。
+func (v *View) barTop() int {
+	if v.Bar {
+		return barH
+	}
+	return 0
 }
 
 // SetUSB は、USB の形の切り替えを設定する。
@@ -212,8 +319,18 @@ func (e *Engine) SetWidgets(rt *WidgetRT) {
 
 func NewEngine(km *Keymap, out *State) *Engine {
 	e := &Engine{km: km, out: out, down: map[string]*Action{}}
+	e.startStack()
 	e.refresh()
 	return e
+}
+
+// startStack は、重なりを起動したときの形にする（ホーム画面から始めるなら、ホーム画面）。
+func (e *Engine) startStack() {
+	e.stack = nil
+	if h := e.km.Home; h != nil && h.Start {
+		e.stack = append(e.stack, stackEntry{layer: h.Layer, kind: actTo})
+		h.SetPage(0)
+	}
 }
 
 func (e *Engine) layers() []int {
@@ -327,14 +444,21 @@ func (e *Engine) PressTouchAt(x, y int32, t time.Time) TouchHit {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.term.Active() {
-		// 端末モード：ソフトキーの区画は、割り当てによらず端末モードの働きにする（HOME で抜けるなど）
+		// 端末モード：ソフトキーの区画は、割り当てによらず端末モードの働きにする（HOME で抜けるなど）。
+		// 端末は設定の display.rotate の向きで描く
 		soft, _ := e.km.hitSoft(x, y)
 		g := e.term.geometry()
 		W, H := g.W, g.H
 		if W == 0 {
 			W, H = 800, 480
 		}
-		e.term.Touch(soft, touchPoint(e.km.Touch, x, y, W, H))
+		pw, ph := e.physSize()
+		m := touchMap{tc: e.km.Touch, rot: e.km.Rotate, pw: pw, ph: ph}
+		pt := m.point(x, y)
+		if mw, mh := m.size(); mw != W || mh != H {
+			pt = touchPoint(e.km.Touch, x, y, W, H)
+		}
+		e.term.Touch(soft, pt)
 		return TouchHit{Gen: e.view.Gen, Soft: soft, Col: -1, Row: -1, Own: true}
 	}
 	v := e.view
@@ -344,19 +468,22 @@ func (e *Engine) PressTouchAt(x, y int32, t time.Time) TouchHit {
 	if name, ok := e.km.hitSoft(x, y); ok && v.Soft[name] != nil {
 		h.Soft, a = name, v.Soft[name]
 	} else if v.Cols > 0 {
-		c, r := touchCell(e.km.Touch, v.Cols, v.Rows, x, y)
-		a, h.Col, h.Row = v.at(c, r) // span のセルは、左上のセルとして扱う
+		m := e.touchMapLocked()
+		c, r, bar := m.cell(v.Cols, v.Rows, v.barTop(), x, y)
+		if !bar {
+			a, h.Col, h.Row = v.at(c, r) // span のセルは、左上のセルとして扱う
+		}
 		if a != nil && a.Widget.handlesTouch() {
 			h.Own = a.Widget.ownsTouch()
-			W, H := 800, 480
-			if e.widgets != nil {
-				W, H = e.widgets.screen()
-			}
-			e.touchAt = &widgetTouch{cell: cellRect(h.Col, h.Row, a.SpanW, a.SpanH, v.Cols, v.Rows, W, H),
-				pt: touchPoint(e.km.Touch, x, y, W, H)}
-			if a.Widget.Kind == widgetPad && e.pad != nil {
+			W, H := m.size()
+			e.touchAt = &widgetTouch{cell: cellRectIn(h.Col, h.Row, a.SpanW, a.SpanH, v.Cols, v.Rows, gridArea(W, H, v.barTop())),
+				pt: m.point(x, y)}
+			switch {
+			case a.Widget.Kind == widgetPad && e.pad != nil:
 				h.Pad = true
-				e.pad.Down(a.Widget.Pad, e.touchAt.cell, e.km.Touch, W, H, t)
+				e.pad.Down(a.Widget.Pad, e.touchAt.cell, m, t)
+			case a.Widget.Kind == widgetHome:
+				a = e.homeTouchLocked(a.Widget.home, e.touchAt.cell, e.touchAt.pt, v.Portrait)
 			}
 		}
 	}
@@ -367,6 +494,33 @@ func (e *Engine) PressTouchAt(x, y int32, t time.Time) TouchHit {
 	e.press("t", a)
 	e.touchAt = nil
 	return h
+}
+
+// homeTouchLocked は、ホーム画面の点 pt を押したときの割り当てを返す。アプリなら、そのレイヤーへの layer_to。
+// ページ送りなら、ここでページを変えて nil を返す。
+func (e *Engine) homeTouchLocked(hd *HomeDef, area image.Rectangle, pt image.Point, portrait bool) *Action {
+	g := homeGeometry(area, hd, portrait, hd.Page())
+	app, delta := homeHit(g, pt)
+	switch {
+	case app >= 0:
+		a := hd.Apps[app]
+		vlogf("home: %q -> layer %q", a.Name, e.km.Layers[a.Layer].Name)
+		return &Action{Kind: actTo, Layer: a.Layer, SpanW: 1, SpanH: 1}
+	case delta != 0:
+		e.homePageLocked(hd, delta, portrait)
+	}
+	return nil
+}
+
+// homePageLocked は、ホーム画面のページを delta だけ送る。
+func (e *Engine) homePageLocked(hd *HomeDef, delta int, portrait bool) {
+	cols, rows := hd.grid(portrait)
+	pages := max((len(hd.Apps)+cols*rows-1)/(cols*rows), 1)
+	p := min(max(min(hd.Page(), pages-1)+delta, 0), pages-1)
+	if p != hd.Page() {
+		hd.SetPage(p)
+		e.widgets.redraw()
+	}
 }
 
 // Release は入力が離されたときに呼ぶ。押したときの割り当てで離すので、
@@ -430,6 +584,10 @@ func (e *Engine) press(id string, a *Action) {
 			}
 			consumeOneshot = false
 		case actTo:
+			if h := e.km.Home; h != nil && a.Layer == h.Layer && e.view != nil && e.view.Top == h.Layer && h.Page() != 0 {
+				h.SetPage(0) // ホーム画面で HOME を押したら 1 ページ目へ
+				e.widgets.redraw()
+			}
 			e.stack = e.stack[:0]
 			if a.Layer != 0 {
 				e.stack = append(e.stack, stackEntry{layer: a.Layer, kind: actTo})
@@ -454,6 +612,12 @@ func (e *Engine) press(id string, a *Action) {
 				log.Printf("terminal: %v", err)
 			} else {
 				log.Printf("terminal: %s requested by %s", map[bool]string{true: "on", false: "off"}[on], id)
+			}
+		case actRotate:
+			e.rotateLocked(a.Rotate)
+		case actHomePage:
+			if h := e.km.Home; h != nil {
+				e.homePageLocked(h, a.Rotate, e.portraitLocked())
 			}
 		case actWidget:
 			// ウィジェットに任せる。待たずに返る
@@ -490,18 +654,22 @@ func (e *Engine) refresh() {
 	for _, en := range e.stack {
 		fmt.Fprintf(&b, "%d/%d,", en.layer, en.kind)
 	}
+	fmt.Fprintf(&b, "r%d", e.rot)
 	key := b.String()
 	if e.view != nil && e.view.stackKey == key {
 		return
 	}
 	e.gen++
-	v := e.km.view(e.layers())
-	v.Gen, v.stackKey = e.gen, key
+	v := e.km.view(e.layers(), e.portraitLocked())
+	v.Gen, v.stackKey, v.Rot = e.gen, key, e.rot
 	if n := len(e.stack); n > 0 {
 		v.Mode = modeLatched
 		if k := e.stack[n-1].kind; k == actHold || k == actOneshot {
 			v.Mode = modeTemp
 		}
+	}
+	if h := e.km.Home; h != nil && v.Top == h.Layer {
+		v.Mode = modeBase // ホーム画面は、出発点の色
 	}
 	e.view = v
 	if e.gen > 1 {
@@ -548,8 +716,8 @@ func (e *Engine) Reload(km *Keymap) {
 		}
 	}
 	e.down = map[string]*Action{}
-	e.stack = nil
 	e.km = km
+	e.startStack()
 	e.view = nil // 重なりが同じでも作り直し、画面に知らせる
 	e.refresh()
 	log.Printf("config reloaded")
@@ -567,7 +735,7 @@ func (e *Engine) HitTest(x, y int32) TouchHit {
 		h.Soft = name
 	}
 	if v.Cols > 0 {
-		h.Col, h.Row = touchCell(e.km.Touch, v.Cols, v.Rows, x, y)
+		h.Col, h.Row, _ = e.touchMapLocked().cell(v.Cols, v.Rows, v.barTop(), x, y)
 	}
 	return h
 }
@@ -580,6 +748,11 @@ type EngineStatus struct {
 	Stack []StackStatus `json:"stack"`
 	Cols  int           `json:"cols"`
 	Rows  int           `json:"rows"`
+	// Rotate は画面の向き、Portrait は縦向きか（格子は縦向きのもの）
+	Rotate   int  `json:"rotate"`
+	Portrait bool `json:"portrait"`
+	Bar      bool `json:"status_bar"`
+	Home     bool `json:"home"` // ホーム画面を出している
 }
 
 type StackStatus struct {
@@ -599,7 +772,7 @@ func (e *Engine) statusLocked() EngineStatus {
 	v := e.view
 	top := e.km.Layers[v.Top]
 	st := EngineStatus{Layer: top.Name, Label: top.title(), Mode: modeNames[v.Mode],
-		Stack: []StackStatus{}, Cols: v.Cols, Rows: v.Rows}
+		Stack: []StackStatus{}, Cols: v.Cols, Rows: v.Rows, Rotate: v.Rot, Portrait: v.Portrait, Bar: v.Bar, Home: top.home}
 	for _, en := range e.stack {
 		st.Stack = append(st.Stack, StackStatus{e.km.Layers[en.layer].Name, en.kind.String()})
 	}
