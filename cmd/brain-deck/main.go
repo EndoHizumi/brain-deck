@@ -94,6 +94,12 @@ const usage = `使い方：
   brain-deck images [list] [--json]   Brain にある背景画像の一覧（使っている場所の数、名前）
   brain-deck images put <ファイル.565|ディレクトリ>...  変換済みの画像を送る（PNG などは設定 GUI で変換する）
   brain-deck images prune [--dry-run] 今の設定で使っていない背景画像を消す
+  brain-deck photo [list] [--json]    フォトフレームの写真の一覧（番号、id、横・縦、足した日時、名前）
+  brain-deck photo add <ファイル>... [--portrait] [--zoom 1.5] [--center x,y] [--brightness -20] [--no-dither]
+                                      写真（PNG、JPEG、GIF、WebP）を 800x480 に（--portrait なら 480x800 に）切り抜いて送る。
+                                      変換は設定 GUI と同じ計算。--center は元の画像の画素の位置、--brightness は百分率
+  brain-deck photo add <ファイル> --of <番号|id>   横向きの写真を、縦向きの画面用に切り抜き直して足す
+  brain-deck photo rm <番号|id>...    写真を消す。photo get <番号|id> -o <ファイル.png> で取り出す
   brain-deck time sync                PC の時刻を Brain に送る
   brain-deck status                   Brain の状態（版、時刻と内蔵 RTC、PC とのつながり、レイヤー、USB の形、電池）
   brain-deck battery log [-n 行数]    電池だけで動かしたときの電圧の記録（CSV。Brain の battery-log.csv）
@@ -184,6 +190,33 @@ type options struct {
 	limit  time.Duration
 	args   []string
 	dashAt int // `--` のあとの最初の引数の位置（なければ -1）
+	// photo、memo、read、files、sync のオプション（コマンドごとに、使えるものを確かめる）
+	vals  map[string]string // 値を取るもの（-o、--of など）
+	flags map[string]bool   // 値を取らないもの（--portrait など）
+}
+
+// subValueOpts、subFlagOpts は、photo、memo、read、files、sync のオプション。
+var (
+	subValueOpts = map[string]bool{"o": true, "out": true, "of": true, "zoom": true, "center": true, "brightness": true, "limit-items": true, "sort": true}
+	subFlagOpts  = map[string]bool{"portrait": true, "no-dither": true, "all": true, "force": true, "du": true, "recursive": true}
+)
+
+// subCommands は、vals と flags を使うコマンド。
+var subCommands = " photo memo read files sync "
+
+// checkSub は、コマンドが使えないオプションを書いていないかを確かめる。allowed は使える名前（空白区切り）。
+func (o *options) checkSub(allowed string) error {
+	for k := range o.vals {
+		if !strings.Contains(" "+allowed+" ", " "+k+" ") {
+			return usageError("--" + k + " は " + o.args[0] + " では使えません")
+		}
+	}
+	for k := range o.flags {
+		if !strings.Contains(" "+allowed+" ", " "+k+" ") {
+			return usageError("--" + k + " は " + o.args[0] + " では使えません")
+		}
+	}
+	return nil
 }
 
 type usageError string
@@ -207,6 +240,32 @@ func parseArgs(argv []string) (*options, error) {
 			continue
 		}
 		name, val, hasVal := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if subValueOpts[name] || subFlagOpts[name] {
+			if subValueOpts[name] && !hasVal {
+				if i+1 >= len(argv) {
+					return nil, usageError("--" + name + " に値がありません")
+				}
+				i++
+				val = argv[i]
+			} else if subFlagOpts[name] && hasVal {
+				return nil, usageError("--" + name + " は値を取りません")
+			}
+			if name == "out" {
+				name = "o"
+			}
+			if subValueOpts[name] {
+				if o.vals == nil {
+					o.vals = map[string]string{}
+				}
+				o.vals[name] = val
+			} else {
+				if o.flags == nil {
+					o.flags = map[string]bool{}
+				}
+				o.flags[name] = true
+			}
+			continue
+		}
 		if withValue[name] && !hasVal {
 			if i+1 >= len(argv) {
 				return nil, usageError("--" + name + " に値がありません")
@@ -344,7 +403,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	hint := "（使い方は brain-deck --help）"
-	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && (o.args[0] == "calendar" || o.args[0] == "images" || o.args[0] == "weather" || o.args[0] == "graph")) {
+	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && strings.Contains(" calendar images weather graph photo memo read files sync ", " "+o.args[0]+" ")) {
 		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo、calendar、images、weather、graph で使います"+hint)
 		return exitUsage
 	}
@@ -371,6 +430,10 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "brain-deck: %s は %s で使います%s\n", f.name, f.cmds, hint)
 			return exitUsage
 		}
+	}
+	if (len(o.vals) > 0 || len(o.flags) > 0) && !strings.Contains(subCommands, " "+o.args[0]+" ") {
+		fmt.Fprintln(stderr, "brain-deck: -o、--of、--portrait などは photo、memo、read、files、sync で使います"+hint)
+		return exitUsage
 	}
 	var cmd func(*Client) (string, error)
 	runningCmd, warnOut = o.args[0], stderr
@@ -406,6 +469,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runExec(o, stdout, stderr)
 	case "images":
 		cmd, err = imagesCommand(o)
+	case "photo":
+		cmd, err = photoCommand(o)
 	case "time":
 		if len(o.args) != 2 || o.args[1] != "sync" {
 			err = usageError("time のあとには sync を書きます（brain-deck time sync）")

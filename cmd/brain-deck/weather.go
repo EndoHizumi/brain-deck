@@ -414,9 +414,17 @@ func makeIcon(svg []byte, box image.Point) ([]byte, image.Point, error) {
 
 // uploadFile は、kind のファイルを upload_* で送り、upload_end の結果を返す。
 func uploadFile(c *Client, kind, name string, data []byte) (json.RawMessage, error) {
+	return uploadFileWith(c, kind, name, data, nil)
+}
+
+// uploadFileWith は、upload_begin に extra の項目（photo の of など）を足して送る。
+func uploadFileWith(c *Client, kind, name string, data []byte, extra map[string]any) (json.RawMessage, error) {
 	sum := sha256.Sum256(data)
-	raw, err := c.Call("upload_begin", map[string]any{"kind": kind, "sha256": hex.EncodeToString(sum[:]), "bytes": len(data),
-		"name": name, "source": "brain-deck"}, callTimeout())
+	begin := map[string]any{"kind": kind, "sha256": hex.EncodeToString(sum[:]), "bytes": len(data), "name": name, "source": "brain-deck"}
+	for k, v := range extra {
+		begin[k] = v
+	}
+	raw, err := c.Call("upload_begin", begin, callTimeout())
 	if err != nil {
 		return nil, err
 	}
