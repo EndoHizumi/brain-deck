@@ -1,0 +1,14 @@
+{
+  "rev": 3,
+  "received_at": "2026-10-06T00:05:10Z",
+  "area": "東京都 東京",
+  "office": "気象庁",
+  "public_time": "2026-10-05T20:00:00Z",
+  "fetched_at": "2026-10-06T00:05:00Z",
+  "source": "brain-deck",
+  "days": [
+    {"date": "2026-10-06", "telop": "晴時々曇", "icon": "101", "max": 26, "min": null, "rain": [null, 10, 30, 60]},
+    {"date": "2026-10-07", "telop": "曇のち一時雨", "icon": "212", "max": 22, "min": 17, "rain": [20, 40, 70, 50]},
+    {"date": "2026-10-08", "telop": "晴れ", "icon": "100", "max": 25, "min": 15, "rain": [0, 0, 10, 10]}
+  ]
+}

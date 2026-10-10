@@ -252,6 +252,28 @@ func (cv *Canvas) fill(r image.Rectangle, c RGB) {
 	}
 }
 
+// at は、(x, y) の今の色（8 ビットに戻したもの）。
+func (cv *Canvas) at(x, y int) RGB {
+	X, Y := cv.phys(x, y)
+	o := Y*cv.stride + X*cv.pf.Bpp
+	var v uint32
+	for i := 0; i < cv.pf.Bpp; i++ {
+		v |= uint32(cv.pix[o+i]) << (8 * i)
+	}
+	c := cv.pf.unpack(v)
+	return RGB{c.R, c.G, c.B}
+}
+
+// set は、(x, y) を c にする。
+func (cv *Canvas) set(x, y int, c RGB) {
+	X, Y := cv.phys(x, y)
+	o := Y*cv.stride + X*cv.pf.Bpp
+	v := cv.pf.pack(c)
+	for i := 0; i < cv.pf.Bpp; i++ {
+		cv.pix[o+i] = byte(v >> (8 * i))
+	}
+}
+
 // frame は幅 t の枠を描く。
 func (cv *Canvas) frame(r image.Rectangle, t int, c RGB) {
 	cv.fill(image.Rect(r.Min.X, r.Min.Y, r.Max.X, r.Min.Y+t), c)

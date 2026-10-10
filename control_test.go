@@ -64,6 +64,8 @@ type testDaemon struct {
 	gadgets *GadgetService
 	todos   *TodoService
 	cals    *CalendarService
+	weather *WeatherService
+	icons   *IconStore
 	images  *ImageStore
 	dataDir string
 	ctl     *Controller
@@ -132,8 +134,10 @@ func newTestDaemon(t *testing.T, src string, setup ...func(*testDaemon)) *testDa
 	rt.gadgets = d.gadgets
 	d.engine.SetWidgets(rt)
 	d.images = OpenImageStore(filepath.Join(d.dataDir, "images"))
+	d.weather = NewWeatherService(OpenStore(d.dataDir))
+	d.icons = OpenIconStore(filepath.Join(d.dataDir, "weather-icons"))
 	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, todos: d.todos,
-		cals: d.cals, images: d.images, qrs: d.qrs, gadgets: d.gadgets, started: time.Now()}
+		cals: d.cals, weather: d.weather, icons: d.icons, images: d.images, qrs: d.qrs, gadgets: d.gadgets, started: time.Now()}
 	for _, f := range setup {
 		f(d)
 	}

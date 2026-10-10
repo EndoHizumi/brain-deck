@@ -803,6 +803,8 @@ func main() {
 	pngCalPage := flag.Int("render-calendar-page", 0, "-render-png で、カレンダーのセルに出すページ（1 から。0 なら触っていないときのページ）")
 	pngMonthOffset := flag.Int("render-month-offset", 0, "-render-png で、月の表示に出す月（今月からいくつ送ったか。-1 で先月）")
 	pngMonthSelect := flag.String("render-month-select", "", "-render-png で、月の表示で選んだ日（YYYY-MM-DD）。follow のカレンダーにもその日の予定が出る")
+	pngWeather := flag.String("render-weather", "", "-render-png で、天気のセルに出す予報（weather.json の形のファイル）")
+	pngIcons := flag.String("render-weather-icons", "", "-render-png で、天気アイコンを探すディレクトリ（省略すると -data-dir の weather-icons）")
 	pngImages := flag.String("render-images", "", "-render-png と -check で、背景画像を探すディレクトリ（省略すると -data-dir の images）")
 	dataDir := flag.String("data-dir", defaultDataDir, "ウィジェットのデータ、背景画像、時刻合わせの記録を置くディレクトリ")
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
@@ -897,6 +899,10 @@ func main() {
 	imagesDir := filepath.Join(*dataDir, "images")
 	if *pngImages != "" {
 		imagesDir = *pngImages
+	}
+	iconsDir := filepath.Join(*dataDir, "weather-icons")
+	if *pngIcons != "" {
+		iconsDir = *pngIcons
 	}
 	switch {
 	case *recOut != "":
@@ -1000,6 +1006,18 @@ func main() {
 			}
 			env.Calendar = &d
 		}
+		if *pngWeather != "" {
+			b, err := os.ReadFile(*pngWeather)
+			if err != nil {
+				log.Fatal(err)
+			}
+			var d WeatherData
+			if err := json.Unmarshal(b, &d); err != nil {
+				log.Fatalf("%s: %v", *pngWeather, err)
+			}
+			env.Weather = &d
+		}
+		env.WeatherIcons = NewIconStore(iconsDir)
 		for _, l := range km.Layers {
 			if l.Grid == nil {
 				continue
@@ -1079,6 +1097,8 @@ func main() {
 	qrs := NewQRService(store)
 	todos := NewTodoService(store)
 	cals := NewCalendarService(store)
+	weather := NewWeatherService(store)
+	icons := OpenIconStore(iconsDir)
 	gadgets := NewGadgetService(store)
 	addAtExit(gadgets.Shutdown)
 	battery := NewBatteryService("/sys")
@@ -1101,6 +1121,8 @@ func main() {
 		env.QR = qrs.Snapshot()
 		env.Todo = todos.Snapshot()
 		env.Calendar = cals.Snapshot()
+		env.Weather = weather.Snapshot()
+		env.WeatherIcons = icons
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1150,6 +1172,8 @@ func main() {
 				battery.SetOnChange(d.Poke)
 				todos.SetOnChange(d.Poke)
 				cals.SetOnChange(d.Poke)
+				weather.SetOnChange(d.Poke)
+				icons.SetOnChange(d.Poke)
 				images.SetOnChange(d.Invalidate)
 				usb.OnChange(d.Invalidate) // トラックパッドの「マウスはオフ」と、メディアキーのセルを描き直す
 				images.Preload(preloadOrder(cfg))
@@ -1189,6 +1213,8 @@ func main() {
 			dim:     dim,
 			todos:   todos,
 			cals:    cals,
+			weather: weather,
+			icons:   icons,
 			images:  images,
 			usb:     usb,
 			term:    term,
@@ -1199,6 +1225,8 @@ func main() {
 		ctl.uploads = NewUploads()
 		ctl.uploads.Register("update", upd.UploadKind())
 		ctl.uploads.Register("image", images.UploadKind())
+		ctl.uploads.Register(iconUploadKnd, icons.UploadKind())
+		icons.SetWanted(ctl.iconBoxes) // 上限を超えたら、今の設定で使わない大きさのアイコンから消す
 		if upd.Unit == "" {
 			log.Printf("update: not running as a systemd service; brain-deck update and restart are unavailable")
 		}

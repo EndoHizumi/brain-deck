@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"log"
 	"os"
@@ -142,6 +143,8 @@ type request struct {
 	Calendars json.RawMessage `json:"calendars,omitempty"`
 	From      string          `json:"from,omitempty"`
 	Days      int             `json:"days,omitempty"`
+	// set_weather：予報（weather.go の WeatherRequest）
+	Weather json.RawMessage `json:"weather,omitempty"`
 	// 背景画像（image_*、get_image、prune_images）
 	SHA256 string   `json:"sha256,omitempty"` // image_begin：ファイル全体の SHA-256（16 進）
 	Bytes  int64    `json:"bytes,omitempty"`  // image_begin：ファイルの大きさ
@@ -420,6 +423,8 @@ type Controller struct {
 	dim     *Dimmer
 	todos   *TodoService
 	cals    *CalendarService
+	weather *WeatherService
+	icons   *IconStore // 天気アイコン
 	images  *ImageStore
 	usb     *USBMode
 	term    *TermMode
@@ -453,7 +458,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"max_line": maxLineBytes, "config_path": c.store.path,
 			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
-				"set_calendar", "get_calendar",
+				"set_calendar", "get_calendar", "set_weather", "get_weather", "get_weather_icon",
 				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_terminal",
 				"set_qr", "get_qr", "get_widgets", "set_presence",
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
@@ -567,6 +572,12 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.setCalendar(id, req)
 	case "get_calendar":
 		return ok(calendarJSON(c.cals.Snapshot(), calendarShown(c.store.Current())))
+	case "set_weather":
+		return c.setWeather(id, req)
+	case "get_weather":
+		return ok(c.weatherInfo())
+	case "get_weather_icon":
+		return c.weatherIcon(id, req)
 	case "list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images":
 		return c.image(id, req)
 	case "upload_begin", "upload_chunk", "upload_end", "upload_abort":
@@ -712,6 +723,90 @@ func (c *Controller) setCalendar(id json.RawMessage, req request) response {
 	vlogf("control: set_calendar %d calendars, %d events by %s", len(res), n, req.Source)
 	return response{ID: id, OK: true, Result: map[string]any{"rev": d.Rev, "calendars": res,
 		"shown": calendarShown(c.store.Current())}}
+}
+
+// iconBoxes は、今の設定の天気のセルで使うアイコンの箱の大きさ。
+func (c *Controller) iconBoxes() map[image.Point]bool {
+	w, h := screenSize(c.store.Current())
+	return weatherIconBoxes(c.store.Keymap(), w, h)
+}
+
+// boxList は、箱の大きさを [[幅, 高さ], ...]（大きい順）にする。
+func boxList(m map[image.Point]bool) [][2]int {
+	var ps []image.Point
+	for p := range m {
+		ps = append(ps, p)
+	}
+	sortPoints(ps)
+	out := [][2]int{}
+	for _, p := range ps {
+		out = append(out, [2]int{p.X, p.Y})
+	}
+	return out
+}
+
+// setWeather は set_weather を処理する。保存（SD カードへの書き込み）は待たずに返す。
+// 返事の icons_missing は、予報の天気と今の設定の箱の大きさの組で、まだないアイコン（PC が upload_* の weather_icon で送る）。
+func (c *Controller) setWeather(id json.RawMessage, req request) response {
+	if len(req.Weather) == 0 || req.Weather[0] != '{' {
+		return errResp(id, errBadRequest, `"weather" (an object) is required`, nil)
+	}
+	var wr WeatherRequest
+	if err := json.Unmarshal(req.Weather, &wr); err != nil {
+		return errResp(id, errBadRequest, "weather: "+err.Error(), nil)
+	}
+	d, kept, err := c.weather.Set(wr, req.Source, time.Now())
+	if err != nil {
+		return errResp(id, errBadRequest, err.Error(), nil)
+	}
+	boxes := c.iconBoxes()
+	vlogf("control: set_weather %d days (error %q) by %s", len(wr.Days), wr.Error, req.Source)
+	return response{ID: id, OK: true, Result: map[string]any{"rev": d.Rev, "kept": kept, "shown": weatherShown(c.store.Current()),
+		"icon_boxes": boxList(boxes), "icons_missing": weatherMissing(d, boxes, c.icons)}}
+}
+
+// weatherInfo は get_weather の結果。予報、今の設定で使う箱の大きさ、Brain にあるアイコン、まだないアイコン。
+func (c *Controller) weatherInfo() map[string]any {
+	d := c.weather.Snapshot()
+	boxes := c.iconBoxes()
+	icons, total := c.icons.List()
+	res := weatherJSON(d)
+	res["shown"] = weatherShown(c.store.Current())
+	res["icon_boxes"] = boxList(boxes)
+	res["icons"] = icons
+	res["icons_bytes"] = total
+	res["icons_limit"] = iconQuota
+	res["icons_missing"] = weatherMissing(d, boxes, c.icons)
+	return res
+}
+
+// weatherIcon は get_weather_icon を処理する。ファイルの中身を base64 で返す（設定 GUI のプレビュー用。1 行に収まる大きさ）。
+func (c *Controller) weatherIcon(id json.RawMessage, req request) response {
+	if _, _, ok := parseIconName(req.Name); !ok {
+		return errResp(id, errBadRequest, `"name" must be <icon>-<w>x<h> (such as 100-87x58)`, nil)
+	}
+	b, err := c.icons.Read(req.Name)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return errResp(id, errNotFound, fmt.Sprintf("weather icon %s is not on this Brain", req.Name), nil)
+	case err != nil:
+		return errResp(id, errInternal, err.Error(), nil)
+	}
+	// 背景画像の get_image と同じく、offset から length（既定と上限は image_chunk の大きさ）だけ返す
+	var off int64
+	if req.Offset != nil {
+		off = *req.Offset
+	}
+	if off < 0 || off > int64(len(b)) {
+		return errResp(id, errBadRequest, fmt.Sprintf(`"offset" must be 0..%d`, len(b)), nil)
+	}
+	n := req.Length
+	if n <= 0 || n > imageChunkMax {
+		n = imageChunkMax
+	}
+	end := min(off+int64(n), int64(len(b)))
+	return response{ID: id, OK: true, Result: map[string]any{"name": req.Name, "offset": off, "bytes": len(b),
+		"data": base64.StdEncoding.EncodeToString(b[off:end])}}
 }
 
 // todo は Todo のコマンドを処理する。保存（SD カードへの書き込み）は待たずに返す。

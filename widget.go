@@ -27,6 +27,7 @@ const (
 	widgetQR        = "qr"
 	widgetPresence  = "presence"
 	widgetMonth     = "month"
+	widgetWeather   = "weather"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -42,7 +43,7 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence, widgetMonth}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather}
 
 // ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
@@ -67,7 +68,7 @@ type WidgetDef struct {
 	ID         string         // text、qr：中身の名前。stopwatch、pomodoro、counter、presence：状態の名前（省略すると種類の名前）。month：follow で指す名前
 	Rows       int            // todo、calendar：1 ページの行数。0 なら高さで決める
 	PageReset  time.Duration  // todo、calendar、month：最後に触ってから、最初のページ（今月と今日）に戻るまでの時間。0 なら戻らない
-	Stale      time.Duration  // calendar：最終更新がこれより古ければ、古いと出す
+	Stale      time.Duration  // calendar、weather：最終更新がこれより古ければ、古いと出す
 	Calendars  []string       // calendar：出すカレンダーの名前。month：印を付けるカレンダー。空ならすべて
 	Follow     string         // calendar：選んだ日を見る月の表示の id。空なら今日
 	follow     *WidgetDef     // calendar：Follow の月の表示（compileKeymap が同じレイヤーから探して結ぶ）
@@ -92,6 +93,9 @@ type WidgetEnv struct {
 	Gadgets    gadgetFile           // stopwatch、pomodoro、counter、presence：状態（写し）
 	QR         map[string]TextEntry // qr：id ごとの中身（写し）
 	Battery    *BatteryInfo         // battery：電池の状態。nil なら読めない
+	Weather    *WeatherData         // weather：予報（写し。書き換えない）。nil なら一度も受け取っていない
+	// WeatherIcons は、天気アイコンの読み込み先。nil ならアイコンを描かない
+	WeatherIcons *IconStore
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
@@ -112,8 +116,8 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	if s.PageReset != "" && !paged && s.Widget != widgetMonth {
 		return nil, fmt.Errorf("page_reset is for widget: todo, calendar and month")
 	}
-	if s.Stale != "" && s.Widget != widgetCal {
-		return nil, fmt.Errorf("stale is for widget: calendar")
+	if s.Stale != "" && s.Widget != widgetCal && s.Widget != widgetWeather {
+		return nil, fmt.Errorf("stale is for widget: calendar and weather")
 	}
 	if s.Calendars != nil && s.Widget != widgetCal && s.Widget != widgetMonth {
 		return nil, fmt.Errorf("calendars is for widget: calendar and month")
@@ -170,9 +174,9 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		if s.Widget == widgetCal {
 			w.Stale = defaultCalStale
 			if s.Stale != "" {
-				d, err := time.ParseDuration(s.Stale)
-				if err != nil || d < time.Minute || d > 30*24*time.Hour {
-					return nil, fmt.Errorf("stale must be a duration from 1m to 720h (such as 3h)")
+				d, err := parseStale(s.Stale)
+				if err != nil {
+					return nil, err
 				}
 				w.Stale = d
 			}
@@ -193,6 +197,16 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		return &WidgetDef{Kind: s.Widget, ID: s.ID}, nil
 	case widgetBattery:
 		return &WidgetDef{Kind: s.Widget}, nil
+	case widgetWeather:
+		w := &WidgetDef{Kind: s.Widget, Stale: defaultWthStale}
+		if s.Stale != "" {
+			d, err := parseStale(s.Stale)
+			if err != nil {
+				return nil, err
+			}
+			w.Stale = d
+		}
+		return w, nil
 	case widgetStopwatch, widgetCounter, widgetPomodoro, widgetPresence:
 		id := widgetStateID(s)
 		if !validTextID(id) {
@@ -256,6 +270,15 @@ func parsePageReset(s string) (time.Duration, error) {
 	d, err := time.ParseDuration(s)
 	if err != nil || d < minPageReset || d > maxPageReset {
 		return 0, fmt.Errorf("page_reset must be a duration from %v to %v (such as 30s or 2m), or off", minPageReset, maxPageReset)
+	}
+	return d, nil
+}
+
+// parseStale は stale（1 分〜30 日）を読む。
+func parseStale(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < time.Minute || d > 30*24*time.Hour {
+		return 0, fmt.Errorf("stale must be a duration from 1m to 720h (such as 3h)")
 	}
 	return d, nil
 }
@@ -332,6 +355,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return calKey(w, env)
 	case widgetMonth:
 		return monthKey(w, env)
+	case widgetWeather:
+		return wthKey(w, env)
 	case widgetPad:
 		return fmt.Sprintf("trackpad\x00%v", env.MouseOff) // マウスのオンとオフで描き直す
 	}
@@ -358,6 +383,8 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		return calNext(v.Widget, env)
 	case widgetMonth:
 		return monthNext(v.Widget, env)
+	case widgetWeather:
+		return wthNext(v.Widget, env)
 	}
 	return gadgetNext(v, env)
 }
@@ -376,6 +403,8 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		drawCalendar(cv, area, v.Widget, env, subInk)
 	case widgetMonth:
 		drawMonth(cv, area, v.Widget, env)
+	case widgetWeather:
+		drawWeather(cv, area, v.Widget, env)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {
