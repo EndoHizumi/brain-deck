@@ -1,0 +1,15 @@
+# ~/.config/systemd/user/brain-deck-weather.timer
+# 有効にする：systemctl --user enable --now brain-deck-weather.timer
+[Unit]
+Description=1 時間ごとに Brain に天気予報を送る
+
+[Timer]
+# 予報の発表は 1 日に数回（5 時、11 時、17 時ごろ）なので、取りに行くのは 1 時間に 1 回で十分（API のお願い）。
+# 毎時 0 分にアクセスが集まらないよう、毎時 17 分に、さらに 0〜5 分ずらして起動する。
+# Persistent は、PC の電源断やスリープで逃した回を、起動やスリープからの復帰のあとにすぐ実行する
+OnCalendar=*:17
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

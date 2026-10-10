@@ -1,0 +1,13 @@
+# ~/.config/systemd/user/brain-deck-weather.service
+# brain-deck-weather.timer から 1 時間ごとに起動され、天気予報（とまだ Brain にない天気アイコン）を Brain に送る（Brain の時刻も合わせる）。
+# brain-deck は ~/.local/bin に置き、weather.yaml は ~/.config/brain-deck/ に置く（README の「天気」）
+[Unit]
+Description=Brain に天気予報を送る
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/brain-deck -q weather sync
+# 3（Brain がない）と 4（設定 GUI の接続中）は失敗にしない。7（予報を取得できなかった）は失敗として残す
+SuccessExitStatus=3 4
