@@ -1934,6 +1934,8 @@ Todo の配置と「…」での省略（`gui/src/todowidget.ts`）も、Go の�
 カレンダーの行、ページ、最終更新（`gui/src/calwidget.ts`）も、Go の表（`gui/test/fixtures/callayout.json`。3 つの予定 × 6 つの時刻 × 4 つの大きさ × 5 つの設定）と比べる。変えたら `LEFTHAND_UPDATE_CALLAYOUT=1 go test -run CalLayoutTable`。
 月の表示の日付、色、印、配置と、`follow` のカレンダーに出す選んだ日の予定（`gui/src/monthwidget.ts`）も、Go の表（`gui/test/fixtures/monthlayout.json`）と比べる。変えたら `LEFTHAND_UPDATE_MONTHLAYOUT=1 go test -run MonthLayoutTable`。実機では `sudo LEFTHAND_HW_TEST=1 timeout 90 ./lefthand.test -test.run HWMonth -test.v`（本番を止めてから。下の試験のユニットと同じく `Conflicts=` と `After=lefthand.service` を付ける）。
 
+グラフ、電卓、プレゼン用タイマーは `sudo LEFTHAND_HW_TEST=1 timeout 150 ./lefthand.test -test.run 'HWGraph|HWCalc|HWPresenter' -test.v`（描き直しの時間、描いている最中の入力の時間、画面が全体を描いたものと同じか。電卓の打ち込みは /dev/hidg0 ではなく一時ファイルに書いて、レポートを確かめる。プレゼン用タイマーは実際のバックライトで、動いているあいだ暗くならないことを確かめる。終わると明るさを戻す）。
+
 brain-deck のテストは、PTY を Brain の代わりにして、ポートの排他、開き直し、終了コードを確かめる（Linux だけ）。カレンダーは、Google と Outlook の形の ICS（繰り返し、例外、中止、夏時間、Windows の名前、VTIMEZONE）の展開と、ローカルの HTTP サーバーからの `calendar sync`（URL が漏れないこと、取得の失敗、終了コード 7）を確かめる。macOS 向けは `GOOS=darwin go vet ./cmd/brain-deck` でビルドできることだけを確かめている。
 
 本体キーの表（keymap_pwsh2.go）を変えたら、GUI に同梱した表も `LEFTHAND_UPDATE_KEYMAP=1 go test -run KeymapJSON` で書き直す。
