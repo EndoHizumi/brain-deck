@@ -100,6 +100,9 @@ const usage = `使い方：
                                       変換は設定 GUI と同じ計算。--center は元の画像の画素の位置、--brightness は百分率
   brain-deck photo add <ファイル> --of <番号|id>   横向きの写真を、縦向きの画面用に切り抜き直して足す
   brain-deck photo rm <番号|id>...    写真を消す。photo get <番号|id> -o <ファイル.png> で取り出す
+  brain-deck memo [list] [--json]     手書きメモ（widget: memo）の一覧（番号、id、ページと線の数、更新した日時）
+  brain-deck memo get <番号|id> -o <ファイル.png> [--page N]   メモを PNG に描き出す（ページは縦に並べる）
+  brain-deck memo rm <番号|id>...     メモを消す
   brain-deck time sync                PC の時刻を Brain に送る
   brain-deck status                   Brain の状態（版、時刻と内蔵 RTC、PC とのつながり、レイヤー、USB の形、電池）
   brain-deck battery log [-n 行数]    電池だけで動かしたときの電圧の記録（CSV。Brain の battery-log.csv）
@@ -197,7 +200,7 @@ type options struct {
 
 // subValueOpts、subFlagOpts は、photo、memo、read、files、sync のオプション。
 var (
-	subValueOpts = map[string]bool{"o": true, "out": true, "of": true, "zoom": true, "center": true, "brightness": true, "limit-items": true, "sort": true}
+	subValueOpts = map[string]bool{"o": true, "page": true, "out": true, "of": true, "zoom": true, "center": true, "brightness": true, "limit-items": true, "sort": true}
 	subFlagOpts  = map[string]bool{"portrait": true, "no-dither": true, "all": true, "force": true, "du": true, "recursive": true}
 )
 
@@ -471,6 +474,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = imagesCommand(o)
 	case "photo":
 		cmd, err = photoCommand(o)
+	case "memo":
+		cmd, err = memoCommand(o)
 	case "time":
 		if len(o.args) != 2 || o.args[1] != "sync" {
 			err = usageError("time のあとには sync を書きます（brain-deck time sync）")
@@ -900,8 +905,8 @@ func status(c *Client) (string, error) {
 			Count     int    `json:"count"`
 			Showing   string `json:"showing"`
 		} `json:"photo"`
-		RTC    *rtcInfo  `json:"rtc"`
-		Link   *linkInfo `json:"link"`
+		RTC  *rtcInfo  `json:"rtc"`
+		Link *linkInfo `json:"link"`
 	}
 	json.Unmarshal(raw, &st)
 	pcNow := time.Now()

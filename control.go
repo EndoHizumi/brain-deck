@@ -174,6 +174,7 @@ type request struct {
 	Restart bool   `json:"restart,omitempty"` // put_config_text：再起動が要る項目が変わってもよい（書いて再起動する）
 	Of      string `json:"of,omitempty"`      // upload_begin（kind: photo）：縦向きに切り抜き直したもとの写真の id
 	Photo   string `json:"photo,omitempty"`   // get_photo、delete_photo：写真の id
+	Memo    string `json:"memo,omitempty"`    // get_memo、delete_memo：メモの id（m1 など）
 }
 
 type response struct {
@@ -444,6 +445,7 @@ type Controller struct {
 	link    *LinkMonitor
 	guard   *BatteryGuard
 	photos  *PhotoStore
+	memos   *MemoService
 	frame   *PhotoFrame
 	dataDir string // battery-log.csv の置き場所
 	started time.Time
@@ -480,7 +482,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
-				"list_photos", "get_photo", "delete_photo"},
+				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -615,6 +617,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.configText(id, req)
 	case "list_photos", "get_photo", "delete_photo":
 		return c.photo(id, req)
+	case "list_memos", "get_memo", "delete_memo":
+		return c.memo(id, req)
 	case "get_battery_log":
 		text, err := readBatteryLog(c.dataDir, req.Lines)
 		if err != nil {
@@ -1488,6 +1492,44 @@ func (c *Controller) photo(id json.RawMessage, req request) response {
 func (c *Controller) photoErr(id json.RawMessage, err error) response {
 	switch {
 	case errors.Is(err, errPhotoNotFound):
+		return errResp(id, errNotFound, err.Error(), nil)
+	case errors.Is(err, errTransferBad):
+		return errResp(id, errBadRequest, err.Error(), nil)
+	}
+	return errResp(id, errInternal, err.Error(), nil)
+}
+
+// memo は list_memos、get_memo、delete_memo を処理する。
+func (c *Controller) memo(id json.RawMessage, req request) response {
+	if c.memos == nil {
+		return errResp(id, errInternal, "memos are not available", nil)
+	}
+	switch req.Cmd {
+	case "list_memos":
+		return response{ID: id, OK: true, Result: map[string]any{"memos": c.memos.List()}}
+	case "get_memo":
+		off := int64(0)
+		if req.Offset != nil {
+			off = *req.Offset
+		}
+		b, total, err := c.memos.Read(req.Memo, off, req.Length)
+		if err != nil {
+			return c.memoErr(id, err)
+		}
+		return response{ID: id, OK: true, Result: map[string]any{"memo": req.Memo, "offset": off, "total": total,
+			"data": base64.StdEncoding.EncodeToString(b)}}
+	case "delete_memo":
+		if err := c.memos.Delete(req.Memo); err != nil {
+			return c.memoErr(id, err)
+		}
+		return response{ID: id, OK: true, Result: map[string]any{"deleted": req.Memo}}
+	}
+	return errResp(id, errUnknownCmd, req.Cmd, nil)
+}
+
+func (c *Controller) memoErr(id json.RawMessage, err error) response {
+	switch {
+	case errors.Is(err, errMemoNotFound):
 		return errResp(id, errNotFound, err.Error(), nil)
 	case errors.Is(err, errTransferBad):
 		return errResp(id, errBadRequest, err.Error(), nil)

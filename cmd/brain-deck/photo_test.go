@@ -158,3 +158,48 @@ func TestExifOrientation(t *testing.T) {
 		t.Error("non-jpeg")
 	}
 }
+
+func TestMemoAgainstFakeBrain(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := newFakeBrain(t)
+	doc := `{"id":"m3","created":"2026-10-11T00:00:00Z","updated":"2026-10-11T00:00:00Z","pages":[{"w":40,"h":30,"strokes":[{"w":4,"p":[5,5,35,25]}]},{"w":40,"h":30,"strokes":[]}]}`
+	deleted := ""
+	f.handler = func(req map[string]any) (any, bool) {
+		switch req["cmd"] {
+		case "hello":
+			return map[string]any{"protocol": 1, "daemon": "lefthand", "version": "test", "commands": []string{"hello", "list_memos", "get_memo", "delete_memo"}}, true
+		case "list_memos":
+			return map[string]any{"memos": []any{map[string]any{"id": "m3", "pages": 2, "strokes": 1, "updated": "2026-10-11T00:00:00Z", "bytes": len(doc)}}}, true
+		case "get_memo":
+			off := int(req["offset"].(float64))
+			end := min(off+50, len(doc))
+			return map[string]any{"total": len(doc), "data": base64.StdEncoding.EncodeToString([]byte(doc[off:end]))}, true
+		case "delete_memo":
+			deleted = req["memo"].(string)
+			return map[string]any{"deleted": deleted}, true
+		}
+		return nil, false
+	}
+	go f.serve(nil)
+	if code, out, _ := runCLI(t, "--port", f.slave, "memo"); code != exitOK || !strings.Contains(out, "m3") || !strings.Contains(out, "2 ページ、1 本") {
+		t.Fatalf("list: %d %s", code, out)
+	}
+	p := filepath.Join(t.TempDir(), "m.png")
+	if code, out, errs := runCLI(t, "--port", f.slave, "memo", "get", "1", "-o", p); code != exitOK || !strings.Contains(out, "2 ページ") {
+		t.Fatalf("get: %d %s %s", code, out, errs)
+	}
+	fh, _ := os.Open(p)
+	img, err := png.Decode(fh)
+	if err != nil || img.Bounds().Dx() != 40 || img.Bounds().Dy() != 30+30+8 {
+		t.Fatalf("png %v %v", img.Bounds(), err)
+	}
+	if r, _, _, _ := img.At(20, 15).RGBA(); r>>8 != 0x10 {
+		t.Errorf("the line is not drawn: %x", r>>8)
+	}
+	if code, _, _ := runCLI(t, "--port", f.slave, "memo", "get", "1", "-o", p, "--page", "3"); code != exitUsage {
+		t.Errorf("--page 3: %d", code)
+	}
+	if code, _, _ := runCLI(t, "--port", f.slave, "memo", "rm", "m3"); code != exitOK || deleted != "m3" {
+		t.Errorf("rm: %d %q", code, deleted)
+	}
+}
