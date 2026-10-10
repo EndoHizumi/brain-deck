@@ -2,7 +2,7 @@
 
 import type { ActionSpec, Config, GridConfig, LayerConfig, MediaAction, MouseAction, TermMode, TouchConfig, UsbMode, WidgetKind } from './types'
 
-export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'media' | 'usb_mode' | 'terminal' | 'widget'
+export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'media' | 'usb_mode' | 'terminal' | 'rotate' | 'widget'
 export const LAYER_KINDS = ['layer_hold', 'layer_toggle', 'layer_oneshot', 'layer_to'] as const
 export type LayerKind = (typeof LAYER_KINDS)[number]
 
@@ -17,6 +17,7 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   media: 'メディアキー（再生、音量など）',
   usb_mode: 'USB の形の切り替え（マウスのオンとオフ）',
   terminal: '端末モード（Brain で PC にログインする）',
+  rotate: '画面の向きを変える（rotate）',
   widget: 'ウィジェット（時計、テキスト、Todo、カレンダー、トラックパッドなど）',
 }
 
@@ -59,7 +60,11 @@ export const USB_LABELS: Record<UsbMode, string> = { keyboard: 'マウスオフ'
 export const TERM_LABELS: Record<TermMode, string> = { on: '端末', off: '端末を出る', toggle: '端末' }
 
 // ACTION_FIELDS は、割り当ての種類を決める項目（ちょうど 1 つを書く）。ウィジェットのセルでは省略できる
-export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode', 'terminal'] as const
+export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode', 'terminal', 'rotate'] as const
+
+// 画面の向き（rotate.go）。セルに出す名前
+export const ROTATE_VALUES = ['next', '0', '90', '180', '270'] as const
+export const ROTATE_LABELS: Record<string, string> = { next: '回す', '0': '横向き', '90': '縦向き', '180': '横向き(逆)', '270': '縦向き(逆)' }
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
 export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド',
@@ -125,6 +130,7 @@ export function actionKind(a: ActionSpec): ActionKind {
   if (a.media !== undefined) return 'media'
   if (a.usb_mode !== undefined) return 'usb_mode'
   if (a.terminal !== undefined) return 'terminal'
+  if (a.rotate !== undefined) return 'rotate'
   if (a.widget !== undefined) return 'widget'
   return 'none'
 }
@@ -163,6 +169,7 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   else if (k === 'media') s = `media: ${a.media}`
   else if (k === 'usb_mode') s = `usb_mode: ${a.usb_mode}`
   else if (k === 'terminal') s = `terminal: ${a.terminal}`
+  else if (k === 'rotate') s = `rotate: ${a.rotate}`
   else s = `${k}: ${actionTarget(a)}`
   if (a.widget !== undefined) {
     const opts = (['format', 'date_format', 'tz', 'id', 'rows', 'work', 'break'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
@@ -226,6 +233,10 @@ export function normalizeConfig(raw: any): Config {
     if (l.keys) l.keys = normalizeMap(l.keys)
     if (l.soft_keys) l.soft_keys = normalizeMap(l.soft_keys)
     if (l.touch?.cells) l.touch.cells = normalizeMap(l.touch.cells)
+    if (l.touch_portrait?.cells) l.touch_portrait.cells = normalizeMap(l.touch_portrait.cells)
+  }
+  for (const a of cfg.home?.apps ?? []) {
+    if (a && typeof a === 'object') for (const f of ['name', 'icon', 'layer']) if (typeof a[f] === 'number') a[f] = String(a[f])
   }
   return cfg as Config
 }
@@ -237,6 +248,7 @@ export function clean(cfg: Config): Config {
     if (l.keys && Object.keys(l.keys).length === 0) delete l.keys
     if (l.soft_keys && Object.keys(l.soft_keys).length === 0) delete l.soft_keys
     if (l.touch?.cells && Object.keys(l.touch.cells).length === 0) delete l.touch.cells
+    if (l.touch_portrait?.cells && Object.keys(l.touch_portrait.cells).length === 0) delete l.touch_portrait.cells
     if (l.label === '') delete l.label
   }
   if (c.touch?.soft_areas && Object.keys(c.touch.soft_areas).length === 0) delete c.touch.soft_areas
@@ -271,8 +283,24 @@ export function parseCellKey(k: string): [number, number] | null {
   return m ? [+m[1], +m[2]] : null
 }
 
+// Orient は画面の向き（横向きは 800x480、縦向きは 480x800）。
+export type Orient = 'landscape' | 'portrait'
+
+// LayerGrid は、向きに合ったレイヤー自身の格子（rotate.go の portraitOf と同じ規則で作る）。
+export interface LayerGrid {
+  cols: number
+  rows: number
+  cells: Record<string, ActionSpec>
+  background?: string
+  own: boolean // 縦向きで touch_portrait を書いた（false なら横向きの格子から作ったもの）
+}
+
 // gridSize はレイヤー自身の格子の大きさ。touch がなければ null（下のレイヤーの格子を使う）。
-export function gridSize(cfg: Config, li: number): { cols: number; rows: number } | null {
+export function gridSize(cfg: Config, li: number, orient: Orient = 'landscape'): { cols: number; rows: number } | null {
+  if (orient === 'portrait') {
+    const g = layerGrid(cfg, li, 'portrait')
+    return g ? { cols: g.cols, rows: g.rows } : null
+  }
   const t = cfg.layers[li]?.touch
   if (!t) return null
   if (t.cols && t.rows) return { cols: t.cols, rows: t.rows }
@@ -281,10 +309,45 @@ export function gridSize(cfg: Config, li: number): { cols: number; rows: number 
   return null
 }
 
+// layerGrid は、向き orient でのレイヤー li の格子。touch がなければ null。
+export function layerGrid(cfg: Config, li: number, orient: Orient): LayerGrid | null {
+  const l = cfg.layers[li]
+  const size = gridSize(cfg, li)
+  if (!l?.touch || !size) return null
+  if (orient === 'landscape') return { ...size, cells: l.touch.cells ?? {}, background: l.touch.background, own: true }
+  const p = l.touch_portrait
+  if (p) {
+    let cols = p.cols ?? 0
+    let rows = p.rows ?? 0
+    if (!cols || !rows) {
+      const b = li !== 0 ? layerGrid(cfg, 0, 'portrait') : null
+      if (!b) return null
+      ;({ cols, rows } = b)
+    }
+    return { cols, rows, cells: p.cells ?? {}, background: p.background, own: true }
+  }
+  if (cfg.display?.portrait_grid === 'stretch') return { ...size, cells: l.touch.cells ?? {}, background: l.touch.background, own: false }
+  return { cols: size.rows, rows: size.cols, cells: transposeCells(l.touch.cells ?? {}), background: l.touch.background, own: false }
+}
+
+// transposeCells は、セルの列と行を入れ替える（span も入れ替える）。
+export function transposeCells(cells: Record<string, ActionSpec>): Record<string, ActionSpec> {
+  const out: Record<string, ActionSpec> = {}
+  for (const [k, a] of Object.entries(cells)) {
+    const p = parseCellKey(k)
+    if (!p) continue
+    const b = { ...a }
+    const [w, h] = spanOf(a)
+    if (w !== 1 || h !== 1) b.span = [h, w]
+    out[cellKey(p[1], p[0])] = b
+  }
+  return out
+}
+
 // resolveGrid は、レイヤーの番号を下から並べた stack について、透過を解決した格子を返す。
 // none は「割り当てなし」になる（下のレイヤーも使わない）。
 // span のあるセルは、覆う範囲がすべて上のレイヤーで空いているときだけ使う（layer.go の view と同じ）。
-export function resolveGrid(cfg: Config, stack: number[]): ResolvedGrid {
+export function resolveGrid(cfg: Config, stack: number[], orient: Orient = 'landscape'): ResolvedGrid {
   let cols = 0
   let rows = 0
   let owner = -1
@@ -293,18 +356,18 @@ export function resolveGrid(cfg: Config, stack: number[]): ResolvedGrid {
   const anchors = new Map<number, ResolvedAction>()
   for (let i = stack.length - 1; i >= 0; i--) {
     const li = stack[i]
-    const size = gridSize(cfg, li)
-    if (!size) continue
+    const lg = layerGrid(cfg, li, orient)
+    if (!lg) continue
     if (owner < 0) {
-      ;({ cols, rows } = size)
+      ;({ cols, rows } = lg)
       owner = li
       taken = new Array(cols * rows).fill(false)
-    } else if (size.cols !== cols || size.rows !== rows) {
+    } else if (lg.cols !== cols || lg.rows !== rows) {
       break
     }
-    wallpaper ||= cfg.layers[li].touch?.background || undefined
+    wallpaper ||= lg.background || undefined
     const claim: number[] = []
-    for (const [k, a] of Object.entries(cfg.layers[li].touch?.cells ?? {})) {
+    for (const [k, a] of Object.entries(lg.cells)) {
       const p = parseCellKey(k)
       if (!p || p[0] >= cols || p[1] >= rows) continue
       const [w, h] = spanOf(a)
@@ -331,22 +394,32 @@ export function resolveGrid(cfg: Config, stack: number[]): ResolvedGrid {
   return { cols, rows, cells, anchor, owner, wallpaper }
 }
 
-// anchorOf は、セル (col, row) を覆う割り当ての左上のセルを返す（タッチの判定、学習モード）。
+// barShown は、stack を重ねたときに状態の帯を出すか（layer.go の view と同じ規則）。
+// 上から見て、status_bar を書いたレイヤーか、格子（touch）を持つレイヤーで決める。
+export function barShown(cfg: Config, stack: number[]): boolean {
+  for (let i = stack.length - 1; i >= 0; i--) {
+    const l = cfg.layers[stack[i]]
+    if (l?.status_bar !== undefined) return l.status_bar
+    if (l?.touch) break
+  }
+  return cfg.status_bar?.show ?? false
+}
+
 export function anchorOf(g: ResolvedGrid, col: number, row: number): [number, number] {
   const i = g.anchor[row * g.cols + col] ?? -1
   return i < 0 ? [col, row] : [i % g.cols, Math.floor(i / g.cols)]
 }
 
 // resolveCell は、セルの割り当てを透過も含めて返す（none のときも返す。編集画面用）。
-export function resolveCell(cfg: Config, stack: number[], col: number, row: number): ResolvedAction | null {
+export function resolveCell(cfg: Config, stack: number[], col: number, row: number, orient: Orient = 'landscape'): ResolvedAction | null {
   let size: { cols: number; rows: number } | null = null
   for (let i = stack.length - 1; i >= 0; i--) {
     const li = stack[i]
-    const s = gridSize(cfg, li)
+    const s = layerGrid(cfg, li, orient)
     if (!s) continue
     if (!size) size = s
     else if (s.cols !== size.cols || s.rows !== size.rows) break
-    const a = cfg.layers[li].touch?.cells?.[cellKey(col, row)]
+    const a = s.cells[cellKey(col, row)]
     if (a) return { action: a, from: li }
   }
   return null
@@ -393,7 +466,7 @@ export function touchCell(t: TouchConfig, cols: number, rows: number, x: number,
 
 export interface Ref {
   layer: number
-  where: 'keys' | 'cells' | 'soft_keys'
+  where: 'keys' | 'cells' | 'soft_keys' | 'portrait_cells'
   id: string
   kind: LayerKind
 }
@@ -409,12 +482,13 @@ export function references(cfg: Config, name: string): Ref[] {
     scan('keys', l.keys)
     scan('cells', l.touch?.cells)
     scan('soft_keys', l.soft_keys)
+    scan('portrait_cells', l.touch_portrait?.cells)
   })
   return out
 }
 
 function mapOf(l: LayerConfig, where: Ref['where']): Record<string, ActionSpec> | undefined {
-  return where === 'cells' ? l.touch?.cells : l[where]
+  return where === 'cells' ? l.touch?.cells : where === 'portrait_cells' ? l.touch_portrait?.cells : l[where]
 }
 
 export function uniqueLayerName(cfg: Config, base = 'layer'): string {
@@ -438,6 +512,7 @@ export function renameLayer(cfg: Config, li: number, name: string): void {
     const a = mapOf(cfg.layers[r.layer], r.where)![r.id]
     a[r.kind] = name
   }
+  for (const a of cfg.home?.apps ?? []) if (a.layer === old) a.layer = name
   cfg.layers[li].name = name
 }
 
@@ -447,6 +522,7 @@ export function deleteLayer(cfg: Config, li: number): Ref[] {
   const name = cfg.layers[li].name
   const refs = references(cfg, name).filter((r) => r.layer !== li)
   for (const r of refs) delete mapOf(cfg.layers[r.layer], r.where)![r.id]
+  if (cfg.home) cfg.home.apps = cfg.home.apps.filter((a) => a.layer !== name) // そのレイヤーに入るアプリも消す
   cfg.layers.splice(li, 1)
   return refs
 }
@@ -462,12 +538,13 @@ export function setSoftAction(l: LayerConfig, name: string, a: ActionSpec | null
   else if (l.soft_keys) delete l.soft_keys[name]
 }
 
-export function setCellAction(l: LayerConfig, col: number, row: number, a: ActionSpec | null): void {
+export function setCellAction(l: LayerConfig, col: number, row: number, a: ActionSpec | null, orient: Orient = 'landscape'): void {
   const k = cellKey(col, row)
+  const f = orient === 'portrait' ? 'touch_portrait' : 'touch'
   if (a) {
-    l.touch ??= {}
-    ;(l.touch.cells ??= {})[k] = a
-  } else if (l.touch?.cells) delete l.touch.cells[k]
+    l[f] ??= {}
+    ;(l[f]!.cells ??= {})[k] = a
+  } else if (l[f]?.cells) delete l[f]!.cells![k]
 }
 
 // cellsOutside は、cols×rows の格子からはみ出すセルの番号を返す。
@@ -482,9 +559,10 @@ export function cellsOutside(g: GridConfig | undefined, cols: number, rows: numb
 
 export type Location =
   | { kind: 'key'; layer: number; id: string }
-  | { kind: 'cell'; layer: number; id: string }
+  | { kind: 'cell'; layer: number; id: string; portrait?: boolean }
   | { kind: 'soft'; layer: number; id: string }
-  | { kind: 'grid'; layer: number }
+  | { kind: 'grid'; layer: number; portrait?: boolean }
+  | { kind: 'home'; field?: string }
   | { kind: 'layer'; layer: number }
   | { kind: 'touch'; field?: string }
   | { kind: 'other'; path: string }
@@ -501,10 +579,13 @@ export function parsePath(path: string): Location {
     if (p[2] === 'keys' && p[3] !== undefined) return { kind: 'key', layer, id: p[3] }
     if (p[2] === 'touch' && p[3] === 'cells' && p[4] !== undefined) return { kind: 'cell', layer, id: p[4] }
     if (p[2] === 'touch') return { kind: 'grid', layer }
+    if (p[2] === 'touch_portrait' && p[3] === 'cells' && p[4] !== undefined) return { kind: 'cell', layer, id: p[4], portrait: true }
+    if (p[2] === 'touch_portrait') return { kind: 'grid', layer, portrait: true }
     if (p[2] === 'soft_keys' && p[3] !== undefined) return { kind: 'soft', layer, id: p[3] }
     return { kind: 'layer', layer }
   }
   if (p[0] === 'touch') return { kind: 'touch', field: p[1] }
+  if (p[0] === 'home' || p[0] === 'status_bar') return { kind: 'home', field: p.slice(1).join('/') || p[0] }
   return { kind: 'other', path }
 }
 

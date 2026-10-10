@@ -3,7 +3,9 @@
 import { FONT_H, type BitmapFont } from './font'
 import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
-import { LAYER_VERB, MEDIA_LABELS, MEDIA_OFF_LABEL, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
+import { BAR_BATT_H, BAR_BATT_TO, BAR_BATT_W, BAR_GAP, BAR_H, BAR_ITEMS_DEFAULT, BAR_PAD, BAR_SCALE, BAR_TEXT_Y, barItems, colBar, colBarRule, type BarEnv, type BarItemView } from './statusbar'
+import { HOME_ARROW, HOME_ICON_BASE, HOME_IMAGE_ICON, HOME_LABEL, HOME_NAME_GAP, HOME_SLOT_PAD, ICON_PALETTE, ICON_ROWS, homeGeometry, homeIconFit, homeName } from './home'
+import { LAYER_VERB, ROTATE_LABELS, barShown, MEDIA_LABELS, MEDIA_OFF_LABEL, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calCaption, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
@@ -20,7 +22,7 @@ import {
   contrastInk, pomoDurations, pomoInk, pomoText, pomodoroView, presenceStates, presenceView, qrFit, stateId, stopwatchElapsed,
   stopwatchText, type PresenceDef,
 } from './gadgetwidget'
-import type { ActionSpec, BatteryInfo, CalendarData, Config, GraphSeries, PressStyle, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
+import type { ActionSpec, BarItem, BatteryInfo, HomeConfig, CalendarData, Config, GraphSeries, PressStyle, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
 type RGB = [number, number, number]
@@ -155,7 +157,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     }
     return v
   }
-  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'media' && k !== 'usb_mode' && k !== 'terminal') {
+  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'media' && k !== 'usb_mode' && k !== 'terminal' && k !== 'rotate') {
     const t = actionTarget(a)
     const dest = cfg.layers.find((l) => l.name === t)
     const destTitle = dest ? layerTitle(dest) : (t ?? '')
@@ -165,7 +167,8 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     return { mapped: true, layer: true, label, sub }
   }
   const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : k === 'media' ? (MEDIA_LABELS[a.media!] ?? '')
-    : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '') : k === 'terminal' ? (TERM_LABELS[a.terminal!] ?? '') : prettyCombo(a.key ?? '')
+    : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '') : k === 'terminal' ? (TERM_LABELS[a.terminal!] ?? '')
+    : k === 'rotate' ? (ROTATE_LABELS[a.rotate!] ?? '') : prettyCombo(a.key ?? '')
   const v: CellView = label === '' || label === keys ? { mapped: true, layer: false, label: keys, sub: '' } : { mapped: true, layer: false, label, sub: keys }
   if (k === 'media') v.media = true
   return v
@@ -335,6 +338,9 @@ export interface PreviewParams {
   graph?: Record<string, GraphSeries> // グラフの値（Brain の get_graph）
   calc?: Record<string, CalcState> // 電卓の状態（Brain の get_widgets の calculator）
   calcPressed?: number // 電卓で押しているボタン（行 × 6 + 列。-render-calc-pressed）
+  home?: number // ホーム画面を、このページ（0 から）で描く（stack は使わない）
+  link?: string // 状態の帯の PC とのつながり（UDC の state。-render-link）。省略すると configured
+  lastSync?: Date | null // 状態の帯の、最後に同期した時刻（-render-last-sync）
 }
 
 export interface WidgetEnv {
@@ -370,9 +376,17 @@ export interface PreviewLayout {
 export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uint8ClampedArray; layout: PreviewLayout } {
   const W = p.w ?? 800
   const H = p.h ?? 480
-  const g = resolveGrid(p.cfg, p.stack)
-  const top = p.cfg.layers[p.stack[p.stack.length - 1]]
-  const title = top ? layerTitle(top) : ''
+  const portrait = W < H
+  const home = p.home !== undefined && p.cfg.home ? p.cfg.home : null
+  // ホーム画面は 1×1 の格子に、アプリを並べるセルを 1 つ置いたもの（home.go）
+  const g = home
+    ? { cols: 1, rows: 1, cells: [{ action: {} as ActionSpec, from: -1 }], anchor: [0], owner: -1, wallpaper: home.background }
+    : resolveGrid(p.cfg, p.stack, portrait ? 'portrait' : 'landscape')
+  const topL = p.cfg.layers[p.stack[p.stack.length - 1]]
+  const title = home ? home.label || HOME_LABEL : topL ? layerTitle(topL) : ''
+  const bar = home ? (home.status_bar ?? true) : barShown(p.cfg, p.stack)
+  const gtop = bar ? BAR_H : 0
+  const mode: Mode = home ? 'base' : p.mode
   const fill = (p.pressStyle ?? p.cfg.display?.press_style) === 'fill'
   const px = new Pixels(W, H)
   const env: WidgetEnv = { now: p.now ?? new Date(), synced: p.synced ?? true, texts: p.texts ?? {}, todo: p.todo?.items ?? [],
@@ -386,9 +400,9 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
     const [w, h] = own ? spanOf(own.action) : [1, 1]
     const [x0] = cellSpan(c, g.cols, W)
     const [, x1] = cellSpan(Math.min(c + w, g.cols) - 1, g.cols, W)
-    const [y0] = cellSpan(r, g.rows, H)
-    const [, y1] = cellSpan(Math.min(r + h, g.rows) - 1, g.rows, H)
-    return { x0, y0, x1, y1 }
+    const [y0] = cellSpan(r, g.rows, H - gtop)
+    const [, y1] = cellSpan(Math.min(r + h, g.rows) - 1, g.rows, H - gtop)
+    return { x0, y0: y0 + gtop, x1, y1: y1 + gtop }
   }
   px.fill({ x0: 0, y0: 0, x1: W, y1: H }, colBG)
   const image = (id?: string) => (id ? p.images?.(id) : undefined)
@@ -397,16 +411,25 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
     for (let c = 0; c < g.cols; c++) {
       const i = r * g.cols + c
       if (g.anchor[i] >= 0 && g.anchor[i] !== i) continue // span のセルに覆われている
+      if (home) {
+        // ホーム画面：枠も塗りも描かず、壁紙（なければ黒）の上にアプリを並べる
+        px.paintBack(rect(0, 0), colBG, wall)
+        drawHome(font, px, rect(0, 0), home, portrait, p.home!, image, !!wall)
+        continue
+      }
       const v = cellView(p.cfg, g.cells[i]?.action ?? null)
-      drawCell(font, px, rect(c, r), v, p.mode, p.pressed?.has(`${c},${r}`) ?? false, fill, env, wall, image(v.background))
+      drawCell(font, px, rect(c, r), v, mode, p.pressed?.has(`${c},${r}`) ?? false, fill, env, wall, image(v.background))
     }
   }
-  if (title) {
+  if (bar) {
+    drawBar(font, px, W, title, mode, p.cfg.status_bar?.items ?? BAR_ITEMS_DEFAULT,
+      { now: env.now, synced: env.synced, battery: env.battery, link: p.link ?? 'configured', mouseOff: env.mouseOff, lastSync: p.lastSync ?? null })
+  } else if (title) {
     const bw = font.textWidth(title) * badgeScale + 2 * badgePad
     const bh = FONT_H * badgeScale + 2 * badgePad
     const b = { x0: W - bw, y0: 0, x1: W, y1: bh }
-    px.fill(b, modeBadge[p.mode])
-    px.text(font, b.x0 + badgePad, b.y0 + badgePad, title, badgeScale, modeBadgeText[p.mode], b)
+    px.fill(b, modeBadge[mode])
+    px.text(font, b.x0 + badgePad, b.y0 + badgePad, title, badgeScale, modeBadgeText[mode], b)
   }
   return { pixels: px.data, layout: { cols: g.cols, rows: g.rows, w: W, h: H, rect, anchor: g.anchor } }
 }
@@ -1025,4 +1048,108 @@ function drawWeather(font: BitmapFont, px: Pixels, area: Rect, w: WeatherWidget,
 function hexRGB(s: string): RGB {
   const v = parseInt(s.slice(1), 16)
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255]
+}
+
+// ---------- 状態の帯（statusbar.go の drawBar） ----------
+
+function barItemWidth(font: BitmapFont, it: BarItemView): number {
+  return font.textWidth(it.text) * BAR_SCALE + (it.batt ? BAR_BATT_W + BAR_BATT_TO + 4 : 0)
+}
+
+function drawBar(font: BitmapFont, px: Pixels, W: number, title: string, mode: Mode, items: BarItem[], env: BarEnv): void {
+  px.fill({ x0: 0, y0: 0, x1: W, y1: BAR_H }, colBar)
+  px.fill({ x0: 0, y0: BAR_H - 1, x1: W, y1: BAR_H }, colBarRule)
+  const its = barItems(items, env)
+  let x = W - BAR_PAD
+  for (let i = its.length - 1; i >= 0; i--) {
+    const it = its[i]
+    x -= barItemWidth(font, it)
+    drawBarItem(font, px, x, it)
+    x -= BAR_GAP
+  }
+  const room = x - 2 * BAR_PAD
+  let t = title
+  while (t !== '' && font.textWidth(t) * BAR_SCALE > room) t = [...t].slice(0, -1).join('')
+  if (t !== '') {
+    const b = { x0: 0, y0: 0, x1: font.textWidth(t) * BAR_SCALE + 2 * BAR_PAD, y1: BAR_H - 1 }
+    px.fill(b, modeBadge[mode])
+    px.text(font, BAR_PAD, BAR_TEXT_Y, t, BAR_SCALE, modeBadgeText[mode], b)
+  }
+}
+
+function drawBarItem(font: BitmapFont, px: Pixels, x: number, it: BarItemView): void {
+  const b = it.batt
+  if (b) {
+    const y = Math.trunc((BAR_H - 1 - BAR_BATT_H) / 2)
+    const box = { x0: x, y0: y, x1: x + BAR_BATT_W, y1: y + BAR_BATT_H }
+    px.frame(box, 2, it.ink)
+    px.fill({ x0: box.x1, y0: y + 4, x1: box.x1 + BAR_BATT_TO, y1: box.y1 - 4 }, it.ink)
+    const inn = inset(box, 3)
+    let w = Math.trunc(((inn.x1 - inn.x0) * Math.min(Math.max(b.percent, 0), 100)) / 100)
+    if (b.percent > 0) w = Math.max(w, 1)
+    px.fill({ x0: inn.x0, y0: inn.y0, x1: inn.x0 + w, y1: inn.y1 }, it.ink)
+    x += BAR_BATT_W + BAR_BATT_TO + 4
+  }
+  px.text(font, x, BAR_TEXT_Y, it.text, BAR_SCALE, it.ink, { x0: x, y0: 0, x1: x + font.textWidth(it.text) * BAR_SCALE, y1: BAR_H })
+}
+
+// ---------- ホーム画面（home.go の drawHome） ----------
+
+const colHomeNav: RGB = [0x14, 0x1c, 0x28]
+
+function drawIcon(px: Pixels, x: number, y: number, s: number, name: string, clip: Rect): void {
+  const rows = ICON_ROWS[name] ?? ICON_ROWS.app
+  rows.forEach((row, gy) => {
+    for (let gx = 0; gx < row.length; gx++) {
+      const c = ICON_PALETTE[row[gx]]
+      if (c) px.fill(intersect({ x0: x + gx * s, y0: y + gy * s, x1: x + (gx + 1) * s, y1: y + (gy + 1) * s }, clip), c)
+    }
+  })
+}
+
+function drawTriangle(px: Pixels, r: Rect, dir: number, c: RGB): void {
+  const half = HOME_ARROW / 2
+  const cx = r.x0 + Math.trunc((r.x1 - r.x0) / 2) - Math.trunc(half / 2)
+  const cy = r.y0 + Math.trunc((r.y1 - r.y0) / 2)
+  for (let i = 0; i < half; i++) {
+    const x = dir > 0 ? cx + half - 1 - i : cx + i
+    px.fill({ x0: x, y0: cy - i - 1, x1: x + 1, y1: cy + i + 1 }, c)
+  }
+}
+
+function drawHome(font: BitmapFont, px: Pixels, area: Rect, h: HomeConfig, portrait: boolean, page: number,
+  image: (id?: string) => Image565 | undefined, hasWall: boolean): void {
+  const g = homeGeometry(area, h, portrait, page)
+  for (let i = g.first; i < g.last; i++) {
+    const slot = inset(g.slots[i - g.first], HOME_SLOT_PAD)
+    const a = h.apps[i]
+    const [name, ns] = homeName(font, a.name, slot.x1 - slot.x0)
+    const nameH = FONT_H * ns
+    const isImg = !!a.icon && /^[0-9a-f]{16}$/.test(a.icon)
+    const img = isImg ? image(a.icon) : undefined
+    const box = { x0: slot.x0, y0: slot.y0, x1: slot.x1, y1: slot.y1 - nameH - HOME_NAME_GAP }
+    let iw = HOME_IMAGE_ICON
+    let ih = HOME_IMAGE_ICON
+    let s = 0
+    if (img) [iw, ih] = [img.w, img.h]
+    else {
+      s = homeIconFit(box)
+      iw = ih = HOME_ICON_BASE * s
+    }
+    const total = ih + HOME_NAME_GAP + nameH
+    const y = slot.y0 + Math.trunc((slot.y1 - slot.y0 - total) / 2)
+    const x = slot.x0 + Math.trunc((slot.x1 - slot.x0 - iw) / 2)
+    if (img) px.blit(img, { x0: x, y0: y, x1: x + iw, y1: y + ih }, slot)
+    else drawIcon(px, x, y, s, isImg || !a.icon ? 'app' : a.icon, slot)
+    px.halo = hasWall
+    drawCentered(font, px, slot, y + ih + HOME_NAME_GAP, name, ns, colText)
+    px.halo = false
+  }
+  if (!g.nav) return
+  px.fill(g.nav, colHomeNav)
+  px.fill({ x0: g.nav.x0, y0: g.nav.y0, x1: g.nav.x1, y1: g.nav.y0 + 1 }, colTodoRule)
+  const ty = g.nav.y0 + Math.trunc((g.nav.y1 - g.nav.y0 - FONT_H * 2) / 2)
+  drawTriangle(px, g.prev!, -1, g.page > 0 ? colText : colTodoOff)
+  drawTriangle(px, g.next!, +1, g.page < g.pages - 1 ? colText : colTodoOff)
+  drawCentered(font, px, g.mid!, ty, `${g.page + 1}/${g.pages}`, 2, colSub)
 }

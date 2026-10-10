@@ -60,6 +60,18 @@ var patterns = []pattern{
 		w := 0.5 + 0.5*math.Sin(x*2*math.Pi*2+math.Sin(y*math.Pi*3)*1.5)
 		return mix(10, 20, w), mix(50, 80, y*0.5+w*0.3), mix(60, 110, x*0.6+w*0.2)
 	}},
+	{"アイコン 夕日", 64, 64, func(x, y float64) (float64, float64, float64) {
+		// ホーム画面のアイコン（64×64）の例。空のグラデーションに丸い太陽と海
+		if y > 0.68 {
+			w := 0.5 + 0.5*math.Sin(x*2*math.Pi*4+y*30)
+			return mix(20, 40, w), mix(60, 90, w), mix(120, 160, w)
+		}
+		d := math.Hypot(x-0.5, y-0.62)
+		if d < 0.22 {
+			return 255, mix(200, 120, d/0.22), 60
+		}
+		return mix(250, 120, y), mix(140, 60, y), mix(90, 140, y)
+	}},
 }
 
 // dither は、色を Floyd–Steinberg のディザリングで RGB565 にする（設定 GUI の既定と同じ方式）。

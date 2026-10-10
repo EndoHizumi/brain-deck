@@ -11,6 +11,7 @@ export interface ActionSpec {
   media?: MediaAction // メディアキー。キーボードとマウスの形（usb_mode: mouse）のときだけ送れる
   usb_mode?: UsbMode // USB の形の切り替え（USB を付け直すので 2〜3 秒切れる）
   terminal?: TermMode // 端末モード（Brain の画面とキーボードで PC にログインする）の切り替え
+  rotate?: string // 画面の向き（next で 90 度ずつ、0、90、180、270。rotate.go）
   label?: string
   span?: [number, number] // セルの大きさ [列数, 行数]。タッチのセルだけ
   background?: string // セルの背景画像の id（Brain の /var/lib/lefthand/images/<id>.565）。タッチのセルだけ
@@ -158,6 +159,8 @@ export interface LayerConfig {
   keys?: Record<string, ActionSpec>
   touch?: GridConfig
   soft_keys?: Record<string, ActionSpec>
+  touch_portrait?: GridConfig // 縦向き（480x800）の格子。省略すると display.portrait_grid のとおり横向きの格子から作る
+  status_bar?: boolean // 上に状態の帯を出すか。省略すると、格子を持つレイヤーなら status_bar.show、持たなければ下のレイヤー
 }
 
 export interface DisplayConfig {
@@ -166,6 +169,7 @@ export interface DisplayConfig {
   vt?: number
   rotate?: number
   press_style?: PressStyle // 押しているセルの見せ方。省略すると border
+  portrait_grid?: 'transpose' | 'stretch' // touch_portrait を書いていないレイヤーの縦向きの格子。省略すると transpose
 }
 
 export type PressStyle = 'border' | 'fill'
@@ -179,6 +183,36 @@ export interface Config {
   display?: DisplayConfig
   terminal?: TerminalConfig
   backlight?: BacklightConfig
+  home?: HomeConfig // ホーム画面（home.go）
+  status_bar?: StatusBarConfig // 状態の帯（statusbar.go）
+}
+
+// HomeApp はホーム画面のアプリ 1 つ。
+export interface HomeApp {
+  name: string
+  icon?: string // 組み込みのアイコンの名前か、画像の id。省略すると app
+  layer: string
+}
+
+// HomeConfig は設定の home。
+export interface HomeConfig {
+  cols?: number
+  rows?: number
+  portrait?: { cols: number; rows: number }
+  label?: string
+  start?: 'home' | 'base'
+  soft_key?: string
+  status_bar?: boolean
+  background?: string
+  apps: HomeApp[]
+}
+
+export type BarItem = 'time' | 'battery' | 'pc' | 'mouse' | 'sync'
+
+// StatusBarConfig は設定の status_bar。
+export interface StatusBarConfig {
+  show?: boolean
+  items?: BarItem[]
 }
 
 // 設定の backlight（backlight.go の BacklightConfig）。GUI では編集せず、そのまま残す
