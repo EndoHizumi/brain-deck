@@ -37,6 +37,10 @@ export class FakeDaemon {
   images = new Map<string, { name: string; w: number; h: number; data: Uint8Array; added: string }>()
   private upload: { token: string; id: string; name: string; w: number; h: number; bytes: number; parts: Uint8Array[]; got: number } | null = null
   quota = 16 << 20
+  // フォトフレームの写真（upload_* の kind: photo で受け取る）
+  photos = new Map<string, { name: string; w: number; h: number; data: Uint8Array; added: string; of?: string }>()
+  photoMax = 10
+  private photoUp: { token: string; name: string; of?: string; bytes: number; parts: Uint8Array[]; got: number } | null = null
   private nextTodo = 1
   dataSubscribed = false
   // 通知を送る先（FakeTransport が設定する）
@@ -82,7 +86,8 @@ export class FakeDaemon {
           commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
             'set_calendar', 'get_calendar', 'set_weather', 'get_weather', 'get_weather_icon', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal', 'set_rotate',
-            'set_qr', 'get_qr', 'get_widgets', 'set_presence', 'add_graph', 'clear_graph', 'get_graph'] })
+            'set_qr', 'get_qr', 'get_widgets', 'set_presence', 'add_graph', 'clear_graph', 'get_graph',
+            'upload_begin', 'upload_chunk', 'upload_end', 'upload_abort', 'list_photos', 'get_photo', 'delete_photo'], upload_kinds: ['photo'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
@@ -235,6 +240,16 @@ export class FakeDaemon {
         const r = this.imageCmd(req)
         return Array.isArray(r) ? err(r[0], r[1]) : ok(r)
       }
+      case 'upload_begin':
+      case 'upload_chunk':
+      case 'upload_end':
+      case 'upload_abort':
+      case 'list_photos':
+      case 'get_photo':
+      case 'delete_photo': {
+        const r = this.photoCmd(req)
+        return Array.isArray(r) ? err(r[0], r[1]) : ok(r)
+      }
       case 'subscribe_input':
         this.subscribed = req.enable !== false
         this.suppress = this.subscribed && !!req.suppress
@@ -242,6 +257,67 @@ export class FakeDaemon {
       default:
         return err('unknown_command', `unknown command ${JSON.stringify(req.cmd)}`)
     }
+  }
+
+  // photoCmd は、写真の受け取り（upload_*、kind: photo）、一覧、読み出し、削除（photo.go をまねる）。
+  private photoCmd(req: any): Record<string, unknown> | [string, string] {
+    switch (req.cmd) {
+      case 'upload_begin': {
+        if (req.kind !== 'photo') return ['bad_request', `unknown "kind" ${req.kind}`]
+        if (this.photos.size >= this.photoMax) return ['quota_exceeded', `there are already ${this.photos.size} photos (photo.max is ${this.photoMax})`]
+        this.photoUp = { token: 'p' + Date.now(), name: req.name ?? '', of: req.of, bytes: req.bytes, parts: [], got: 0 }
+        return { upload: this.photoUp.token, chunk_bytes: 98304 }
+      }
+      case 'upload_chunk': {
+        const u = this.photoUp
+        if (!u || u.token !== req.upload) return ['bad_request', 'no such upload']
+        const bin = atob(req.data)
+        const b = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i)
+        u.parts.push(b)
+        u.got += b.length
+        return { received: u.got }
+      }
+      case 'upload_end': {
+        const u = this.photoUp
+        if (!u || u.token !== req.upload) return ['bad_request', 'no such upload']
+        this.photoUp = null
+        const data = new Uint8Array(u.got)
+        let o = 0
+        for (const p of u.parts) {
+          data.set(p, o)
+          o += p.length
+        }
+        const w = data[4] | (data[5] << 8)
+        const h = data[6] | (data[7] << 8)
+        if (!(w === 800 && h === 480) && !(w === 480 && h === 800)) return ['bad_request', `a photo must be 800x480 or 480x800, got ${w}x${h}`]
+        // 本物は SHA-256 の先頭 16 文字。ここでは数える
+        const id = (this.photos.size + 1).toString(16).padStart(16, '0')
+        this.photos.set(id, { name: u.name, w, h, data, added: new Date().toISOString(), of: u.of })
+        return { id, count: this.photos.size, max: this.photoMax }
+      }
+      case 'upload_abort': {
+        const had = !!this.photoUp
+        this.photoUp = null
+        return { aborted: had }
+      }
+      case 'list_photos':
+        return { photos: [...this.photos].map(([id, x]) => ({ id, name: x.name, w: x.w, h: x.h, bytes: x.data.length, added: x.added, of: x.of })),
+          max: this.photoMax, total_bytes: [...this.photos.values()].reduce((a, x) => a + x.data.length, 0), free_bytes: 100 << 20, reserve_bytes: 64 << 20 }
+      case 'get_photo': {
+        const x = this.photos.get(req.photo)
+        if (!x) return ['not_found', `${req.photo} is not on this Brain`]
+        const off = req.offset ?? 0
+        const part = x.data.subarray(off, Math.min(off + 98304, x.data.length))
+        let bin = ''
+        for (const b of part) bin += String.fromCharCode(b)
+        return { photo: req.photo, offset: off, total: x.data.length, data: btoa(bin) }
+      }
+      case 'delete_photo':
+        if (!this.photos.delete(req.photo)) return ['not_found', `${req.photo} is not on this Brain`]
+        return { deleted: req.photo, count: this.photos.size }
+    }
+    return ['unknown_command', req.cmd]
   }
 
   // imageCmd は image.go の ImageStore をまねる（SHA-256 は確かめず、送る側が言った値を信じる）。誤りなら [code, message]。

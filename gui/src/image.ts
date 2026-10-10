@@ -270,6 +270,19 @@ export function fit565(src: Image565, dw: number, dh: number): Image565 {
   return { w: dw, h: dh, pix: out }
 }
 
+// image565RGBA は、RGB565 の画像を、Brain の画面と同じ色の RGBA にする（canvas に描くため）。
+export function image565RGBA(img: Image565): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(img.w * img.h * 4)
+  for (let i = 0; i < img.pix.length; i++) {
+    const [r, g, b] = unpack565(img.pix[i])
+    out[i * 4] = r
+    out[i * 4 + 1] = g
+    out[i * 4 + 2] = b
+    out[i * 4 + 3] = 255
+  }
+  return out
+}
+
 // ---------- ファイル ----------
 
 export function encodeImageFile(img: Image565): Uint8Array {

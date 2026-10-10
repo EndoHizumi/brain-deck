@@ -3,8 +3,8 @@
 // 結果の SHA-256 を、Go のテストが書いた testdata/imgconv.json と比べる。
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { convert, encodeImageFile, fit565, type ConvertParams, type SourceImage } from '../src/image'
-import { repoFile } from './helpers'
+import { convert, encodeImageFile, fit565, unpack565, type ConvertParams, type SourceImage } from '../src/image'
+import { decodePNG, repoFile } from './helpers'
 
 function pattern(w: number, h: number, alpha: boolean): SourceImage {
   const data = new Uint8ClampedArray(w * h * 4)
@@ -46,5 +46,20 @@ describe('画像の変換（brain-deck と同じ整数の計算）', () => {
     const port = fit565(img, 480, 800)
     expect(sha(encodeImageFile(port))).toBe(golden['fit-portrait'])
     expect(sha(encodeImageFile(fit565(port, 800, 480)))).toBe(golden['fit-landscape'])
+  })
+})
+
+describe('フォトフレームのプレビュー', () => {
+  it('縦向きの画面に横向きの写真を出すと、lefthand -render-photo と画素単位で同じ', () => {
+    // fixtures/photo-portrait.png は、up-fs の写真を lefthand -render-photo -render-rotate 90 で描いたもの（README の fixtures の作り方）
+    const img = fit565(convert(pattern(300, 200, false), 800, 480, cases[0][6]).img, 480, 800)
+    const png = decodePNG(repoFile('gui/test/fixtures/photo-portrait.png'))
+    expect([png.w, png.h]).toEqual([480, 800])
+    let diff = 0
+    for (let i = 0; i < img.pix.length; i++) {
+      const [r, g, b] = unpack565(img.pix[i])
+      if (png.data[i * 4] !== r || png.data[i * 4 + 1] !== g || png.data[i * 4 + 2] !== b) diff++
+    }
+    expect(diff).toBe(0)
   })
 })

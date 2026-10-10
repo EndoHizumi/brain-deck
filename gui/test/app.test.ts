@@ -526,9 +526,10 @@ describe('Todo', () => {
     expect(cell()).toEqual({ widget: 'clock', label: '消しゴム' })
   })
 
-  it('設定の backlight は、GUI で保存しても残る', async () => {
+  it('設定の backlight と photo は、GUI で保存しても残る', async () => {
     const cfg = sampleConfig()
-    cfg.backlight = { dim_after: '1m', off_after: '5m', dim_level: 1, wake_on_key: false }
+    cfg.backlight = { dim_after: '1m', off_after: '5m', dim_level: 1, wake_on_key: false, photo: true }
+    cfg.photo = { interval: '30s', night: 'off' }
     const daemon = new FakeDaemon(cfg)
     const t = await connected(setup({ daemon }))
     t.click('[data-cell="1,0"]')
@@ -541,7 +542,8 @@ describe('Todo', () => {
     t.click('#confirm-save')
     await vi.waitFor(() => expect(t.app.dirty).toBe(false))
     expect(daemon.config.layers[0].touch!.cells!['1,0'].label).toBe('けしごむ')
-    expect(daemon.config.backlight).toEqual({ dim_after: '1m', off_after: '5m', dim_level: 1, wake_on_key: false })
+    expect(daemon.config.backlight).toEqual({ dim_after: '1m', off_after: '5m', dim_level: 1, wake_on_key: false, photo: true })
+    expect(daemon.config.photo).toEqual({ interval: '30s', night: 'off' })
   })
 
   it('セルをカレンダーにすると、行数、戻るまでの時間、古いとみなすまで、出すカレンダーを決められる。Brain の予定を出す', async () => {
@@ -845,6 +847,56 @@ describe('背景画像', () => {
     // 編集中の設定で使っている画像は消さない（Brain の設定ではまだ使っていなくても）
     const prune = daemon.received.filter((r) => r.cmd === 'prune_images').at(-1)
     expect(prune.keep).toContain(id)
+  })
+})
+
+describe('写真（フォトフレーム）', () => {
+  const pick = (input: HTMLInputElement, name = 'photo.png') => {
+    Object.defineProperty(input, 'files', { value: [new File([new Uint8Array([1, 2, 3])], name, { type: 'image/png' })], configurable: true })
+    input.dispatchEvent(new Event('change'))
+  }
+
+  it('写真を切り抜いてすぐ Brain に送り、縦向きに切り抜き直し、見て、消す', async () => {
+    const t = await connected()
+    t.click('#section-photos')
+    await vi.waitFor(() => expect(t.app.photos).toBeTruthy())
+    expect(t.$('.photos-panel').textContent).toContain('まだ写真がありません')
+    // 横向きの写真を足す：800×480 に切り抜く。明るさはそのまま（背景画像と違い、暗くしない）
+    pick(t.$<HTMLInputElement>('.photo-add input[type=file]'), '海.png')
+    await vi.waitFor(() => expect(t.app.imageEdit?.result).toBeTruthy())
+    expect([t.app.imageEdit!.tw, t.app.imageEdit!.th]).toEqual([800, 480])
+    expect(t.app.imageEdit!.params.brightness).toBe(0)
+    expect(t.$('.image-edit').textContent).toContain('写真を切り抜く')
+    const want = t.app.imageEdit!.result!.file
+    t.click('#img-apply')
+    await vi.waitFor(() => expect(t.daemon.photos.size).toBe(1))
+    await vi.waitFor(() => expect(t.app.imageEdit).toBeNull())
+    const [id, ph] = [...t.daemon.photos][0]
+    expect(ph.name).toBe('海.png')
+    expect(Buffer.from(ph.data).equals(Buffer.from(want))).toBe(true)
+    expect(t.cmds()).not.toContain('set_config') // 設定は保存しない
+    await vi.waitFor(() => expect(t.$('.photos-panel').textContent).toContain('1 枚 / 上限 10 枚'))
+    // 縦向きに切り抜き直す（of にもとの写真）
+    pick(t.$(`tr[data-photo="${id}"]`).querySelector<HTMLInputElement>('input[type=file]')!, '海.png')
+    await vi.waitFor(() => expect(t.app.imageEdit?.result).toBeTruthy())
+    expect([t.app.imageEdit!.tw, t.app.imageEdit!.th]).toEqual([480, 800])
+    t.click('#img-apply')
+    await vi.waitFor(() => expect(t.daemon.photos.size).toBe(2))
+    const crop = [...t.daemon.photos.values()][1]
+    expect([crop.w, crop.h, crop.of]).toEqual([480, 800, id])
+    await vi.waitFor(() => expect(t.$('.photos-panel').textContent).toContain('（1 を縦向きに）'))
+    // 見る：横向きと縦向きの画面での見え方
+    t.$<HTMLButtonElement>(`tr[data-photo="${id}"] button`).click()
+    await vi.waitFor(() => expect(t.app.photoView?.id).toBe(id))
+    expect(t.$('canvas.photo-port')).toBeTruthy()
+    // 上限に達したら足せない
+    t.daemon.photoMax = 2
+    await t.app.loadPhotos()
+    expect(t.$<HTMLButtonElement>('#photo-add').disabled).toBe(true)
+    // 消す
+    t.$<HTMLButtonElement>(`tr[data-photo="${id}"] button.danger`).click()
+    await vi.waitFor(() => expect(t.daemon.photos.size).toBe(1))
+    expect(t.app.photoView).toBeNull()
   })
 })
 

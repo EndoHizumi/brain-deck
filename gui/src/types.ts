@@ -141,6 +141,27 @@ export interface BrainImage {
   refs: string[] // 今の設定で使っている場所（JSON Pointer）
 }
 
+// list_photos の結果（photo.go の PhotoList）
+export interface PhotoInfo {
+  id: string
+  name?: string
+  w: number
+  h: number
+  bytes: number
+  added: string
+  source?: string
+  of?: string // 縦向きに切り抜き直した写真なら、もとの写真の id
+}
+
+export interface PhotoListResult {
+  photos: PhotoInfo[]
+  max: number
+  total_bytes: number
+  free_bytes: number
+  reserve_bytes: number
+  showing?: string
+}
+
 export interface ImageListResult {
   images: BrainImage[]
   total_bytes: number
@@ -184,6 +205,7 @@ export interface Config {
   display?: DisplayConfig
   terminal?: TerminalConfig
   backlight?: BacklightConfig
+  photo?: PhotoConfig
   home?: HomeConfig // ホーム画面（home.go）
   status_bar?: StatusBarConfig // 状態の帯（statusbar.go）
   offline?: { home?: boolean } // PC から外したときの動き（offline.go）
@@ -240,7 +262,17 @@ export interface BacklightConfig {
   dim_level?: number
   wake_on_key?: boolean
   in_terminal?: boolean
-  offline?: { dim_after?: string; off_after?: string; level?: number; dim_level?: number } // PC から外しているあいだ
+  photo?: boolean // 暗くする代わりに写真を出す（photo.go）
+  offline?: { dim_after?: string; off_after?: string; level?: number; dim_level?: number; photo?: boolean } // PC から外しているあいだ
+}
+
+// 設定の photo（photo.go の PhotoConfig）。GUI では編集せず、そのまま残す
+export interface PhotoConfig {
+  interval?: string
+  order?: 'sequential' | 'random'
+  night?: string
+  level?: number
+  max?: number
 }
 
 // ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（get_widgets、widgets の通知。gadgets.go）

@@ -20,7 +20,7 @@ import { CELL_GAP, cellSpan, renderPreview, type Mode } from './preview'
 import { HOME_IMAGE_ICON, HOME_LABEL, ICON_NAMES, homeGeometry, homeGrid, isImageId } from './home'
 import { BAR_H, BAR_ITEMS_DEFAULT, BAR_ITEM_LABELS } from './statusbar'
 import {
-  DEFAULT_BRIGHTNESS, DITHER_LABELS, MAX_ZOOM, checkTarget, convert, decodeFile, decodeImageFile, encodeImageFile, fitCrop, fromBase64,
+  DEFAULT_BRIGHTNESS, DITHER_LABELS, MAX_ZOOM, checkTarget, convert, decodeFile, decodeImageFile, encodeImageFile, fit565, fitCrop, fromBase64, image565RGBA,
   sha256Hex, toBase64, type ConvertParams, type Crop, type Dither, type Image565, type SourceImage,
 } from './image'
 import { TEXT_ID_PATTERN, TEXT_STYLES, textExpired } from './textwidget'
@@ -39,7 +39,7 @@ import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './ports'
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
-  ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
+  ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, PhotoListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode, InputKind,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
@@ -61,6 +61,7 @@ export type BgTarget =
   | { kind: 'wallpaper'; layer: number; portrait?: boolean }
   | { kind: 'icon'; app: number }
   | { kind: 'homewall' }
+  | { kind: 'photo'; portrait: boolean; of?: string } // フォトフレームの写真（Brain の photos にすぐ送る）
 
 // このタブで持っている背景画像。file は Brain に送るファイル（このタブで変換したもの、または Brain から読んだもの）
 interface LocalImage {
@@ -180,7 +181,10 @@ export class App {
   previewOffline = false // プレビューを、PC から外したときの画面にする
   brainLastSync: Date | null = null // Brain で最後に時刻を合わせた時刻（get_status の time.last_set）
   // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
-  section: 'config' | 'todo' | 'console' = 'config'
+  section: 'config' | 'todo' | 'photos' | 'console' = 'config'
+  photos: PhotoListResult | null = null // Brain の写真（list_photos）
+  photoView: { id: string; img: Image565 } | null = null // 「見る」で読んだ写真
+  photoBusy = false
   // コンソールのタブ（Brain の 1 つ目のシリアル。設定のタブとは別のポートで、同時に開いておける）
   console: ConsoleSession
   private main: HTMLElement // 作り直す画面。端末（console.host）はその外に置き、作り直さない
@@ -610,6 +614,7 @@ export class App {
     const { w: W0, h: H0 } = this.keymap.screen
     const land = { w: Math.max(W0, H0), h: Math.min(W0, H0) }
     if (t.kind === 'icon') return { w: HOME_IMAGE_ICON, h: HOME_IMAGE_ICON }
+    if (t.kind === 'photo') return t.portrait ? { w: land.h, h: land.w } : land
     if (t.kind === 'homewall') return land
     const portrait = !!t.portrait
     const W = portrait ? land.h : land.w
@@ -628,6 +633,7 @@ export class App {
   }
 
   bgOf(t: BgTarget): string | undefined {
+    if (t.kind === 'photo') return undefined
     if (t.kind === 'icon') {
       const ic = this.cfg?.home?.apps[t.app]?.icon
       return isImageId(ic) ? ic : undefined
@@ -641,6 +647,7 @@ export class App {
 
   // setBg は背景画像を設定する（id が undefined なら外す）。描き直しと検証は呼び出し側で。
   setBg(t: BgTarget, id: string | undefined, cfg: Config | null = this.cfg): void {
+    if (t.kind === 'photo') return
     if (t.kind === 'icon') {
       const a = cfg?.home?.apps[t.app]
       if (a) a.icon = id ?? 'app'
@@ -681,7 +688,8 @@ export class App {
     } catch (e: any) {
       return this.say(`画像を読み込めません（PNG、JPEG、WebP が使えます）：${e?.message ?? e}`, 'error')
     }
-    this.startImageEdit(t, src, file.name || '画像', { cx: src.w / 2, cy: src.h / 2, zoom: 1, brightness: DEFAULT_BRIGHTNESS, dither: 'fs' })
+    // 写真はそのままの明るさ（背景画像は文字が読みやすいよう少し暗くする）
+    this.startImageEdit(t, src, file.name || '画像', { cx: src.w / 2, cy: src.h / 2, zoom: 1, brightness: t.kind === 'photo' ? 0 : DEFAULT_BRIGHTNESS, dither: 'fs' })
   }
 
   // reEditBg は、このタブで選んだ画像の切り抜きを直す。
@@ -717,12 +725,13 @@ export class App {
     const e = this.imageEdit
     if (!e?.result) return
     const file = e.result.file
+    if (e.target.kind === 'photo') return this.uploadPhoto(e.target, e.name, file)
     const id = (await sha256Hex(file)).slice(0, 16)
     this.images.set(id, { id, name: e.name, img: e.result.img, file, source: { src: e.src, params: { ...e.params }, name: e.name } })
     this.setBg(e.target, id)
     this.imageEdit = null
     this.editSrcCanvas = null
-    const where = { wallpaper: '壁紙に', homewall: 'ホーム画面の壁紙に', icon: 'アプリのアイコンに', cell: 'セルに' }[e.target.kind]
+    const where = { wallpaper: '壁紙に', homewall: 'ホーム画面の壁紙に', icon: 'アプリのアイコンに', cell: 'セルに', photo: '' }[e.target.kind]
     this.say(`画像「${e.name}」を${where}しました。「Brain に保存」で送ります`, 'ok')
     this.changed()
   }
@@ -793,6 +802,189 @@ export class App {
       this.say(`背景画像を消せませんでした：${e?.message ?? e}`, 'error')
     }
     await this.loadImages()
+  }
+
+  // ---------- 写真（フォトフレーム） ----------
+
+  get photosSupported(): boolean {
+    return !!this.hello?.commands?.includes('list_photos')
+  }
+
+  async loadPhotos(): Promise<void> {
+    if (!this.connected || !this.photosSupported) return
+    try {
+      this.photos = await this.client!.request<PhotoListResult>('list_photos')
+    } catch (e: any) {
+      this.say(`写真の一覧を読めませんでした：${e?.message ?? e}`, 'error')
+    }
+    this.render()
+  }
+
+  // uploadPhoto は、切り抜いた写真を upload_*（kind: photo）で Brain に送る。設定の保存とは別に、すぐ送る。
+  async uploadPhoto(t: { portrait: boolean; of?: string }, name: string, file: Uint8Array): Promise<void> {
+    const c = this.client
+    if (!c) return this.say('Brain に接続してください', 'error')
+    this.photoBusy = true
+    this.imageBusy = `写真を送っています：${name}`
+    this.render()
+    try {
+      const sha = await sha256Hex(file)
+      const b = await c.request<{ upload: string; chunk_bytes: number }>('upload_begin',
+        { kind: 'photo', sha256: sha, bytes: file.length, name, source: 'gui', ...(t.of ? { of: t.of } : {}) })
+      try {
+        for (let off = 0; off < file.length; off += b.chunk_bytes) {
+          const end = Math.min(off + b.chunk_bytes, file.length)
+          await c.request('upload_chunk', { upload: b.upload, offset: off, data: toBase64(file.subarray(off, end)) }, 15000)
+        }
+        const r = await c.request<{ id: string; count: number; max: number }>('upload_end', { upload: b.upload }, 30000)
+        this.say(`写真「${name}」を送りました（${r.count} 枚 / 上限 ${r.max} 枚）`, 'ok')
+      } catch (e) {
+        await c.request('upload_abort', { upload: b.upload }).catch(() => {})
+        throw e
+      }
+      this.imageEdit = null
+      this.editSrcCanvas = null
+    } catch (e: any) {
+      const why = e instanceof ProtocolError && (e.code === 'quota_exceeded' || e.code === 'no_space')
+        ? `${e.message}。写真を消してから足してください` : (e?.message ?? String(e))
+      this.say(`写真を送れませんでした：${why}`, 'error')
+    } finally {
+      this.photoBusy = false
+      this.imageBusy = null
+    }
+    await this.loadPhotos()
+  }
+
+  async deletePhoto(id: string): Promise<void> {
+    const p = this.photos?.photos.find((x) => x.id === id)
+    if (!this.deps.confirm(`写真「${p?.name || id}」を Brain から消します。よいですか？`)) return
+    try {
+      await this.client!.request('delete_photo', { photo: id })
+      if (this.photoView?.id === id) this.photoView = null
+      this.say('写真を消しました', 'ok')
+    } catch (e: any) {
+      this.say(`写真を消せませんでした：${e?.message ?? e}`, 'error')
+    }
+    await this.loadPhotos()
+  }
+
+  // viewPhoto は、写真を Brain から読んで、横向きと縦向きの画面での見え方を出す。
+  async viewPhoto(id: string): Promise<void> {
+    const c = this.client
+    if (!c) return
+    this.photoBusy = true
+    this.render()
+    try {
+      const parts: Uint8Array[] = []
+      let got = 0
+      for (;;) {
+        const r = await c.request<{ total: number; data: string }>('get_photo', { photo: id, offset: got }, 15000)
+        const b = fromBase64(r.data)
+        parts.push(b)
+        got += b.length
+        if (got >= r.total || !b.length) break
+      }
+      const all = new Uint8Array(got)
+      let o = 0
+      for (const p of parts) {
+        all.set(p, o)
+        o += p.length
+      }
+      const img = decodeImageFile(all)
+      if (!img) throw new Error('写真のファイルの形が違います')
+      this.photoView = { id, img }
+    } catch (e: any) {
+      this.say(`写真を読めませんでした：${e?.message ?? e}`, 'error')
+    } finally {
+      this.photoBusy = false
+    }
+    this.render()
+  }
+
+  private viewPhotos(): HTMLElement {
+    const panel = (...c: (HTMLElement | HTMLElement[] | null)[]) => h('section', { class: 'panel photos-panel' }, h('h2', null, '写真（フォトフレーム）'), c)
+    if (!this.connected) return panel(h('p', { class: 'hint' }, 'Brain に接続すると、写真を足したり消したりできます。写真は Brain に保存され、設定ファイルとは別です。'))
+    if (!this.photosSupported) return panel(h('div', { class: 'warn' }, 'Brain の lefthand がフォトフレームに対応していません。lefthand を新しくしてください'))
+    const l = this.photos
+    const pick = (t: BgTarget) => {
+      const input = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/*', class: 'hidden',
+        onchange: (e: Event) => {
+          const el = e.target as HTMLInputElement
+          const f = el.files?.[0]
+          el.value = ''
+          if (f) void this.openBgFile(t, f)
+        } })
+      return input
+    }
+    const addLand = pick({ kind: 'photo', portrait: false })
+    const addPort = pick({ kind: 'photo', portrait: true })
+    const full = !!l && l.photos.length >= l.max
+    const num = new Map((l?.photos ?? []).map((p, i) => [p.id, i + 1]))
+    const row = (p: PhotoListResult['photos'][number], i: number) => {
+      const land = p.w > p.h
+      const crop = pick({ kind: 'photo', portrait: true, of: p.id })
+      const hasCrop = l!.photos.some((x) => x.of === p.id)
+      return h('tr', { dataset: { photo: p.id } },
+        h('td', null, String(i + 1), l!.showing === p.id ? h('span', { class: 'hint', title: '今 Brain に出している写真' }, ' ●') : null),
+        h('td', null, p.name || '（名前なし）'),
+        h('td', null, land ? '横' : '縦', p.of ? h('span', { class: 'hint' }, num.has(p.of) ? `（${num.get(p.of)} を縦向きに）` : '（もとの写真は消してある）') : null),
+        h('td', null, new Date(p.added).toLocaleString()),
+        h('td', null, kb(p.bytes)),
+        h('td', null,
+          h('button', { class: 'small', disabled: this.photoBusy, onclick: () => void this.viewPhoto(p.id) }, '見る'),
+          land ? crop : null,
+          land ? h('button', { class: 'small', disabled: this.photoBusy || full, onclick: () => crop.click(),
+            title: '縦向きの画面では、縦向きに切り抜いた写真を代わりに出します。もとの写真のファイルを選び直してください' }, hasCrop ? '縦向きを足し直す…' : '縦向きに切り抜く…') : null,
+          h('button', { class: 'small danger', disabled: this.photoBusy, onclick: () => void this.deletePhoto(p.id) }, '削除')))
+    }
+    const v = this.photoView
+    return panel(
+      h('div', { class: 'photo-add',
+        ondragover: (e: DragEvent) => e.preventDefault(),
+        ondrop: (e: DragEvent) => {
+          e.preventDefault()
+          const f = e.dataTransfer?.files?.[0]
+          if (f && !full) void this.openBgFile({ kind: 'photo', portrait: false }, f)
+        } },
+        addLand, addPort,
+        h('button', { class: 'primary', id: 'photo-add', disabled: this.photoBusy || full, onclick: () => addLand.click() }, '写真を足す…'),
+        h('button', { id: 'photo-add-portrait', disabled: this.photoBusy || full, onclick: () => addPort.click(),
+          title: '縦向きの画面だけで出す写真（横向きの画面では、縮めて左右に帯を入れて出します）' }, '縦向きの写真を足す…'),
+        h('span', { class: 'hint' }, ' ファイルをここにドロップしてもよい')),
+      l
+        ? l.photos.length
+          ? h('table', { class: 'photos' },
+            h('thead', null, h('tr', null, ['', '名前', '向き', '足した日時', '容量', ''].map((x) => h('th', null, x)))),
+            h('tbody', null, l.photos.map(row)))
+          : h('p', { class: 'hint' }, 'まだ写真がありません。')
+        : h('p', { class: 'hint' }, '読み込んでいます…'),
+      l ? h('p', { class: full ? 'warn' : 'hint' }, `${l.photos.length} 枚 / 上限 ${l.max} 枚（設定の photo.max）。SD カードの空き ${kb(l.free_bytes)}（${kb(l.reserve_bytes)} は残します）。`) : null,
+      v
+        ? h('div', { class: 'photo-view' },
+          h('h3', null, '画面での見え方'),
+          h('div', { class: 'photo-screens' },
+            h('canvas', { class: 'photo-land', width: 800, height: 480 }),
+            h('canvas', { class: 'photo-port', width: 480, height: 800 })),
+          h('p', { class: 'hint' }, '左が横向き、右が縦向きの画面。向きが違う写真は、Brain と同じ計算で縮めて黒い帯を入れます（縦向きに切り抜いた写真があれば、縦向きの画面ではそちらを出します）。'))
+        : null,
+      h('p', { class: 'hint' },
+        '写真は、自動減光の「暗くする」段階の代わりに出します。設定ファイルに backlight.photo: true（PC から外しているあいだは backlight.offline.photo）を書いてください。' +
+        '間隔、順番、夜間（既定 23:00〜7:00 は写真を出さずに消す）、明るさは photo の項目です（例は config/photo-example.yaml）。' +
+        '時刻が合っていないとき、プレゼン用タイマーかポモドーロが動いているときは、写真を出さずに暗くします。写真をタッチすると、元の画面に戻ります（セルは押しません）。'),
+    )
+  }
+
+  // drawPhotoView は、「見る」で読んだ写真を、横向きと縦向きの画面に描く。
+  private drawPhotoView(): void {
+    const v = this.photoView
+    if (!v || this.section !== 'photos') return
+    for (const [cls, w, hh] of [['photo-land', 800, 480], ['photo-port', 480, 800]] as const) {
+      const c = this.root.querySelector<HTMLCanvasElement>(`canvas.${cls}`)
+      const ctx = c?.getContext('2d')
+      if (!c || !ctx) continue
+      const img = v.img.w === w && v.img.h === hh ? v.img : fit565(v.img, w, hh)
+      ctx.putImageData(new ImageData(image565RGBA(img) as any, w, hh), 0, 0)
+    }
   }
 
   // ---------- Todo ----------
@@ -1005,6 +1197,7 @@ export class App {
   cropScreen(): { w: number; h: number } {
     const t = this.imageEdit?.target
     const { w, h: hh } = this.keymap.screen
+    if (t?.kind === 'photo') return this.bgTargetSize(t)
     const portrait = (t?.kind === 'cell' || t?.kind === 'wallpaper') && !!t.portrait || (t?.kind === 'icon' || t?.kind === 'homewall') && this.orient === 'portrait'
     return portrait ? { w: Math.min(w, hh), h: Math.max(w, hh) } : { w: Math.max(w, hh), h: Math.min(w, hh) }
   }
@@ -1663,6 +1856,7 @@ export class App {
     if (showConsole) void this.console.shown()
     this.drawPreview()
     this.drawImageEdit()
+    this.drawPhotoView()
   }
 
   private view(): HTMLElement {
@@ -1671,7 +1865,7 @@ export class App {
       { class: 'app' },
       this.viewHeader(),
       this.viewMessages(),
-      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' ? this.viewEditor() : this.viewStart(),
+      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' || this.section === 'photos' ? this.viewEditor() : this.viewStart(),
       this.diff ? this.viewDiff() : null,
       this.imageEdit ? this.viewImageEdit() : null,
     )
@@ -1749,6 +1943,8 @@ export class App {
       this.viewSections(),
       this.section === 'todo'
         ? this.viewTodo()
+        : this.section === 'photos'
+        ? this.viewPhotos()
         : [
             h('div', { class: 'source' }, `編集中：${this.source}`, this.dirty ? h('span', { class: 'dirty' }, '（未保存の変更あり）') : null),
             this.viewTabs(),
@@ -1767,8 +1963,9 @@ export class App {
     )
   }
 
-  showSection(s: 'config' | 'todo' | 'console'): void {
+  showSection(s: 'config' | 'todo' | 'photos' | 'console'): void {
     this.section = s
+    if (s === 'photos') void this.loadPhotos()
     this.render()
     if (s === 'console') this.console.focus()
   }
@@ -1782,6 +1979,9 @@ export class App {
       h('button', { role: 'tab', id: 'section-todo', class: ['section', this.section === 'todo' && 'active'],
         'aria-selected': this.section === 'todo' ? 'true' : 'false', onclick: () => this.showSection('todo') },
         'Todo', open ? h('span', { class: 'count' }, String(open)) : null),
+      h('button', { role: 'tab', id: 'section-photos', class: ['section', this.section === 'photos' && 'active'],
+        'aria-selected': this.section === 'photos' ? 'true' : 'false', onclick: () => this.showSection('photos') },
+        '写真', this.photos?.photos.length ? h('span', { class: 'count' }, String(this.photos.photos.length)) : null),
       h('button', { role: 'tab', id: 'section-console', class: ['section', this.section === 'console' && 'active'],
         'aria-selected': this.section === 'console' ? 'true' : 'false', onclick: () => this.showSection('console') },
         'コンソール', this.console.open ? h('span', { class: 'count ok' }, '接続中') : null))
@@ -1994,7 +2194,7 @@ export class App {
     const size = e.result ? kb(e.result.file.length) : ''
     return h('div', { class: 'modal-back' },
       h('div', { class: 'modal image-edit', role: 'dialog', 'aria-label': '背景画像を切り抜く' },
-        h('h2', null, `${e.target.kind === 'wallpaper' || e.target.kind === 'homewall' ? '壁紙' : e.target.kind === 'icon' ? 'アイコン' : 'セルの背景画像'}を切り抜く（${e.name}）`),
+        h('h2', null, `${e.target.kind === 'photo' ? (e.target.portrait ? '縦向きの写真' : '写真') : e.target.kind === 'wallpaper' || e.target.kind === 'homewall' ? '壁紙' : e.target.kind === 'icon' ? 'アイコン' : 'セルの背景画像'}を切り抜く（${e.name}）`),
         h('div', { class: 'crop-row' },
           h('div', { class: 'crop-box' },
             h('canvas', { class: 'crop-src', width: 480, height: 320,
@@ -2007,7 +2207,7 @@ export class App {
                 this.updateImageEdit({ zoom: p.zoom * Math.exp(-ev.deltaY * 0.0015) })
                 this.syncEditControls()
               } }),
-            h('p', { class: 'hint' }, `明るい枠の中が使われます。ドラッグで動かし、ホイールか「拡大」で大きさを変えます。縦横比は${e.target.kind === 'wallpaper' ? '画面' : 'セル'}（${e.tw}×${e.th}）に合わせます。`)),
+            h('p', { class: 'hint' }, `明るい枠の中が使われます。ドラッグで動かし、ホイールか「拡大」で大きさを変えます。縦横比は${e.target.kind === 'wallpaper' || e.target.kind === 'photo' ? '画面' : 'セル'}（${e.tw}×${e.th}）に合わせます。`)),
           h('div', { class: 'crop-controls' },
             h('label', { class: 'row' }, '拡大 ', h('input', { type: 'range', id: 'img-zoom', min: 1, max: MAX_ZOOM, step: 0.01, value: p.zoom,
               oninput: (ev: Event) => this.updateImageEdit({ zoom: Number((ev.target as HTMLInputElement).value) }) })),
@@ -2030,7 +2230,8 @@ export class App {
         h('p', { class: 'hint' }, '下は Brain の画面のプレビュー（ラベル、文字の縁取り、押したときの枠も Brain と同じに描きます）。'),
         h('div', { class: 'buttons' },
           h('button', { id: 'img-cancel', onclick: () => this.cancelImageEdit() }, 'やめる'),
-          h('button', { class: 'primary', id: 'img-apply', disabled: !e.result, onclick: () => void this.applyImageEdit() }, 'この範囲にする'))))
+          h('button', { class: 'primary', id: 'img-apply', disabled: !e.result || this.photoBusy, onclick: () => void this.applyImageEdit() },
+            e.target.kind === 'photo' ? 'この範囲で Brain に送る' : 'この範囲にする'))))
   }
 
   // syncEditControls は、DOM を作り直さずに、切り抜きの画面の欄を今の値にする（ドラッグ中など）。
@@ -2102,14 +2303,17 @@ export class App {
       }
       const pv = this.root.querySelector<HTMLCanvasElement>('canvas.crop-preview')
       const pctx = pv?.getContext('2d')
-      if (pv && pctx && this.font && this.cfg && e.result) {
+      if (pv && pctx && e.result && e.target.kind === 'photo') {
+        // 写真は、Brain が出す絵そのもの（RGB565 を Brain と同じ色に戻したもの）
+        pctx.putImageData(new ImageData(image565RGBA(e.result.img) as any, e.result.img.w, e.result.img.h), 0, 0)
+      } else if (pv && pctx && this.font && this.cfg && e.result) {
         const cfg = structuredClone(this.cfg)
         const t = e.target
         this.setBg(t, '__edit__', cfg)
         const img = e.result.img
         const pressed = new Set(t.kind === 'cell' && e.showPressed ? [cellKey(t.col, t.row)] : [])
         const home = t.kind === 'icon' || t.kind === 'homewall'
-        const li = home ? 0 : t.layer
+        const li = home || t.kind === 'photo' ? 0 : t.layer
         const { pixels } = renderPreview(this.font, { cfg, stack: editStack(li), mode: this.previewMode(li), pressed,
           home: home ? (t.kind === 'icon' ? Math.floor(t.app / this.homePer()) : this.homePage) : undefined,
           images: (id) => (id === '__edit__' ? img : this.images.get(id)?.img),
