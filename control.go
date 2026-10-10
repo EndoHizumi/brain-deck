@@ -61,6 +61,7 @@ const (
 	errHash       = "hash_mismatch"   // 画像：受け取った中身の SHA-256 が違う。何も残していない
 	errRejected   = "update_rejected" // 更新：受け取ったものを確かめて断った。何も変えていない
 	errRestart    = "needs_restart"   // put_config_text：再起動が要る項目が変わった。何も書いていない
+	errDenied     = "not_allowed"     // files：見られる場所の外か、消せない場所
 )
 
 // 通知の種類（event）
@@ -177,6 +178,8 @@ type request struct {
 	Photo   string `json:"photo,omitempty"`   // get_photo、delete_photo：写真の id
 	Memo    string `json:"memo,omitempty"`    // get_memo、delete_memo：メモの id（m1 など）
 	Read    string `json:"read,omitempty"`    // delete_read：読み物の id
+	Path    string `json:"path,omitempty"`    // list_files、get_file、delete_file：場所（絶対パス。list_files で空なら場所の一覧）。upload_begin（kind: file）：置くフォルダ
+	BySize  bool   `json:"by_size,omitempty"` // list_files：大きい順（フォルダは中の合計。du）
 	// set_sync：同期の始めと終わり（sync.go）
 	OK      *bool      `json:"ok,omitempty"`
 	Summary string     `json:"summary,omitempty"`
@@ -455,6 +458,7 @@ type Controller struct {
 	reads   *ReadStore
 	sync    *SyncService
 	reader  *ReaderService
+	files   *FilesService
 	frame   *PhotoFrame
 	dataDir string // battery-log.csv の置き場所
 	started time.Time
@@ -491,7 +495,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
-				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync"},
+				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync", "list_files", "get_file", "delete_file"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -628,6 +632,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.photo(id, req)
 	case "list_memos", "get_memo", "delete_memo":
 		return c.memo(id, req)
+	case "list_files", "get_file", "delete_file":
+		return c.file(id, req)
 	case "set_sync":
 		if c.sync == nil {
 			return errResp(id, errInternal, "sync is not available", nil)
@@ -1086,7 +1092,7 @@ func (c *Controller) upload(id json.RawMessage, req request) response {
 		if src == "" {
 			src = "unknown"
 		}
-		res, err = c.uploads.Begin(UploadBegin{Kind: req.Kind, SHA256: req.SHA256, Bytes: req.Bytes, Name: req.Name, Source: src, Of: req.Of})
+		res, err = c.uploads.Begin(UploadBegin{Kind: req.Kind, SHA256: req.SHA256, Bytes: req.Bytes, Name: req.Name, Source: src, Of: req.Of, Path: req.Path})
 	case "upload_chunk":
 		if req.Offset == nil || req.Data == "" {
 			return errResp(id, errBadRequest, `"upload", "offset" and "data" (base64) are required`, nil)
@@ -1585,4 +1591,48 @@ func (c *Controller) readCmd(id json.RawMessage, req request) response {
 		return response{ID: id, OK: true, Result: map[string]any{"deleted": req.Read}}
 	}
 	return errResp(id, errUnknownCmd, req.Cmd, nil)
+}
+
+// file は list_files、get_file、delete_file を処理する（files.go。見られる場所だけ）。
+func (c *Controller) file(id json.RawMessage, req request) response {
+	if c.files == nil {
+		return errResp(id, errInternal, "files are not available", nil)
+	}
+	switch req.Cmd {
+	case "list_files":
+		l, err := c.files.List(req.Path, req.BySize, req.BySize)
+		if err != nil {
+			return c.fileErr(id, err)
+		}
+		return response{ID: id, OK: true, Result: l}
+	case "get_file":
+		off := int64(0)
+		if req.Offset != nil {
+			off = *req.Offset
+		}
+		b, total, err := c.files.Read(req.Path, off, req.Length)
+		if err != nil {
+			return c.fileErr(id, err)
+		}
+		return response{ID: id, OK: true, Result: map[string]any{"path": req.Path, "offset": off, "total": total,
+			"data": base64.StdEncoding.EncodeToString(b)}}
+	case "delete_file":
+		if err := c.files.Delete(req.Path); err != nil {
+			return c.fileErr(id, err)
+		}
+		return response{ID: id, OK: true, Result: map[string]any{"deleted": req.Path}}
+	}
+	return errResp(id, errUnknownCmd, req.Cmd, nil)
+}
+
+func (c *Controller) fileErr(id json.RawMessage, err error) response {
+	switch {
+	case errors.Is(err, errFilesMissing), errors.Is(err, errPhotoNotFound):
+		return errResp(id, errNotFound, err.Error(), nil)
+	case errors.Is(err, errFilesOutside), errors.Is(err, errFilesDenied):
+		return errResp(id, errDenied, err.Error(), nil)
+	case errors.Is(err, errTransferBad):
+		return errResp(id, errBadRequest, err.Error(), nil)
+	}
+	return errResp(id, errInternal, err.Error(), nil)
 }

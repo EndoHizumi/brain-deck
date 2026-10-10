@@ -185,6 +185,7 @@ type UploadBegin struct {
 	Name   string
 	Source string
 	Of     string // photo：縦向きに切り抜き直した写真の、もとの写真の id
+	Path   string // file：置くフォルダ
 }
 
 // uploadChunkMax は upload_chunk の 1 回の大きさ（base64 で 128 KiB。1 行の上限に収まる）。

@@ -871,6 +871,8 @@ func main() {
 	pngLastSync := flag.String("render-last-sync", "", "-render-png で、状態の帯に出す最後に同期した時刻（RFC 3339。省略すると未同期）")
 	pngRead := flag.String("render-read", "", "-render-png で、読み物のアプリのセルに、この読み物（brain-deck read add -o の .json.gz）を開いて出す")
 	pngReadPage := flag.Int("render-read-page", 1, "-render-read で出すページ（1 から）")
+	pngFiles := flag.String("render-files", "", "-render-png で、widget: files にこのフォルダの一覧を出す（「/」なら場所の一覧。ファイルなら中を見ている画面）")
+	pngFilesSize := flag.Bool("render-files-by-size", false, "-render-files を大きい順に")
 	pngReadSize := flag.Int("render-read-size", 24, "-render-read の文字の大きさ（24 か 32）")
 	pngReadH := flag.Bool("render-read-horizontal", false, "-render-read を横書きで出す")
 	pngMemo := flag.String("render-memo", "", "-render-png で、手書きメモのセルに出すメモ（memo の <id>.json の形のファイル。最後のページを出す）")
@@ -1187,6 +1189,16 @@ func main() {
 			env.Memo = OpenMemoService(dir).Snapshot()
 			os.RemoveAll(dir)
 		}
+		if *pngFiles != "" {
+			svc := NewFilesService(*dataDir, nil, nil, nil)
+			svc.SetConfig(cfg.Files)
+			area := renderWidgetArea(cfg, km, *pngLayer, w0(*pngSize), rotOf(cfg, *pngRotate), widgetFiles)
+			v, err := renderFilesView(svc, *pngFiles, *pngFilesSize, area)
+			if err != nil {
+				log.Fatal(err)
+			}
+			env.Files = v
+		}
 		for _, l := range km.Layers {
 			if l.Grid == nil {
 				continue
@@ -1362,6 +1374,13 @@ func main() {
 	reader := NewReaderService(reads)
 	syncs := NewSyncService(store)
 	widgetRT.reader = reader
+	files := NewFilesService(*dataDir, photos, memos, reads)
+	files.SetConfig(cfg.Files)
+	filesUI := NewFilesUI(files)
+	filesUI.photos, filesUI.images, filesUI.reads, filesUI.added = photos, images, reads, reader.Added
+	filesUI.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
+	widgetRT.files = filesUI
+	files.SetChanged(filesUI.reload)
 	memos.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	reader.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	syncs.SetNotify(func(msg string, ok bool) {
@@ -1384,6 +1403,7 @@ func main() {
 		env.Calc = calc.Snapshot()
 		env.Memo = memos.Snapshot()
 		env.Reader = reader.Snapshot()
+		env.Files = filesUI.Snapshot()
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1526,6 +1546,8 @@ func main() {
 				clock.SetRTCMode(c.Clock.rtcMode())
 				pp, _ := c.Photo.compile() // 検証済み
 				frame.SetParams(pp)
+				files.SetConfig(c.Files)
+				go filesUI.reload()
 				return nil
 			}},
 			engine:  e,
@@ -1553,6 +1575,7 @@ func main() {
 			reads:   reads,
 			sync:    syncs,
 			reader:  reader,
+			files:   files,
 			dataDir: *dataDir,
 			started: time.Now(),
 		}
@@ -1575,6 +1598,7 @@ func main() {
 			return res, err
 		}
 		ctl.uploads.Register("read", rk)
+		ctl.uploads.Register("file", files.UploadKind(filepath.Join(*dataDir, "files-tmp")))
 		ctl.uploads.Register(iconUploadKnd, icons.UploadKind())
 		icons.SetWanted(ctl.iconBoxes) // 上限を超えたら、今の設定で使わない大きさのアイコンから消す
 		if upd.Unit == "" {
@@ -1608,6 +1632,11 @@ func rotOf(cfg *Config, r int) int {
 
 // renderReaderArea は、-render-read で、レイヤーの読み物のアプリのセルの中の範囲（ページを数えるため）。
 func renderReaderArea(cfg *Config, km *Keymap, layer string, size image.Point, rot int) image.Rectangle {
+	return renderWidgetArea(cfg, km, layer, size, rot, widgetReader)
+}
+
+// renderWidgetArea は、-render-png のレイヤーで、kind のウィジェットを描く範囲。
+func renderWidgetArea(cfg *Config, km *Keymap, layer string, size image.Point, rot int, kind string) image.Rectangle {
 	e := NewEngine(km, &State{hid: NewHIDWriter(os.DevNull), active: map[string]Combo{}})
 	e.SetRotation(rot, size.X, size.Y, nil)
 	name, _, _ := strings.Cut(layer, ":")
@@ -1623,7 +1652,7 @@ func renderReaderArea(cfg *Config, km *Keymap, layer string, size image.Point, r
 	l := buildLayout(km, e.View())
 	l.W, l.H = rotatedSize(rot, size.X, size.Y)
 	for i, c := range l.Cells {
-		if c.Widget != nil && c.Widget.Kind == widgetReader && !c.Covered {
+		if c.Widget != nil && c.Widget.Kind == kind && !c.Covered {
 			inner := l.rect(i%l.Cols, i/l.Cols).Inset(cellGap + textMargin)
 			_, _, area := widgetCaption(inner, c.Label)
 			return area

@@ -59,7 +59,9 @@ func TestHWReader(t *testing.T) {
 		t.Logf("paginate %s %d vertical=%v: %d pages in %v", c.area, c.size, c.vertical, len(starts), time.Since(t0))
 	}
 
-	env := func() WidgetEnv { return WidgetEnv{Now: time.Now(), TimeSynced: true, Battery: &BatteryInfo{Percent: 80, Source: "test"}, Link: "configured"} }
+	env := func() WidgetEnv {
+		return WidgetEnv{Now: time.Now(), TimeSynced: true, Battery: &BatteryInfo{Percent: 80, Source: "test"}, Link: "configured"}
+	}
 	rs := NewReaderService(st)
 	e := NewEngine(km, &State{hid: NewHIDWriter(os.DevNull), active: map[string]Combo{}})
 	rt := NewWidgetRT(nil)
