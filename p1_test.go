@@ -517,7 +517,7 @@ func TestRenderRotatedHome(t *testing.T) {
 		out := filepath.Join(t.TempDir(), "x.png")
 		env := WidgetEnv{Now: time.Date(2026, 10, 6, 9, 41, 0, 0, time.Local), TimeSynced: true}
 		for _, layer := range []string{"", "tools", "system", "base", "mouse"} {
-			if err := renderPNG(cfg, km, out, layer, "0,0", "", 800, 480, rot, 1, env, nil); err != nil {
+			if err := renderPNG(cfg, km, out, layer, "0,0", "", 800, 480, rot, 1, false, env, nil); err != nil {
 				t.Fatalf("rot %d layer %q: %v", rot, layer, err)
 			}
 		}

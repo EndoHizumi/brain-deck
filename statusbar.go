@@ -92,7 +92,7 @@ type barItem struct {
 	batt *BatteryInfo // battery：絵を描く
 }
 
-// linkText は、PC とのつながり（UDC の state）を帯に出す文と色にする。分からなければ空。
+// linkText は、PC とのつながり（UDC の state か、link.go の power）を帯に出す文と色にする。分からなければ空。
 func linkText(state string) (string, RGB) {
 	switch state {
 	case "":
@@ -101,6 +101,8 @@ func linkText(state string) (string, RGB) {
 		return "PC", colInkOK
 	case "suspended":
 		return "PC休止", colBarDim
+	case linkPower:
+		return "給電のみ", colUnsynced
 	}
 	return "PCなし", colUnsynced
 }

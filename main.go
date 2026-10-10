@@ -41,6 +41,9 @@ import (
 
 var verbose bool
 
+// userActivity は、本体キーかタッチがあったときに呼ぶ（電池が少なくて電源を切ろうとしているのを取りやめる）。
+var userActivity = func() {}
+
 func vlogf(format string, args ...any) {
 	if verbose {
 		log.Printf(format, args...)
@@ -361,6 +364,7 @@ func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor, dim *Dimmer) {
 		case 1:
 			vlogf("kbd: %s", evString(ev))
 			dim.Key() // キーは暗いときもそのまま PC に送る（明るくするかは設定の wake_on_key）
+			userActivity()
 			if mon.KeyPressed(e, ev.Code) {
 				continue // 学習モード：設定 GUI に知らせるだけで、PC には送らない
 			}
@@ -473,6 +477,7 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 		// 触れた瞬間のセルで確定（スライドしても変えない）
 		if tp.down && !tp.pressed {
 			x, y := tp.x, tp.y
+			userActivity()
 			if tp.dim.TouchDown() {
 				// 暗かった：明るくするだけで、セルもソフトキーも押さない（設定 GUI の学習モードにも知らせない）
 				vlogf("touch: x=%d y=%d -> woke the backlight only", x, y)
@@ -674,7 +679,8 @@ func cellView(km *Keymap, a *Action) CellView {
 	label := a.Spec.Label
 	if a.Widget != nil {
 		// ウィジェットのセル。label は上に小さく出す見出し。タップで送るキーは出さない
-		return CellView{Mapped: true, Layer: a.Kind.isLayer(), Label: label, Widget: a.Widget, Background: a.Spec.Background}
+		return CellView{Mapped: true, Layer: a.Kind.isLayer(), Label: label, Widget: a.Widget, Background: a.Spec.Background,
+			NeedsPC: a.needsPC() || a.Widget.fromPC()}
 	}
 	var sub string
 	if a.Kind.isLayer() {
@@ -703,7 +709,10 @@ func cellView(km *Keymap, a *Action) CellView {
 	if a.Kind == actRotate {
 		keys = rotateLabels[a.Spec.Rotate]
 	}
-	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background, Media: a.Kind == actMedia}
+	if a.Kind == actInput {
+		keys = inputLabels[a.Spec.Input]
+	}
+	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background, Media: a.Kind == actMedia, NeedsPC: a.needsPC()}
 	if v.Label == "" || v.Label == keys {
 		v.Label, v.Sub = keys, ""
 	}
@@ -714,7 +723,7 @@ func cellView(km *Keymap, a *Action) CellView {
 func buildLayout(km *Keymap, v *View) *Layout {
 	l := &Layout{Cols: v.Cols, Rows: v.Rows, Cells: make([]CellView, len(v.Cells)),
 		Gen: v.Gen, Title: km.Layers[v.Top].title(), Mode: v.Mode, Press: km.Press, Wallpaper: v.Wallpaper,
-		Rotate: v.Rot, Bar: v.Bar, BarItems: km.Bar.Items}
+		Rotate: v.Rot, Bar: v.Bar, BarItems: km.Bar.Items, Offline: v.Offline}
 	for i, a := range v.Cells {
 		switch anc := v.Anchor[i]; {
 		case anc == i:
@@ -733,7 +742,8 @@ func buildLayout(km *Keymap, v *View) *Layout {
 // images は背景画像の読み込み先（-render-images。省略すると -data-dir の images）。
 // w×h は物理の画面の大きさで、rot の向きに回して描く。
 // homePage はホーム画面に出すページ（0 から）。
-func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h, rot, homePage int, env WidgetEnv, images ImageSource) error {
+// offline なら、PC から外れたときの画面（PC に送るセルを休みと描く）。
+func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle string, w, h, rot, homePage int, offline bool, env WidgetEnv, images ImageSource) error {
 	if cfg.Touch == nil {
 		return errors.New("config has no touch section")
 	}
@@ -748,6 +758,13 @@ func renderPNG(cfg *Config, km *Keymap, out, layer, pressedSpec, pressStyle stri
 	e.SetRotation(rot, w, h, nil)
 	if km.Home != nil {
 		km.Home.SetPage(homePage)
+	}
+	if offline {
+		e.mu.Lock()
+		e.offline = true
+		e.view = nil
+		e.refresh()
+		e.mu.Unlock()
 	}
 	if layer != "" {
 		name, kind, _ := strings.Cut(layer, ":")
@@ -834,7 +851,7 @@ func main() {
 	pngGraph := flag.String("render-graph", "", "-render-png で、グラフのセルに出す値（graph.json の形のファイル）")
 	pngRotate := flag.Int("render-rotate", -1, "-render-png で、画面の向き（0、90、180、270。-render-size は物理の大きさ）。省略すると設定の display.rotate")
 	pngHomePage := flag.Int("render-home-page", 1, "-render-png で、ホーム画面に出すページ（1 から）")
-	pngLink := flag.String("render-link", "configured", "-render-png で、状態の帯に出す PC とのつながり（UDC の state。configured、suspended、not attached、空なら出さない）")
+	pngLink := flag.String("render-link", "configured", "-render-png で、PC とのつながり（UDC の state か power。configured、suspended、power、not attached、空なら出さない）。configured と suspended のほかでは、PC に送るセルを休みと描く")
 	pngLastSync := flag.String("render-last-sync", "", "-render-png で、状態の帯に出す最後に同期した時刻（RFC 3339。省略すると未同期）")
 	pngQR := flag.String("render-qr", "", "-render-png で、QR コードのウィジェットに出す中身（qr.json の形のファイル）")
 	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
@@ -960,6 +977,7 @@ func main() {
 			log.Fatalf("bad -render-size %q", *pngSize)
 		}
 		env := WidgetEnv{Now: time.Now(), TimeSynced: !*pngUnsynced, MouseOff: *pngMouseOff, Link: *pngLink}
+		offline := false
 		if *pngLastSync != "" {
 			t, err := time.Parse(time.RFC3339, *pngLastSync)
 			if err != nil {
@@ -1114,10 +1132,13 @@ func main() {
 			log.Printf("warning: %s  [%s]", p.Message, p.Path)
 		}
 		rot := cfg.Display.Rotate
+		if !linkOnline(*pngLink) {
+			offline = true
+		}
 		if *pngRotate != -1 {
 			rot = *pngRotate
 		}
-		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, rot, *pngHomePage-1, env, images); err != nil {
+		if err := renderPNG(cfg, km, *pngOut, *pngLayer, *pngPressed, *pngPress, w, h, rot, *pngHomePage-1, offline, env, images); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -1128,6 +1149,11 @@ func main() {
 	if runtime.GOMAXPROCS(0) < 2 {
 		runtime.GOMAXPROCS(2)
 	}
+
+	// 時刻：起動したら、なるべく早く内蔵 RTC か最後に分かっていた時刻で合わせる（rtc.go）
+	store := OpenStore(*dataDir)
+	clock := NewTimeService(store)
+	clock.BootFromRTC(cfg.Clock.rtcMode())
 
 	// 入力デバイスを先に開く。失敗したら HID に何も送らずに終わる
 	kbd, err := openInput(cfg.Keyboard)
@@ -1163,14 +1189,15 @@ func main() {
 	curCfg.Store(cfg)
 	term := NewTermMode(curCfg.Load, usb, s, *gadgetSetup)
 	e.SetTerm(term)
-	store := OpenStore(*dataDir)
-	clock := NewTimeService(store)
 	if !clock.Synced() {
 		log.Printf("time: not set since boot (the clock widget shows %q until the settings GUI connects)", unsyncedText)
 	}
+	go clock.KeepKnown()
+	addAtExit(clock.SaveKnown)
 	texts := NewTextService(store)
 	qrs := NewQRService(store)
 	todos := NewTodoService(store)
+	addAtExit(todos.Flush) // まだ書いていない変更を書く（電池が少なくて電源を切るときも、ここを通る）
 	cals := NewCalendarService(store)
 	weather := NewWeatherService(store)
 	graphs := NewGraphService(store)
@@ -1183,6 +1210,27 @@ func main() {
 	dimP, _ := cfg.Backlight.compile() // 検証済み
 	dim := NewDimmer(dimP)
 	addAtExit(dim.Close)
+	batP, _ := cfg.Battery.compile() // 検証済み
+	battery.SetCurve(batP.curve)
+	guard := NewBatteryGuard(batP, *dataDir)
+	guard.wake = dim.Wake
+	guard.backlight = func() int { return dim.Info().Level }
+	var powerOff func() error // 電池が少ないときに電源を切る（更新の係ができたら決める）
+	guard.poweroff = func() error {
+		if powerOff == nil {
+			return errors.New("not running as a systemd service")
+		}
+		return powerOff()
+	}
+	battery.OnPoll(guard.Sample)
+	if in := battery.Info(); in != nil {
+		guard.Sample(*in) // 起動したときの 1 行（記録の「start」）
+	}
+	userActivity = guard.Activity
+	prompt := NewPrompt(nil)
+	e.SetInput(prompt)
+	e.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
+	guard.notify, guard.clear = prompt.NotifyFor, prompt.ClearNotice
 	gadgets.SetOnAlert(dim.Wake)
 	gadgets.SetOnBusy(dim.SetBusy) // プレゼン用タイマーが動いているあいだは暗くしない
 	images := OpenImageStore(imagesDir)
@@ -1191,13 +1239,20 @@ func main() {
 			log.Printf("warning: %s", p.Message)
 		}
 	}
-	link := NewLinkMonitor()
+	link := NewLinkMonitor("/sys")
+	setOnline := func(on bool) {
+		e.SetOffline(!on)
+		dim.SetOffline(!on)
+	}
+	link.OnOnline(setOnline)
+	if !link.Online() {
+		setOnline(false)
+	}
 	rotStore := NewRotateStore(store)
 	e.SetRotation(rotStore.Initial(km.Rotate), 800, 480, rotStore)
 	widgetRT := NewWidgetRT(todos)
 	widgetRT.gadgets = gadgets
 	widgetRT.calc = calc
-	calc.SetTyper(func(text string) error { return typeOnHID(s, text) })
 	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
@@ -1213,12 +1268,48 @@ func main() {
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
 		env.Link = link.State()
-		if ti := clock.Info(); ti.LastSet != nil {
-			env.LastSync = ti.LastSet
+		if ti := clock.Info(); ti.LastPCSet != nil {
+			env.LastSync = ti.LastPCSet
 		}
 		return env
 	}
 	widgetRT.SetEnv(widgetEnv)
+	calc.SetTyper(func(text string) error {
+		if !link.Online() {
+			return errOffline
+		}
+		return typeOnHID(s, text)
+	})
+	prompt.SetHandlers(func(kind, text string) (string, error) {
+		switch kind {
+		case inputTodo:
+			if strings.TrimSpace(text) == "" {
+				return "", inputError("何も入っていません")
+			}
+			it, _, err := todos.Add(text, 0, time.Now(), sourceBrain)
+			if err != nil {
+				return "", inputError(err.Error())
+			}
+			return "Todo に足しました：" + it.Text, nil
+		case inputClock:
+			t, err := parseClockInput(text, time.Local)
+			if err != nil {
+				return "", err
+			}
+			res, err := clock.Set(t, sourceBrain)
+			if err != nil {
+				return "", inputError(err.Error())
+			}
+			afterClockSet(res, texts, qrs, gadgets, graphs)
+			return "時刻を合わせました：" + t.Format(clockInputForm), nil
+		}
+		return "", nil
+	}, func(kind string) string {
+		if kind == inputClock {
+			return clock.Estimate().Format(clockInputForm)
+		}
+		return ""
+	})
 
 	// 終了時に押しっぱなしを防ぐ
 	sig := make(chan os.Signal, 1)
@@ -1266,6 +1357,7 @@ func main() {
 				graphs.SetOnChange(d.Poke)
 				calc.SetOnChange(d.Poke)
 				link.SetOnChange(d.Poke)
+				prompt.SetShow(d.SetOverlay)
 				if pw, ph := d.PhysSize(); pw != 800 || ph != 480 {
 					e.SetRotation(e.Rotation(), pw, ph, rotStore)
 				}
@@ -1297,6 +1389,10 @@ func main() {
 				images.Preload(preloadOrder(c)) // 新しい設定で使う画像を先に読む
 				p, _ := c.Backlight.compile()   // 検証済み
 				dim.Apply(p)
+				bp, _ := c.Battery.compile() // 検証済み
+				guard.Apply(bp)
+				battery.SetCurve(bp.curve)
+				clock.SetRTCMode(c.Clock.rtcMode())
 				return nil
 			}},
 			engine:  e,
@@ -1316,10 +1412,16 @@ func main() {
 			images:  images,
 			usb:     usb,
 			term:    term,
+			link:    link,
+			guard:   guard,
+			dataDir: *dataDir,
 			started: time.Now(),
 		}
 		upd := NewUpdater(*dataDir, *updateBin, *updateGadget, *unitName, cfgPath, imagesDir, *readyFile, usb, term)
 		ctl.updater = upd
+		if upd.Unit != "" {
+			powerOff = func() error { return upd.Power("poweroff") }
+		}
 		ctl.uploads = NewUploads()
 		ctl.uploads.Register("update", upd.UploadKind())
 		ctl.uploads.Register("image", images.UploadKind())

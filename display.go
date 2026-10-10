@@ -27,6 +27,7 @@ type CellView struct {
 	Widget       *WidgetDef // ウィジェットのセル
 	Background   string     // セルの背景画像の id。空ならなし
 	Media        bool       // メディアキーのセル。USB にマウスがない（ブートキーボードの形）ときは、無効と描く
+	NeedsPC      bool       // PC に送るセルか、PC から受け取るタイル。PC から外れているあいだは、休みと描く（offline.go）
 }
 
 // ImageSource は背景画像を返す（*ImageStore）。ない画像は nil。
@@ -56,6 +57,7 @@ type Layout struct {
 	Rotate   int      // 画面の向き。描く側は、裏画面をこの向きにする
 	Bar      bool     // 上に状態の帯を出す（statusbar.go）。格子はその下に並ぶ
 	BarItems []string // 帯の項目
+	Offline  bool     // PC から外れている（NeedsPC のセルを休みと描く）
 }
 
 // top は、格子の上に空ける高さ（状態の帯）。
@@ -280,15 +282,27 @@ func drawCell(cv *Canvas, l *Layout, col, row int, pressed bool) image.Rectangle
 	}
 	if v.Widget != nil && v.Widget.Kind == widgetPad {
 		drawPad(cv, cell, box, inner, &v, l.Env, subC)
+		if l.Offline {
+			drawOfflineTag(cv, inner)
+		}
 		cv.halo = nil
 		return cell.Union(redrawBadge(cv, l, cell))
 	}
 	if v.Widget != nil {
 		drawWidget(cv, inner, &v, l.Env, textC, subC)
+		if v.NeedsPC && l.Offline {
+			drawOfflineTag(cv, inner)
+		}
 		cv.halo = nil
 		return cell.Union(redrawBadge(cv, l, cell))
 	}
-	if v.Media && l.Env.MouseOff {
+	if v.NeedsPC && l.Offline {
+		// PC から外れている：押しても送らないことを、下の小さな文字と薄い文字で知らせる
+		v.Sub = offlineLabel
+		if !(pressed && l.pressFill()) {
+			textC = subC
+		}
+	} else if v.Media && l.Env.MouseOff {
 		// メディアキーを送れない形（ブートキーボード）。押しても何も送らないことを、下の小さな文字で知らせる
 		v.Sub = mediaOffLabel
 		if !(pressed && l.pressFill()) {
@@ -436,6 +450,12 @@ type Display struct {
 	images  ImageSource // 背景画像。nil なら描かない
 	invalid bool        // 画面全体を描き直す（画像が増えた・減った）。d.mu で守る
 
+	// 格子の上に重ねて描く知らせと欄（prompt.go）。overlay と ovNew は d.mu で守る。ovShown は描画側だけが触る
+	overlay *Overlay
+	ovNew   bool
+	ovShown *Overlay
+	ovRect  image.Rectangle // 前に描いた範囲（論理）
+
 	// 端末モード（termmode.go）。term が nil でなければ、格子の代わりに端末を描く。d.mu で守る
 	term      *TermMode
 	termNew   bool          // 端末モードに入った（全体を描く）
@@ -571,6 +591,52 @@ func (d *Display) cols() int {
 	return d.layoutCols
 }
 
+// SetOverlay は、格子の上に重ねて描くもの（nil で消す）を差し替える。描画は待たない。
+func (d *Display) SetOverlay(o *Overlay) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.overlay, d.ovNew = o, true
+	d.mu.Unlock()
+	d.poke()
+}
+
+// flushLocked は、論理の範囲 r を裏画面からフレームバッファに写す。重ねて描くものに重なれば、先にそれを描き直す。drawMu を持って呼ぶ。
+func (d *Display) flushLocked(r image.Rectangle) {
+	if d.ovShown != nil && r.Overlaps(d.ovRect) {
+		drawOverlay(d.cv, d.ovShown)
+		r = r.Union(d.ovRect)
+	}
+	if d.active {
+		d.fb.Blit(d.cv, d.cv.physRect(r))
+	}
+}
+
+// updateOverlayLocked は、重ねて描くものが変わっていれば描き直す。範囲が小さくなったら、下の格子を描き直す。drawMu を持って呼ぶ。
+func (d *Display) updateOverlayLocked(o *Overlay) {
+	old := d.ovRect
+	d.ovShown = o
+	d.ovRect = overlayRect(o, d.cv.W, d.cv.H)
+	if old.Empty() && d.ovRect.Empty() {
+		return
+	}
+	t := time.Now()
+	if !old.Empty() && !old.In(d.ovRect) {
+		// 消えた（小さくなった）ところは、格子と帯を描き直す
+		d.drawAllLocked(d.layout)
+		if d.active {
+			d.fb.Blit(d.cv, image.Rect(0, 0, d.cv.pw, d.cv.ph))
+		}
+	} else if o != nil {
+		drawOverlay(d.cv, o)
+		if d.active {
+			d.fb.Blit(d.cv, d.cv.physRect(d.ovRect))
+		}
+	}
+	vlogf("display: overlay redraw %v", time.Since(t))
+}
+
 // Invalidate は、画面全体を描き直させる（背景画像を受け取った、消したなど）。描画は待たない。
 func (d *Display) Invalidate() {
 	if d == nil {
@@ -684,6 +750,10 @@ func (d *Display) drawAllLocked(l *Layout) {
 			d.scheduleWidget(v, l.Env)
 		}
 	}
+	d.ovRect = overlayRect(d.ovShown, d.cv.W, d.cv.H)
+	if d.ovShown != nil {
+		drawOverlay(d.cv, d.ovShown)
+	}
 }
 
 func (d *Display) scheduleWidget(v *CellView, env WidgetEnv) { d.scheduleAt(widgetNext(v, env)) }
@@ -706,9 +776,7 @@ func (d *Display) redrawWidgets() {
 			t := time.Now()
 			r := drawBar(d.cv, l, l.Env)
 			d.barKey = k
-			if d.active {
-				d.fb.Blit(d.cv, d.cv.physRect(r))
-			}
+			d.flushLocked(r)
 			vlogf("display: status bar redraw %v", time.Since(t))
 		}
 	}
@@ -726,9 +794,7 @@ func (d *Display) redrawWidgets() {
 		col, row := i%l.Cols, i/l.Cols
 		r := drawCell(d.cv, l, col, row, d.drawn[i])
 		d.wkeys[i] = k
-		if d.active {
-			d.fb.Blit(d.cv, d.cv.physRect(r))
-		}
+		d.flushLocked(r)
 		vlogf("display: widget %s at %d,%d redraw %v", v.Widget.Kind, col, row, time.Since(t))
 	}
 }
@@ -786,6 +852,8 @@ func (d *Display) redraw() bool {
 	want := append([]bool(nil), d.want...)
 	invalid := d.invalid
 	d.invalid = false
+	ov, ovNew := d.overlay, d.ovNew
+	d.ovNew = false
 	d.mu.Unlock()
 	d.drawMu.Lock()
 	defer d.drawMu.Unlock()
@@ -794,6 +862,9 @@ func (d *Display) redraw() bool {
 	}
 	wasTerm := d.termShown // 端末モードから戻った：格子を全体から描き直す
 	d.termShown = false
+	if (next != nil || invalid || wasTerm) && ovNew {
+		d.ovShown, ovNew = ov, false // 全体を描くので、そのときに一緒に描く
+	}
 	if next != nil {
 		t := time.Now()
 		if next.Rotate != d.cv.rot {
@@ -832,12 +903,13 @@ func (d *Display) redraw() bool {
 			rs = drawPress(d.cv, d.layout, col, row, want[i])
 		}
 		d.drawn[i] = want[i]
-		if d.active {
-			for _, r := range rs {
-				d.fb.Blit(d.cv, d.cv.physRect(r))
-			}
+		for _, r := range rs {
+			d.flushLocked(r)
 		}
 		vlogf("display: cell %d,%d pressed=%v %s redraw %v", col, row, want[i], pressName(d.layout), time.Since(t))
+	}
+	if ovNew {
+		d.updateOverlayLocked(ov)
 	}
 	d.redrawWidgets()
 	return true

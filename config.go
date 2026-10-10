@@ -29,6 +29,9 @@ type Config struct {
 	Backlight *BacklightConfig      `yaml:"backlight,omitempty" json:"backlight,omitempty"`   // 自動減光（backlight.go）。省略すると減光しない
 	Home      *HomeConfig           `yaml:"home,omitempty" json:"home,omitempty"`             // ホーム画面（home.go）。省略すると使わない
 	StatusBar *StatusBarConfig      `yaml:"status_bar,omitempty" json:"status_bar,omitempty"` // 画面の上の状態の帯（statusbar.go）
+	Offline   *OfflineConfig        `yaml:"offline,omitempty" json:"offline,omitempty"`       // PC から外したときの動き（offline.go）
+	Battery   *BatteryConfig        `yaml:"battery,omitempty" json:"battery,omitempty"`       // 電池が少ないときの知らせと電源断、記録（battery.go）
+	Clock     *ClockConfig          `yaml:"clock,omitempty" json:"clock,omitempty"`           // 時刻（内蔵 RTC。rtc.go）
 }
 
 // TouchConfig はタッチパネルそのものの設定（どのレイヤーでも共通）。
@@ -103,8 +106,10 @@ type ActionSpec struct {
 	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
 	// Rotate は画面の向きを変える（next で 90 度ずつ、0、90、180、270 でその向き。rotate.go）
 	Rotate string `yaml:"rotate,omitempty" json:"rotate,omitempty"`
-	Label  string `yaml:"label,omitempty" json:"label,omitempty"`
-	Span   Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
+	// Input は、Brain のキーボードで文字を入れる欄を開く（todo で Todo を足す、clock で時刻を合わせる。prompt.go）
+	Input string `yaml:"input,omitempty" json:"input,omitempty"`
+	Label string `yaml:"label,omitempty" json:"label,omitempty"`
+	Span  Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
 	// Background はセルの背景画像の id（/var/lib/lefthand/images/<id>.565）。タッチのセルだけ
 	Background string `yaml:"background,omitempty" json:"background,omitempty"`
 
@@ -172,7 +177,7 @@ var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 	"page_reset": true, "stale": true, "calendars": true, "follow": true, "week_start": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
-	"terminal": true, "rotate": true, "work": true, "break": true, "states": true,
+	"terminal": true, "rotate": true, "input": true, "work": true, "break": true, "states": true,
 	"unit": true, "min": true, "max": true, "chart": true, "points": true, "decimals": true, "duration": true, "colors": true, "prefix": true,
 	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
@@ -189,7 +194,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, rotate, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, duration, colors, prefix, background, and the trackpad fields)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, rotate, input, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, duration, colors, prefix, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -198,7 +203,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	if c := a.count(); c > 1 || (c == 0 && a.Widget == "") {
-		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, rotate (a widget cell may omit them)", n.Line)
+		return fmt.Errorf("line %d: write exactly one of key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, rotate, input (a widget cell may omit them)", n.Line)
 	}
 	return nil
 }
@@ -236,7 +241,7 @@ func (a ActionSpec) hasGraphFields() bool {
 
 func (a ActionSpec) count() int {
 	n := 0
-	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.Media, a.UsbMode, a.Terminal, a.Rotate} {
+	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.Media, a.UsbMode, a.Terminal, a.Rotate, a.Input} {
 		if s != "" {
 			n++
 		}
@@ -405,9 +410,10 @@ const (
 	actMedia                   // メディアキー
 	actRotate                  // 画面の向きを変える
 	actHomePage                // ホーム画面のページを送る（ホーム画面の ◀ ▶ のソフトキー。設定には書けない）
+	actInput                   // Brain のキーボードで文字を入れる欄を開く（prompt.go）
 )
 
-var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal", "media", "rotate", "home_page"}
+var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal", "media", "rotate", "home_page", "input"}
 
 func (k ActKind) String() string { return actNames[k] }
 
@@ -483,6 +489,8 @@ type Keymap struct {
 	Rotate int
 	// cfgPortrait は、レイヤーごとに touch_portrait を書いたか（画像の大きさの確かめに使う）
 	cfgPortrait []bool
+	// OfflineHome は offline.home（PC から外れたらホーム画面に切り替える）
+	OfflineHome bool
 }
 
 func (km *Keymap) area(name string) (SoftArea, bool) {
@@ -620,6 +628,11 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 				fail(path, "%s: rotate must be next, 0, 90, 180 or 270", where)
 			}
 			a.Rotate = r
+		case s.Input != "":
+			a.Kind = actInput
+			if !inputKinds[s.Input] {
+				fail(path, "%s: input must be todo or clock", where)
+			}
 		default:
 			fail(path, "%s: empty assignment", where)
 		}
@@ -736,6 +749,14 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		km.Layers = append(km.Layers, l)
 	}
 	homeWarns := compileHome(cfg, km, index, fail)
+	if cfg.Offline != nil && cfg.Offline.Home {
+		km.OfflineHome = true
+		if cfg.Home == nil {
+			homeWarns = append(homeWarns, "offline.home has no effect without home (the home screen)")
+		}
+	}
+	cfg.Battery.validate(fail)
+	cfg.Clock.validate(fail)
 	if len(errs) > 0 {
 		errs.sort()
 		return nil, nil, errs

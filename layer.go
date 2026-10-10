@@ -35,6 +35,7 @@ type View struct {
 	Rot       int     // 画面の向き（0、90、180、270）
 	Portrait  bool    // 縦向き（格子は PGrid）
 	Bar       bool    // 上に状態の帯を出す
+	Offline   bool    // PC から外れている（PC に送るセルを休みにして、薄く描く。offline.go）
 	km        *Keymap // この View を作った割り当て（設定を差し替えると変わる）
 	stackKey  string
 }
@@ -211,6 +212,12 @@ type Engine struct {
 	pw, ph   int          // 物理の画面の大きさ。0 なら 800x480
 	rotStore *RotateStore // 向きの保存。nil なら保存しない
 	onRotate func(int)    // 向きが変わったとき（ログと設定 GUI への通知）。ロックを持ったまま呼ぶので、待たずに返ること
+	// offline は PC から外れているか（offline.go）。autoHome は、外れてホーム画面に切り替える前の重なり（nil なら切り替えていない）
+	offline     bool
+	autoHome    []stackEntry
+	notify      func(string) // 画面の下に知らせを出す。nil なら出さない
+	offNoticeAt time.Time
+	input       *Prompt // Brain のキーボードで文字を入れる欄（prompt.go）。nil なら使わない
 }
 
 // SetRotation は、画面の向きと、物理の画面の大きさを決める（起動したとき）。rs は向きの保存（nil なら保存しない）。
@@ -356,6 +363,10 @@ func (e *Engine) PressKey(code evdev.EvCode) {
 		e.term.KeyEvent(code, 1)
 		return
 	}
+	if e.input.Active() {
+		e.input.Key(code, 1) // 文字を入れる欄：PC には送らない
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.calcKeyLocked(code) {
@@ -414,6 +425,7 @@ func (e *Engine) ReleaseKey(code evdev.EvCode) {
 		if e.term.Active() {
 			e.term.KeyEvent(code, 0)
 		}
+		e.input.Key(code, 0)
 		return
 	}
 	e.Release(id)
@@ -423,7 +435,18 @@ func (e *Engine) ReleaseKey(code evdev.EvCode) {
 func (e *Engine) RepeatKey(code evdev.EvCode) {
 	if e.term.Active() {
 		e.term.KeyEvent(code, 2)
+		return
 	}
+	if e.input.Active() {
+		e.input.Key(code, 2)
+	}
+}
+
+// SetInput は、文字を入れる欄の係を設定する。
+func (e *Engine) SetInput(p *Prompt) {
+	e.mu.Lock()
+	e.input = p
+	e.mu.Unlock()
 }
 
 // TouchHit はタッチの判定結果。
@@ -479,6 +502,8 @@ func (e *Engine) PressTouchAt(x, y int32, t time.Time) TouchHit {
 			e.touchAt = &widgetTouch{cell: cellRectIn(h.Col, h.Row, a.SpanW, a.SpanH, v.Cols, v.Rows, gridArea(W, H, v.barTop())),
 				pt: m.point(x, y)}
 			switch {
+			case a.Widget.Kind == widgetPad && e.offline:
+				e.offlineNoticeLocked()
 			case a.Widget.Kind == widgetPad && e.pad != nil:
 				h.Pad = true
 				e.pad.Down(a.Widget.Pad, e.touchAt.cell, m, t)
@@ -563,6 +588,12 @@ func (e *Engine) press(id string, a *Action) {
 	e.pressing = id
 	defer func() { e.pressing = "" }()
 	consumeOneshot := true
+	if e.offline && a.needsPC() && a.Kind != actWidget {
+		// PC から外れている：送らずに知らせる。離したときも何もしない
+		e.down[id] = nil
+		e.offlineNoticeLocked()
+		a = nil
+	}
 	if a != nil {
 		switch a.Kind {
 		case actKey:
@@ -615,6 +646,8 @@ func (e *Engine) press(id string, a *Action) {
 			}
 		case actRotate:
 			e.rotateLocked(a.Rotate)
+		case actInput:
+			e.input.Open(a.Spec.Input)
 		case actHomePage:
 			if h := e.km.Home; h != nil {
 				e.homePageLocked(h, a.Rotate, e.portraitLocked())
@@ -654,14 +687,14 @@ func (e *Engine) refresh() {
 	for _, en := range e.stack {
 		fmt.Fprintf(&b, "%d/%d,", en.layer, en.kind)
 	}
-	fmt.Fprintf(&b, "r%d", e.rot)
+	fmt.Fprintf(&b, "r%d o%v", e.rot, e.offline)
 	key := b.String()
 	if e.view != nil && e.view.stackKey == key {
 		return
 	}
 	e.gen++
 	v := e.km.view(e.layers(), e.portraitLocked())
-	v.Gen, v.stackKey, v.Rot = e.gen, key, e.rot
+	v.Gen, v.stackKey, v.Rot, v.Offline = e.gen, key, e.rot, e.offline
 	if n := len(e.stack); n > 0 {
 		v.Mode = modeLatched
 		if k := e.stack[n-1].kind; k == actHold || k == actOneshot {

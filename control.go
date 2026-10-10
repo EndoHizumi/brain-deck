@@ -439,6 +439,9 @@ type Controller struct {
 	term    *TermMode
 	uploads *Uploads // upload_*（種類を選べる分割の受け取り）
 	updater *Updater // 更新、再起動、電源、ログ
+	link    *LinkMonitor
+	guard   *BatteryGuard
+	dataDir string // battery-log.csv の置き場所
 	started time.Time
 }
 
@@ -472,7 +475,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"set_qr", "get_qr", "get_widgets", "set_presence", "add_graph", "clear_graph", "get_graph",
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
-				"restart", "power", "get_logs", "get_config_text", "put_config_text"},
+				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -520,7 +523,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
 			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "usb_state": USBState()},
-			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info()})
+			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(),
+			"rtc": c.clock.RTCInfo(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()}})
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)
 		if err != nil {
@@ -560,17 +564,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		case err != nil:
 			return errResp(id, errInternal, "setting the system clock failed: "+err.Error(), nil)
 		}
-		if res.Stepped {
-			off := time.Duration(res.OffsetMS) * time.Millisecond
-			c.texts.ClockStepped(off)
-			c.qrs.ClockStepped(off)
-			c.gadgets.ClockStepped(off)
-			c.graphs.ClockStepped(off)
-		} else {
-			c.texts.ClockSynced()
-			c.qrs.ClockSynced()
-			c.graphs.ClockSynced()
-		}
+		afterClockSet(res, c.texts, c.qrs, c.gadgets, c.graphs)
 		return ok(res)
 	case "set_text":
 		return c.setText(id, req, c.texts, widgetText)
@@ -613,6 +607,12 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.update(id, req)
 	case "get_config_text", "put_config_text":
 		return c.configText(id, req)
+	case "get_battery_log":
+		text, err := readBatteryLog(c.dataDir, req.Lines)
+		if err != nil {
+			return errResp(id, errInternal, err.Error(), nil)
+		}
+		return ok(map[string]any{"csv": text})
 	case "subscribe_data":
 		on := req.Enable == nil || *req.Enable
 		if on {

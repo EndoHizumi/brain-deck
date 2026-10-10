@@ -49,11 +49,16 @@ type BatteryInfo struct {
 	Charging  bool   `json:"charging"`             // 充電中（lradc では推定）
 	Source    string `json:"source"`               // power_supply か lradc
 	Estimated bool   `json:"estimated,omitempty"`  // 残りと充電中を電圧から見積もった
+	VBusMV    int    `json:"vbus_mv,omitempty"`    // USB の 5V（lradc）
+	RawMV     int    `json:"-"`                    // 今回読んだ電池の電圧（平均する前）
+	Samples   int    `json:"-"`                    // 平均に使った回数（つないだ・外したときに数え直す）
 }
 
 // voltagePercent は、電圧から残りを見積もる。
-func voltagePercent(mv int) int {
-	c := liionCurve
+func voltagePercent(mv int) int { return curvePercent(liionCurve, mv) }
+
+// curvePercent は、電圧と残りの表 c で、電圧から残りを見積もる。
+func curvePercent(c [][2]int, mv int) int {
 	if mv <= c[0][0] {
 		return 0
 	}
@@ -63,7 +68,7 @@ func voltagePercent(mv int) int {
 			return a[1] + (mv-a[0])*(b[1]-a[1])/(b[0]-a[0])
 		}
 	}
-	return 100
+	return c[len(c)-1][1]
 }
 
 // batteryReader は、電池の状態を 1 回読む。
@@ -139,9 +144,10 @@ func (r *lradcReader) read() (BatteryInfo, error) {
 		vs = append(vs, v)
 	}
 	sort.Ints(vs)
-	b := BatteryInfo{VoltageMV: vs[1], Source: "lradc", Estimated: true}
-	if v, err := r.channel(lradcVDD5V); err == nil && v > vdd5vPresent {
-		b.Plugged = true
+	b := BatteryInfo{VoltageMV: vs[1], RawMV: vs[1], Source: "lradc", Estimated: true}
+	if v, err := r.channel(lradcVDD5V); err == nil {
+		b.VBusMV = v
+		b.Plugged = v > vdd5vPresent
 	}
 	return b, nil
 }
@@ -179,7 +185,9 @@ type BatteryService struct {
 	info     *BatteryInfo
 	volts    []int // lradc の電圧の移動平均
 	plugged  bool
+	curve    [][2]int // 電圧と残りの表（battery.curve。省略すると liionCurve）
 	onChange func()
+	onPoll   []func(BatteryInfo) // 読むたびに呼ぶ（電池の係と記録）。待たずに返ること
 	stop     chan struct{}
 }
 
@@ -255,14 +263,36 @@ func (bs *BatteryService) poll() {
 			sum += v
 		}
 		b.VoltageMV = sum / len(bs.volts)
-		b.Percent = voltagePercent(b.VoltageMV)
+		b.Samples = len(bs.volts)
+		curve := bs.curve
+		if curve == nil {
+			curve = liionCurve
+		}
+		b.Percent = curvePercent(curve, b.VoltageMV)
 		b.Charging = b.Plugged && b.VoltageMV < batteryFullMV
 	}
 	changed := bs.info == nil || bs.info.Percent != b.Percent || bs.info.Plugged != b.Plugged || bs.info.Charging != b.Charging
 	bs.info = &b
-	f := bs.onChange
+	f, ps := bs.onChange, bs.onPoll
 	bs.mu.Unlock()
+	for _, p := range ps {
+		p(b)
+	}
 	if changed && f != nil {
 		f()
 	}
+}
+
+// OnPoll は、読むたびに呼ぶ関数を足す（電池の係と記録）。
+func (bs *BatteryService) OnPoll(f func(BatteryInfo)) {
+	bs.mu.Lock()
+	bs.onPoll = append(bs.onPoll, f)
+	bs.mu.Unlock()
+}
+
+// SetCurve は、電圧と残りの表を決める（nil で既定）。次に読んだときから使う。
+func (bs *BatteryService) SetCurve(c [][2]int) {
+	bs.mu.Lock()
+	bs.curve = c
+	bs.mu.Unlock()
 }

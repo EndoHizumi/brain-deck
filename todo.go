@@ -80,6 +80,7 @@ type TodoService struct {
 	onChange func()         // 描き直し。待たずに返ること
 	onNotify func(TodoList) // 設定 GUI への通知。notifier の goroutine から呼ぶ
 	dirty    chan struct{}
+	saveMu   sync.Mutex // todo.json を書いているあいだ（Flush が書き終わりを待つ）
 	notify   chan struct{}
 	saved    chan struct{} // テスト用：保存を 1 回終えるたびに送る
 }
@@ -327,6 +328,7 @@ var errNothing = errors.New("nothing to change")
 // saver は、変わるたびに todo.json を書く。書いているあいだの変更は、次の 1 回にまとめる。
 func (ts *TodoService) saver() {
 	for range ts.dirty {
+		ts.saveMu.Lock()
 		ts.mu.Lock()
 		f := todoFile{Rev: ts.list.Rev, NextID: ts.nextID, Items: ts.list.Items}
 		ts.mu.Unlock()
@@ -336,6 +338,7 @@ func (ts *TodoService) saver() {
 		if err := ts.store.Save(todoStoreName, f); err != nil {
 			log.Printf("todo: save %s: %v", todoStoreName, err)
 		}
+		ts.saveMu.Unlock()
 		if ts.saved != nil {
 			ts.saved <- struct{}{}
 		}
@@ -351,5 +354,25 @@ func (ts *TodoService) notifier() {
 		if f != nil {
 			f(l)
 		}
+	}
+}
+
+// Flush は、まだ書いていない変更があれば、今書く（デーモンが終わるとき）。
+func (ts *TodoService) Flush() {
+	ts.saveMu.Lock()
+	defer ts.saveMu.Unlock()
+	select {
+	case <-ts.dirty:
+	default:
+		return
+	}
+	ts.mu.Lock()
+	f := todoFile{Rev: ts.list.Rev, NextID: ts.nextID, Items: ts.list.Items}
+	ts.mu.Unlock()
+	if f.Items == nil {
+		f.Items = []TodoItem{}
+	}
+	if err := ts.store.Save(todoStoreName, f); err != nil {
+		log.Printf("todo: save %s: %v", todoStoreName, err)
 	}
 }

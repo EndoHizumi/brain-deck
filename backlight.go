@@ -48,6 +48,16 @@ type BacklightConfig struct {
 	DimLevel   *int   `yaml:"dim_level,omitempty" json:"dim_level,omitempty"`     // 暗くしたときの明るさ。省略すると 1
 	WakeOnKey  *bool  `yaml:"wake_on_key,omitempty" json:"wake_on_key,omitempty"` // 本体キーでも明るくする（既定 true）
 	InTerminal bool   `yaml:"in_terminal,omitempty" json:"in_terminal,omitempty"` // 端末モードのあいだも暗くする（既定 false）
+	// Offline は、PC から外しているあいだ（offline.go）に使う時間と明るさ。書いた項目だけ上のものに代わる
+	Offline *BacklightOffline `yaml:"offline,omitempty" json:"offline,omitempty"`
+}
+
+// BacklightOffline は backlight.offline。
+type BacklightOffline struct {
+	DimAfter string `yaml:"dim_after,omitempty" json:"dim_after,omitempty"`
+	OffAfter string `yaml:"off_after,omitempty" json:"off_after,omitempty"`
+	Level    *int   `yaml:"level,omitempty" json:"level,omitempty"`
+	DimLevel *int   `yaml:"dim_level,omitempty" json:"dim_level,omitempty"`
 }
 
 // dimParams は、組み立て済みの backlight。
@@ -59,6 +69,7 @@ type dimParams struct {
 	dimLevel   int
 	wakeOnKey  bool
 	inTerminal bool
+	offline    *dimParams // PC から外しているあいだ。nil なら同じもの
 }
 
 // compile は backlight を検証する。nil なら、自動減光をしない（nil を返す）。
@@ -66,6 +77,32 @@ func (c *BacklightConfig) compile() (*dimParams, error) {
 	if c == nil {
 		return nil, nil
 	}
+	p, err := c.compileOne()
+	if err != nil || c.Offline == nil {
+		return p, err
+	}
+	o := *c
+	o.Offline = nil
+	if c.Offline.DimAfter != "" {
+		o.DimAfter = c.Offline.DimAfter
+	}
+	if c.Offline.OffAfter != "" {
+		o.OffAfter = c.Offline.OffAfter
+	}
+	if c.Offline.Level != nil {
+		o.Level = c.Offline.Level
+	}
+	if c.Offline.DimLevel != nil {
+		o.DimLevel = c.Offline.DimLevel
+	}
+	if p.offline, err = o.compileOne(); err != nil {
+		return nil, fmt.Errorf("offline: %w", err)
+	}
+	return p, nil
+}
+
+// compileOne は、offline を見ずに組み立てる。
+func (c *BacklightConfig) compileOne() (*dimParams, error) {
 	p := &dimParams{device: c.Device, level: -1, dimLevel: 1, wakeOnKey: true, inTerminal: c.InTerminal}
 	if c.Device != "" && !strings.HasPrefix(c.Device, backlightClass+"/") {
 		return nil, fmt.Errorf("device must be %s/<name>, got %q", backlightClass, c.Device)
@@ -196,7 +233,9 @@ func restoreBacklight() {
 // Dimmer は自動減光を行う。p が nil なら何もしない（タッチも捨てない）。
 type Dimmer struct {
 	mu      sync.Mutex
-	p       *dimParams
+	p       *dimParams // 今使っているもの（base か base.offline）
+	base    *dimParams // 設定の backlight
+	offline bool       // PC から外している
 	bl      *Backlight
 	state   int
 	holding bool // 指が触れている
@@ -243,6 +282,8 @@ func (d *Dimmer) Apply(p *dimParams) {
 		}
 	}
 	old := d.p
+	d.base = p
+	p = d.effectiveLocked()
 	d.p = p
 	if p == nil {
 		if old != nil && d.bl != nil {
@@ -251,17 +292,52 @@ func (d *Dimmer) Apply(p *dimParams) {
 		d.stopTimerLocked()
 		return
 	}
-	for _, x := range []struct {
-		name string
-		v    *int
-	}{{"level", &p.level}, {"dim_level", &p.dimLevel}} {
-		if *x.v > d.bl.max {
-			log.Printf("backlight: %s %d is more than max_brightness %d; using %d", x.name, *x.v, d.bl.max, d.bl.max)
-			*x.v = d.bl.max
+	for _, q := range []*dimParams{d.base, d.base.offline} {
+		if q == nil {
+			continue
+		}
+		for _, x := range []struct {
+			name string
+			v    *int
+		}{{"level", &q.level}, {"dim_level", &q.dimLevel}} {
+			if *x.v > d.bl.max {
+				log.Printf("backlight: %s %d is more than max_brightness %d; using %d", x.name, *x.v, d.bl.max, d.bl.max)
+				*x.v = d.bl.max
+			}
 		}
 	}
 	d.state = -1 // 同じ段階でも、新しい明るさを書く
 	d.activeLocked()
+}
+
+// effectiveLocked は、今使う設定（PC から外していて offline があれば、そちら）。
+func (d *Dimmer) effectiveLocked() *dimParams {
+	if d.base != nil && d.offline && d.base.offline != nil {
+		return d.base.offline
+	}
+	return d.base
+}
+
+// SetOffline は、PC から外した（true）・つないだ（false）ときに呼ぶ。明るくして、時間を数え直す。
+func (d *Dimmer) SetOffline(off bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.offline == off || d.closed {
+		return
+	}
+	d.offline = off
+	p := d.effectiveLocked()
+	if p == d.p {
+		return
+	}
+	d.p = p
+	if p != nil && d.bl != nil {
+		d.state = -1
+		d.activeLocked()
+	}
 }
 
 // brightLevel は、ふだんの明るさ。
@@ -475,8 +551,9 @@ func (d *Dimmer) SetBusy(on bool) {
 // DimInfo は get_status の backlight。
 type DimInfo struct {
 	Enabled bool   `json:"enabled"`
-	State   string `json:"state,omitempty"` // bright、dim、off
-	Level   int    `json:"level,omitempty"` // 今の明るさ
+	Offline bool   `json:"offline,omitempty"` // PC から外しているあいだの設定（backlight.offline）を使っている
+	State   string `json:"state,omitempty"`   // bright、dim、off
+	Level   int    `json:"level,omitempty"`   // 今の明るさ
 	Max     int    `json:"max,omitempty"`
 	Device  string `json:"device,omitempty"`
 }
@@ -498,7 +575,8 @@ func (d *Dimmer) Info() DimInfo {
 	case dimOff:
 		lv = 0
 	}
-	return DimInfo{Enabled: true, State: dimNames[d.state], Level: lv, Max: d.bl.max, Device: d.bl.dir}
+	return DimInfo{Enabled: true, State: dimNames[d.state], Level: lv, Max: d.bl.max, Device: d.bl.dir,
+		Offline: d.offline && d.base != nil && d.p == d.base.offline}
 }
 
 // Close は、起動したときの明るさに戻す（デーモンが終わるとき）。
