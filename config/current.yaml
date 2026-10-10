@@ -101,12 +101,12 @@ layers:
         "3,0": {key: LGUI+F, label: 検索}
         "3,1": {key: LGUI+A, label: 全選択}
         "3,2": {key: LGUI+SPACE, label: Spotlight}
+      background: b3cd3062dfbfbad2
     soft_keys:
       back: LGUI
       down: {layer_toggle: browser}
       enter: {layer_toggle: symbol}
       home: {layer_to: base}
-      left: {layer_toggle: move}
       menu: {layer_toggle: menu}
       right: {layer_toggle: debug}
       up: {layer_toggle: code}
@@ -122,7 +122,7 @@ layers:
         "1,1": {layer_to: window, label: ウィンドウ}
         "2,0": {layer_to: debug, label: デバッグ}
         "2,1": {layer_to: dashboard, label: "ダッシュ\nボード"}
-        "3,0": {layer_to: move, label: 移動}
+        "3,0": {layer_to: input}
         "3,1": {layer_to: base, label: 基本}
   - name: code
     label: コード
@@ -178,37 +178,6 @@ layers:
         "3,0": {key: LSHIFT+F11, label: "ステップ\nアウト"}
         "3,1": {key: LGUI+LSHIFT+D, label: "実行と\nデバッグ"}
         "3,2": {key: LGUI+LALT+Z, label: "FF\nデバッガ"}
-  - name: move
-    label: 移動
-    keys:
-      KEY_A: LGUI+LEFT
-      KEY_B: LALT+LEFT
-      KEY_D: PAGEDOWN
-      KEY_E: LGUI+RIGHT
-      KEY_H: LEFT
-      KEY_I: LGUI+UP
-      KEY_J: DOWN
-      KEY_K: UP
-      KEY_L: RIGHT
-      KEY_M: LGUI+DOWN
-      KEY_U: PAGEUP
-      KEY_W: LALT+RIGHT
-    touch:
-      cols: 4
-      rows: 3
-      cells:
-        "0,0": {key: LALT+LEFT, label: "単語←\n(B)"}
-        "0,1": {key: LEFT, label: "←\n(H)"}
-        "0,2": {key: LGUI+LEFT, label: "行頭\n(A)"}
-        "1,0": {key: UP, label: "↑\n(K)"}
-        "1,1": {key: DOWN, label: "↓\n(J)"}
-        "1,2": {key: PAGEUP, label: "PgUp\n(U)"}
-        "2,0": {key: LALT+RIGHT, label: "単語→\n(W)"}
-        "2,1": {key: RIGHT, label: "→\n(L)"}
-        "2,2": {key: PAGEDOWN, label: "PgDn\n(D)"}
-        "3,0": {key: LGUI+UP, label: "先頭\n(I)"}
-        "3,1": {key: LGUI+DOWN, label: "末尾\n(M)"}
-        "3,2": {key: LGUI+RIGHT, label: "行末\n(E)"}
   - name: symbol
     label: 記号
     touch:
@@ -259,11 +228,32 @@ layers:
       cols: 4
       rows: 3
       cells:
-        "0,0": {widget: text, id: build, label: ビルド}
-        "1,0": {widget: text, id: deploy, label: デプロイ}
-        "2,0": {widget: clock, span: [2, 1]}
-        "0,1": {widget: todo, span: [2, 2], label: Todo}
-        "2,1": {widget: calendar, span: [2, 2], label: 予定}
+        "0,0": {label: お知らせ, span: [3, 1], background: 868d2da70c741221, widget: text, id: notify}
+        "0,1": {label: node20 -> 26アップデート, span: [2, 2], background: f9e5473c67c4e8e5, widget: todo}
+        "2,1": {label: 予定, span: [2, 2], background: f0ee9a9d1371e9e0, widget: calendar}
+        "3,0": {background: c02c10a2672cce46, widget: clock}
+    soft_keys:
+      back: {layer_to: dashboard}
+  - name: input
+    label: 入力
+    touch:
+      cols: 4
+      rows: 4
+      cells:
+        "0,0": {span: [4, 3], widget: trackpad}
+        "0,3": {mouse: left}
+        "1,3": {mouse: middle}
+        "2,3": {mouse: right}
+        "3,3": {usb_mode: toggle}
+    soft_keys:
+      back: ESC
+      down: {mouse: scroll_down}
+      enter: ENTER
+      home: {layer_to: menu}
+      left: {mouse: scroll_right}
+      menu: {terminal: toggle}
+      right: {mouse: scroll_left}
+      up: {mouse: scroll_up}
 display:
   enabled: true
   device: /dev/fb0
