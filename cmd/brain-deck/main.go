@@ -84,6 +84,11 @@ const usage = `使い方：
   brain-deck calendar sync --dry-run  取ってきた予定を表示するだけで、Brain には送らない
   brain-deck calendar [list] [--json] Brain にある予定
   brain-deck calendar clear           Brain の予定を消す
+  brain-deck weather sync             天気予報を取ってきて Brain に送る（天気予報 API。地点は ~/.config/brain-deck/weather.yaml の
+                                      city）。天気アイコン（気象庁）は、Brain にないものだけを送る
+  brain-deck weather sync --city <ID> 設定ファイルを使わず、地点（一次細分区域の ID）を直接指定する
+  brain-deck weather sync --dry-run   取ってきた予報を表示するだけで、Brain には送らない
+  brain-deck weather [list] [--json]  Brain にある予報とアイコン
   brain-deck images [list] [--json]   Brain にある背景画像の一覧（使っている場所の数、名前）
   brain-deck images put <ファイル.565|ディレクトリ>...  変換済みの画像を送る（PNG などは設定 GUI で変換する）
   brain-deck images prune [--dry-run] 今の設定で使っていない背景画像を消す
@@ -115,10 +120,11 @@ const usage = `使い方：
   --port <パス>      ポートを指定する（例：/dev/serial/by-id/usb-SHARP_Brain_0123456789-if05、/dev/cu.usbmodem01234567895）。
                      環境変数 BRAIN_DECK_PORT でも指定できる。省略すると探す
   --timeout <時間>   全体の時間の上限（既定 5s）
-  --no-time-sync     text、qr、calendar sync の前に、Brain の時刻を合わせない
+  --no-time-sync     text、qr、calendar sync、weather sync の前に、Brain の時刻を合わせない
   --id <id>          presence で、在席ランプの id（省略すると presence）
-  --config <パス>    calendar sync の設定ファイル（既定 ~/.config/brain-deck/calendars.yaml）
-  --fetch-timeout <時間>  calendar sync で予定を取ってくる時間の上限（既定 30s。--timeout とは別）
+  --config <パス>    calendar sync、weather sync の設定ファイル（既定 ~/.config/brain-deck/calendars.yaml、weather.yaml）
+  --city <ID>        weather sync で、地点（地点定義表の一次細分区域の id）
+  --fetch-timeout <時間>  calendar sync、weather sync で取ってくる時間の上限（既定 30s。--timeout とは別）
   --usb              restart で、USB も付け直す
   --no-wait          reboot、poweroff で、頼んだら待たずに終わる
   -n, --lines <数>   logs で、読む行数（既定 100）
@@ -132,7 +138,8 @@ const usage = `使い方：
 
 終了コード：0 成功、1 予期しないエラー、2 使い方の誤り、3 Brain が見つからない・返事がない、
            4 設定 GUI が接続中（ほかのプログラムがポートを使用中）、5 Brain がエラーを返した、6 ポートを開く権限がない、
-           7 予定の取得に失敗した（calendar sync。取れたカレンダーは送る）、
+           7 予定や予報の取得に失敗した（calendar sync は取れたカレンダーを送る。weather sync は失敗を Brain に知らせ、
+             Brain は前の予報を残す）、
            8 更新・再起動に失敗した（update は前の版に戻した）。exec はコマンドの終了コード
            （コマンドが時間切れなら 124、同じ id で実行中なら 75）
 `
@@ -154,6 +161,7 @@ type options struct {
 	config       string
 	dryRun       bool
 	fetchTimeout time.Duration
+	city         string // weather sync：地点
 	quiet        bool
 	verbose      bool
 	// update、restart、reboot、logs、config
@@ -180,7 +188,7 @@ func (e usageError) Error() string { return string(e) }
 // `--` のあとは、すべてふつうの引数にする（`-` で始まるテキストを渡すとき）。
 func parseArgs(argv []string) (*options, error) {
 	o := &options{dashAt: -1, timeout: defaultTimeout, port: os.Getenv("BRAIN_DECK_PORT"), fetchTimeout: defaultFetchTimeout}
-	withValue := map[string]bool{"port": true, "timeout": true, "style": true, "ttl": true, "ics": true, "days": true, "config": true, "fetch-timeout": true, "id": true, "n": true, "lines": true, "result": true, "limit": true}
+	withValue := map[string]bool{"port": true, "timeout": true, "style": true, "ttl": true, "ics": true, "days": true, "config": true, "fetch-timeout": true, "city": true, "id": true, "n": true, "lines": true, "result": true, "limit": true}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--" {
@@ -232,6 +240,8 @@ func parseArgs(argv []string) (*options, error) {
 			}
 		case "config":
 			o.config = val
+		case "city":
+			o.city = val
 		case "fetch-timeout":
 			o.fetchTimeout, err = time.ParseDuration(val)
 			if err == nil && o.fetchTimeout <= 0 {
@@ -320,16 +330,21 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	hint := "（使い方は brain-deck --help）"
-	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && (o.args[0] == "calendar" || o.args[0] == "images")) {
-		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo、calendar、images で使います"+hint)
+	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && (o.args[0] == "calendar" || o.args[0] == "images" || o.args[0] == "weather")) {
+		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo、calendar、images、weather で使います"+hint)
 		return exitUsage
 	}
 	if o.id != "" && o.args[0] != "presence" {
 		fmt.Fprintln(stderr, "brain-deck: --id は presence で使います"+hint)
 		return exitUsage
 	}
-	if o.args[0] != "calendar" && (len(o.ics) > 0 || o.days != 0 || o.config != "" || (o.dryRun && o.args[0] != "images" && o.args[0] != "update" && o.args[0] != "config")) {
-		fmt.Fprintln(stderr, "brain-deck: --ics、--days、--config は calendar sync で、--dry-run は calendar sync、images prune、update、config put で使います"+hint)
+	if o.args[0] != "calendar" && (len(o.ics) > 0 || o.days != 0 || (o.config != "" && o.args[0] != "weather") ||
+		(o.dryRun && o.args[0] != "images" && o.args[0] != "update" && o.args[0] != "config" && o.args[0] != "weather")) {
+		fmt.Fprintln(stderr, "brain-deck: --ics、--days は calendar sync で、--config は calendar sync、weather sync で、--dry-run は calendar sync、weather sync、images prune、update、config put で使います"+hint)
+		return exitUsage
+	}
+	if o.city != "" && o.args[0] != "weather" {
+		fmt.Fprintln(stderr, "brain-deck: --city は weather sync で使います"+hint)
 		return exitUsage
 	}
 	for _, f := range []struct {
@@ -359,6 +374,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = todoCommand(o, stdin)
 	case "calendar":
 		return runCalendar(o, stdout, stderr)
+	case "weather":
+		return runWeather(o, stdout, stderr)
 	case "update":
 		return runUpdate(o, stdout, stderr)
 	case "restart":
