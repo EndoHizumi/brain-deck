@@ -6,6 +6,72 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ P3　同期（2026-10-11）
+
+PC と Brain のあいだのやり取りを `brain-deck sync` 1 つにまとめ、つないだとき（Linux の udev とユーザーの systemd）と Brain のボタン（Ctrl+F18 と PC のショートカット）から動かせるようにしたフェーズ。デーモンは本番に反映した（64d8bdb36652）。本番の設定は変えていない（例の設定 `config/sync-example.yaml`）。本番の Brain で `brain-deck sync` は動かしていない（本番のデータに sync.json を作るため。試験のデーモンで確かめた）。
+
+### 作ったもの
+
+| もの | 内容 |
+| --- | --- |
+| brain-deck sync（cmd/brain-deck/sync.go） | 時刻（内蔵 RTC の差も）、予定、天気、読み物の RSS、手書きメモを PC に写す（PNG と JSON。前と同じなら書かない）を順に。何をするかは `~/.config/brain-deck/sync.yaml`（ユーザーが作る。なければ、時刻と、設定ファイルのあるもの）。失敗しても続け、まとめて書き、終了コード 9。`--wait`（Brain が答えるまで 3 秒ごとに試す）、`--if-older`（少し前に同期していれば何もしない） |
+| 同期の状態（sync.go） | `set_sync`（start、done）。状態の帯の「同期」が「同期中」、終わったら最後に同期した時刻（失敗があれば橙）。始めと終わりに画面の下で知らせる。sync.json と `get_status` の `sync`。10 分で「同期中」をやめる |
+| 内蔵 RTC の遅れ方（timesync.go） | PC から時刻を合わせるとき、書き戻す前に RTC を読んで PC との差と、前に書いてからの時間を残す（clock.json の `rtc_log`、新しい 30 回）。`set_time` の結果の `rtc`、`get_status` の `rtc.log`。`brain-deck time sync`・`sync`・`status` が「1 日に何秒」まで書く |
+| 自動の同期 | `contrib/udev/73-brain-sync.rules`（設定用のシリアルができたら、ユーザーの brain-deck-sync.service）と `contrib/systemd/brain-deck-sync.service`（`sync --wait 90s --if-older 10m`、終了コード 9 は失敗にしない） |
+| Brain のボタン | 例の設定 `config/sync-example.yaml`：ホーム画面の「同期」（Ctrl+F18 と時計と時刻合わせ）。README に GNOME、KDE、Enlightenment、macOS のショートカットの手順 |
+| 設定 GUI | 状態の帯のプレビューの「同期中」と、失敗したときの色 |
+
+### 決めたこと
+
+| 項目 | 決めたこと | 理由 |
+| --- | --- | --- |
+| sync.yaml がないとき | 時刻は合わせる。予定・天気・RSS は、その設定ファイルがあれば行う。メモは写さない（写す先がない） | ファイルを作らなくても役に立つ。写す先を勝手に決めない |
+| 終了コード | すべて成功（飛ばしたものを含む）0、失敗があれば 9（新しい番号）、Brain が見つからない 3 | 失敗のときも、ほかは行ったことが分かる |
+| つないだ直後の待ち方 | 3 秒ごとに hello まで試し、既定 90 秒まで | Brain の起動を待つことがある（lefthand が答えるまで本番で 13 秒、起動からは 1 分ほど） |
+| 何度も同期しない | `--if-older 10m` を自動の同期に付ける。Brain の最後の同期の時刻で決める | usb_mode と端末モードは USB を付け直すので、そのたびにデバイスができ直す |
+| 同期のボタン | Ctrl+F18 | F14〜F18 と Ctrl+F14〜F16 は例の設定 shortcuts-example.yaml で使っている。修飾なしの F13 は GNOME と KDE が使う |
+| データの正 | Brain。同期は Brain の Todo、メモ、しおりを書き換えない。PC に写すのは手書きメモだけ（Brain で上書きする） | 外しているあいだの変更を失わない（指示） |
+| 本番での試験 | しない（試験のデーモンで行った） | 本番のデータ（sync.json、clock.json）を書き換えないため |
+| PC の設定ファイル | 試験では XDG_CONFIG_HOME を一時ディレクトリにした | ~/.config/brain-deck/ を読まない・書かないため |
+
+### 実機で調べたこと（試験のユニット。データは /tmp/lhu/data。10 分で本番を起動し直すタイマー付き）
+
+| 調べたもの | 結果 |
+| --- | --- |
+| brain-deck sync --wait 60s | 時刻：成功（ずれ 95 ms。内蔵 RTC は PC より 0.2 秒進んでいた。書き戻した）、予定・天気・RSS：飛ばした（設定ファイルがない）、手書きメモ：成功（0 個）。終了コード 0 |
+| --if-older 10m | 「Brain は 10m0s のうちに同期しているので、何もしません」 |
+| 状態の帯 | set_sync start で「同期中」（緑）、done（ok: false）で「同期 03:33」（橙）。画面を写して確かめた |
+| brain-deck status | 「2026-10-11 03:33 に合わせたとき：内蔵 RTC は PC より 200ms 進んでいた」 |
+| 電源のレジスタ（/dev/mem を読むだけ） | README の「同期」→「電源の動き」：HW_POWER_STS 0x2007862e（電源の入った理由は bit 29。5V の差し込みと読める）、HW_RTC_PERSISTENT0 0x00a00121（AUTO_RESTART は 0。P2 では 1 だった）。「充電だけしたいのに起動する」は AUTO_RESTART ではなく 5V の差し込みで電源が入るためと考えられる。提案は README（実装していない） |
+
+### 確認（ホスト）
+
+- Go：同期の状態と状態の帯（同期中、失敗の色、sync.json）、時刻合わせの RTC の記録（差、前に書いてからの時間、Brain のキーボードでは測らない）。brain-deck：偽の Brain に sync（sync.yaml なし、メモを写す、2 回目は書かない、RSS が取れないと失敗で終了コード 9 と set_sync の ok: false）。
+- GUI：239 件。`lefthand -check config/sync-example.yaml` が通る。
+
+### 反映
+
+- `brain-deck update` で lefthand を 64d8bdb36652 にした（.prev は 36b6bf49ec22）。フェーズ I のあとの直し（list_reads の SD の空き）も入った（本番で 11430 MB と出る）。本番の画面が `-render-png` と 0 画素の違い（1 回目は電池の数字の 40 画素）。
+- 試験のユニット、タイマー、/tmp/lhu、PC の一時ディレクトリは消した。PC の brain-deck を 64d8bdb36652 にした。
+
+### 気づいたこと
+
+- **PC につないでいるのに、電池が減り続けている**：01:34 に 90%（4.05 V）、02:22 に 78%（3.95 V）、02:55 に 71%（3.90 V）、03:33 に 62%（3.85 V）、03:40 に 59%（3.83 V）。`brain-deck status` の「充電中」は電圧からの見積もりで、実際に充電しているかは分からない（P2）。試験で画面を明るくしたまま CPU を使ったことも効いているが、PC の USB から充電が足りていない。下の「あとで確かめてほしいこと」。
+
+### 目で確かめる手順
+
+1. **ボタン**：PC のショートカット（README の「同期」→「Brain のボタンから同期する」）に Ctrl+F18 で `brain-deck sync` を割り当てる。`brain-deck config put config/sync-example.yaml`、ホーム画面の「同期」を押すと、帯が「同期中」になり、終わると「同期 HH:MM」と画面の下に「同期しました」。
+2. **自動**：udev の規則とユーザーのサービスを入れ（README）、Brain の USB を抜き差しすると、1〜2 分で同期すること（`journalctl --user -u brain-deck-sync`）。続けて抜き差ししても、10 分は同期しないこと。
+3. `~/.config/brain-deck/sync.yaml` を作り（README の例）、`memo.dir` に手書きメモが写ること。
+4. 何日かたってから `brain-deck sync` すると、「内蔵 RTC は PC より … 遅れていた … 1 日に … 秒」と出ること（RTC の遅れ方の記録）。`brain-deck status` に新しい 5 回。
+5. 終わったら `brain-deck config put config/current.yaml`。
+
+### 残っている課題
+
+- 同期は順に行う（1 つずつ Brain につなぎ直す。全体で 10〜30 秒）。
+- 「充電だけ」の動き（5V で起動したら電源を切る）は提案だけ。
+- Todo を PC 側（ファイルや外部のサービス）と同期する仕組みはない（Brain が正、PC に写しなし）。
+
 ## 追記：フェーズ I　読み物（2026-10-11）
 
 PC につないでいるときに読み物を取り込み、PC から外しても Brain で読めるようにしたフェーズ（AvantGo のように）。本番の設定には入れていない（例の設定 `config/reader-example.yaml`）。デーモンは本番に反映した（36b6bf49ec22。設定は変えていないので、見た目と動きは前と同じ）。
