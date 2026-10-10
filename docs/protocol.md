@@ -196,7 +196,9 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 | `source` | `power_supply` か `lradc`（PW-SH2） |
 | `estimated` | 残りと充電中を電圧から見積もった |
 
-`backlight` は自動減光（設定の `backlight`）の状態（`backlight.go` の `DimInfo`）。`enabled` が false なら減光していない（設定に `backlight` がない、バックライトがない）。`state` は `bright`、`dim`、`off`、`level` は今の明るさ、`max` は max_brightness。
+`backlight` は自動減光（設定の `backlight`）の状態（`backlight.go` の `DimInfo`）。`enabled` が false なら減光していない（設定に `backlight` がない、バックライトがない）。`state` は `bright`、`dim`、`off`、`photo`（暗くする代わりに写真を出している。フォトフレーム）、`level` は今の明るさ、`max` は max_brightness。
+
+`photo` はフォトフレーム（`photo.go`）：`{"available":true,"count":3,"showing":"8e507de0d4f1d833"}`。`showing` は今出している写真の id（出していなければない）。この項目がなければ、フォトフレームのない版。
 
 `terminal` は端末モードの状態（`termmode.go` の `TermInfo`）。この項目がなければ、端末モードがない版。
 
@@ -672,12 +674,32 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 | --- | --- | --- |
 | `update` | 24 MiB | 確かめ終えた更新（下の `update_*`） |
 | `image` | 768,008 バイト | `{"id":"<画像の id>"}`。`image_begin` と違い、幅と高さは受け取ったファイルのヘッダから読む。合計の上限と SD カードの空きは同じ |
+| `photo` | 768,008 バイト | `{"id":"<写真の id>","count":3,"max":10}`。800×480 か 480×800 の LHI1 だけ。`upload_begin` に `"of":"<横向きの写真の id>"` を付けると、その写真を縦向きに切り抜き直したもの（480×800 だけ）。枚数が `photo.max` に達していれば `quota_exceeded`、SD カードの空きが足りなければ `no_space`（同じ写真は数えない） |
 | `weather_icon` | 460,808 バイト | `{"name":"101-87x58","w":77,"h":58,"bytes":13406}`（消したものがあれば `removed`）。`name` は `<番号>-<幅>x<高さ>`（箱の大きさ）。形は上の `get_weather_icon` の `.lha` |
 
 - **順番**：`offset` は、それまでに受け取った大きさと同じでなければ `bad_request`（受け取りは続く）。言った大きさを超えたら捨てる。
 - **確かめ**：`upload_end` で大きさと SHA-256 を確かめる。違えば `hash_mismatch` で、一時ファイルを消す。
 - **やめる**：`upload_abort`、別の `upload_begin`、接続の終わり、60 秒 `upload_chunk` が来ない、デーモンの再起動。受け取りは同時に 1 つだけ（`image_*` とは別に数える）。
 - **断る**：知らない `kind`、上限を超える `bytes` は `bad_request`。空きが足りなければ `no_space`。
+
+## 写真（list_photos、get_photo、delete_photo）
+
+フォトフレームの写真（`/var/lib/lefthand/photos/`。設定の `photo` と `backlight.photo`）。足すのは `upload_*` の `kind: photo`。
+
+```json
+→ {"id":1,"cmd":"list_photos"}
+← {"id":1,"ok":true,"result":{"photos":[{"id":"8e507de0d4f1d833","name":"sunset","w":800,"h":480,"bytes":768008,"sha256":"…","added":"2026-10-10T17:05:02Z","source":"brain-deck"},
+     {"id":"20bdb0d8a5173ba6","name":"sunset（縦）","w":480,"h":800,"bytes":768008,"added":"…","of":"8e507de0d4f1d833"}],
+     "max":10,"total_bytes":1536016,"free_bytes":47603712,"reserve_bytes":5912576,"showing":"8e507de0d4f1d833"}}
+→ {"id":2,"cmd":"get_photo","photo":"8e507de0d4f1d833","offset":0}
+← {"id":2,"ok":true,"result":{"photo":"8e507de0d4f1d833","offset":0,"total":768008,"data":"TEhJMSAD4AE…"}}
+→ {"id":3,"cmd":"delete_photo","photo":"20bdb0d8a5173ba6"}
+← {"id":3,"ok":true,"result":{"deleted":"20bdb0d8a5173ba6","count":1}}
+```
+
+- 並びは足した順。`get_photo` は 1 回に 96 KiB まで（`length` で小さくできる）。`total` までくり返して読む。
+- 出している写真を消すと、写真をやめて元の画面に戻す。もとの写真を消しても、縦向きに切り抜き直した写真は残る（縦向きだけの写真として出す）。
+- ない id は `not_found`、id の形が違えば `bad_request`。
 
 ## 更新、再起動、電源、ログ（ssh を使わない保守）
 
