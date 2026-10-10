@@ -6,6 +6,27 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ R2　本番で内蔵 RTC への書き戻しを有効にする（2026-10-11）
+
+本番の設定（`config/current.yaml`）の `clock.rtc` を `read` から `write` にしただけのフェーズ。ほかの設定とデーモン（22c9aaa3a9d2）は変えていない。
+
+### 始めたときの本番の状態
+
+- Brain は 01:25 ごろに起動していて、起動したときに内蔵 RTC から時刻を合わせていた（`set the clock from the RTC (2026-10-12 01:24:46, 4m14s from the restored clock)`）。**RTC は PC より 23 時間 58 分 34 秒進んでいた**（2026-10-12 と読めた）。そのため Brain の時刻も 1 日進んでいて、`battery-log.csv`、`widgets.json`、`calc.json`、`display.json`、`/etc/fake-hwclock.data`、`/var/lib/systemd/timesync/clock` の日時が 2026-10-12 になっていた（デーモンと OS が自分で書いたもの。手では直していない）。
+- 純正のファームウェアで時刻を合わせたときに、日付を 1 日先にしたのか、RTC の起点の読み方が 1 日ずれているのかは、ここからは分からない（ユーザーの試験で「同じ形」と確かめてあるので、前者とみなした）。下の「あとで確かめてほしいこと」。
+
+### 反映と確認
+
+- `lefthand -check config/current.yaml`（ホスト。注意は背景画像がホストにないことだけ）、`brain-deck config check`、`brain-deck config put --dry-run` が通った。
+- `brain-deck config put config/current.yaml`（01:34）。再起動なしで反映。`brain-deck status` の内蔵 RTC が「時刻を合わせたら書き戻す」になった。`brain-deck config get` が `config/current.yaml` と同じ。
+- `brain-deck time sync`（01:36:30）：「23h58m33.676s 進んでいた」。ログに `time: rtc: wrote 2026-10-11 01:36:30`。`brain-deck status`：Brain の時刻は PC との差 0s、**内蔵 RTC は PC との差 1s**（RTC は秒の単位なので、書いた瞬間の秒の端数の分だけずれる）、最後に書いた結果 ok。**実機で RTC に書いたのはこれが初めて**。NEW_REGS が 0 のときだけ書き、PERSISTENT には触れていない（P2 のまま）。
+- 本番の画面（fbshot）と `-render-png`（同じ時刻、電池 88% 充電中、マウスなし、同期 01:36）が 0 画素の違い（RGB565 で比べた）。
+- `/var/lib/systemd/timesync/clock` は、時刻合わせのあと timesyncd が 01:36:46 に書き直した。`/etc/fake-hwclock.data` は 02:00 の fake-hwclock-save.timer で正しい時刻に書き直される（この版の fake-hwclock は、保存した時刻より前でも書く。手では触っていない）。
+
+### 気づいたこと
+
+- 起動したときの RTC の確かめ方は「前に分かっていた時刻より前なら使わない」だけなので、**進んでいる RTC はそのまま使う**。今回は 1 日進んだ RTC で Brain の時計が 1 日進んだ。PC につなげば時刻合わせで直り、書き戻しで RTC も直る。進みすぎを見分けるには基準が要る（P3 の「同期」で RTC と PC の差を記録して見る）。
+
 ## 追記：フェーズ R　本番の設定にホーム画面、PC から外したときの使い方、自動減光（2026-10-10）
 
 P1 と P2 で作った機能を、本番の設定（`/etc/lefthand/config.yaml`）に入れたフェーズ。デーモンは変えていない（22c9aaa3a9d2 のまま）。反映は `brain-deck config put`（ssh で入れ替えていない）。
