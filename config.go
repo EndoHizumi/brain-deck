@@ -157,6 +157,13 @@ type ActionSpec struct {
 	TapMove         *float64 `yaml:"tap_move,omitempty" json:"tap_move,omitempty"`                 // タップとみなす動きの上限（ドット）
 	DragMS          *int     `yaml:"drag_ms,omitempty" json:"drag_ms,omitempty"`                   // タップのあと、これより早く触れればドラッグ
 	LongPress       string   `yaml:"long_press,omitempty" json:"long_press,omitempty"`             // none か right（長押しで右クリック）
+
+	// pentablet：ペンタブレット（pen.go）。memo：手書きメモ（memo.go）も min_pressure、settle_ms、smooth を使う
+	Map           string  `yaml:"map,omitempty" json:"map,omitempty"`                       // full（既定）、aspect、region
+	PCScreen      string  `yaml:"pc_screen,omitempty" json:"pc_screen,omitempty"`           // PC の画面の大きさ（1920x1080 など）
+	Region        *[4]int `yaml:"region,omitempty" json:"region,omitempty"`                 // map: region の範囲 [x, y, 幅, 高さ]（PC の画面の画素）
+	Pressure      *bool   `yaml:"pressure,omitempty" json:"pressure,omitempty"`             // 筆圧を送る（既定 true）
+	PressureRange *[2]int `yaml:"pressure_range,omitempty" json:"pressure_range,omitempty"` // 筆圧の 0 と最大にする押す強さ（既定 [400, 2400]）
 }
 
 // Span はセルの大きさ [列数, 行数]。書かなければ [1, 1]。
@@ -182,6 +189,7 @@ var actionFields = map[string]bool{
 	"unit": true, "min": true, "max": true, "chart": true, "points": true, "decimals": true, "duration": true, "colors": true, "prefix": true,
 	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
+	"map": true, "pc_screen": true, "region": true, "pressure": true, "pressure_range": true,
 }
 
 func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
@@ -963,7 +971,7 @@ func (km *Keymap) usesMedia() bool {
 func (km *Keymap) usesMouse() bool {
 	for _, l := range km.Layers {
 		for _, a := range km.allActions(l) {
-			if a.Kind == actMouse || (a.Widget != nil && a.Widget.Kind == widgetPad) {
+			if a.Kind == actMouse || (a.Widget != nil && (a.Widget.Kind == widgetPad || a.Widget.Kind == widgetPenTab)) {
 				return true
 			}
 		}

@@ -457,6 +457,14 @@ type TouchHit struct {
 	Mapped   bool
 	Own      bool // ウィジェットが押した位置で働き、自分で押したことを描く（セル全体を光らせない）
 	Pad      bool // トラックパッドのセル。離すまでのサンプルを Engine.pad に渡す
+	// Stream は、離すまでのサンプルを渡す先（ペンタブレット、手書きメモ）。nil ならない
+	Stream touchStream
+}
+
+// touchStream は、触れてから離すまでのサンプルを受け取るもの（ペンタブレット、手書きメモ）。タッチの goroutine だけが使う。
+type touchStream interface {
+	Sample(x, y, pressure int32, t time.Time)
+	Up(t time.Time)
 }
 
 // PressTouch はタッチの生座標で押す。判定は今の重なりの格子で行う。
@@ -509,6 +517,16 @@ func (e *Engine) PressTouchAt(x, y int32, t time.Time) TouchHit {
 				e.pad.Down(a.Widget.Pad, e.touchAt.cell, m, t)
 			case a.Widget.Kind == widgetHome:
 				a = e.homeTouchLocked(a.Widget.home, e.touchAt.cell, e.touchAt.pt, v.Portrait)
+			case a.Widget.Kind == widgetPenTab && e.offline:
+				e.offlineNoticeLocked()
+			case a.Widget.Kind == widgetPenTab && (e.widgets == nil || !e.widgets.pen.Available()):
+				if e.notify != nil {
+					e.notify("ペンタブレットは、マウスありの形（usb_mode: mouse）で使えます")
+				}
+			case a.Widget.Kind == widgetPenTab:
+				h.Stream = newPenTabStream(a.Widget.PenTab, e.touchAt.cell.Inset(cellGap+textMargin), m, e.widgets.pen, t)
+			case a.Widget.Kind == widgetMemo && e.widgets != nil && e.widgets.memos != nil:
+				h.Stream = e.widgets.memos.memoTouch(a.Widget.Memo, e.touchAt.cell, m, e.touchAt.pt, t, e.widgets.inkFn())
 			}
 		}
 	}

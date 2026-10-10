@@ -209,6 +209,7 @@ type State struct {
 	kbdID  byte             // キーボードのレポート ID。0 なら付けない（キーボードだけの形。hid.go）
 	mouse  *Mouse           // nil ならマウスはない
 	media  *Media           // nil ならメディアキーはない
+	pen    *Pen             // nil ならペンはない
 }
 
 func (s *State) press(id string, c Combo) {
@@ -237,6 +238,7 @@ func (s *State) releaseAll() {
 	s.mu.Unlock()
 	s.mouse.ReleaseAll()
 	s.media.ReleaseAll()
+	s.pen.Lift()
 }
 
 // retryLoop は送信に失敗した状態を定期的に送り直す。
@@ -250,6 +252,7 @@ func (s *State) retryLoop() {
 		s.mu.Unlock()
 		s.mouse.retry()
 		s.media.retry()
+		s.pen.retry()
 	}
 }
 
@@ -434,9 +437,10 @@ type touchProc struct {
 
 	x, y, p       int32
 	down, pressed bool
-	pad           bool      // トラックパッドのセルを押している
-	lit           *TouchHit // ハイライト中のセル
-	swallowed     bool      // 暗いときに触れたので、明るくしただけ。離すまで何もしない
+	pad           bool        // トラックパッドのセルを押している
+	stream        touchStream // ペンタブレット、手書きメモのセルを押している
+	lit           *TouchHit   // ハイライト中のセル
+	swallowed     bool        // 暗いときに触れたので、明るくしただけ。離すまで何もしない
 }
 
 func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
@@ -458,6 +462,10 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 		}
 		if !tp.down && tp.pressed {
 			tp.dim.TouchUp()
+			if tp.stream != nil {
+				tp.stream.Up(t)
+				tp.stream = nil
+			}
 			if tp.pad {
 				e.pad.Up(t)
 				tp.pad = false
@@ -472,6 +480,10 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 	case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
 		if tp.down && tp.pressed && tp.pad {
 			e.pad.Sample(tp.x, tp.y, tp.p, t)
+			return
+		}
+		if tp.down && tp.pressed && tp.stream != nil {
+			tp.stream.Sample(tp.x, tp.y, tp.p, t)
 			return
 		}
 		// 触れた瞬間のセルで確定（スライドしても変えない）
@@ -498,6 +510,10 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 			if h.Pad {
 				tp.pad = true
 				e.pad.Sample(x, y, tp.p, t)
+			}
+			if h.Stream != nil {
+				tp.stream = h.Stream
+				tp.stream.Sample(x, y, tp.p, t)
 			}
 			where := fmt.Sprintf("cell %d,%d", h.Col, h.Row)
 			if h.Soft != "" {
@@ -853,6 +869,7 @@ func main() {
 	pngHomePage := flag.Int("render-home-page", 1, "-render-png で、ホーム画面に出すページ（1 から）")
 	pngLink := flag.String("render-link", "configured", "-render-png で、PC とのつながり（UDC の state か power。configured、suspended、power、not attached、空なら出さない）。configured と suspended のほかでは、PC に送るセルを休みと描く")
 	pngLastSync := flag.String("render-last-sync", "", "-render-png で、状態の帯に出す最後に同期した時刻（RFC 3339。省略すると未同期）")
+	pngMemo := flag.String("render-memo", "", "-render-png で、手書きメモのセルに出すメモ（memo の <id>.json の形のファイル。最後のページを出す）")
 	pngPhoto := flag.String("render-photo", "", "-render-png で、格子の代わりに、この写真（.565）をフォトフレームと同じく描く（向きが違えば縮めて帯を入れる）")
 	pngQR := flag.String("render-qr", "", "-render-png で、QR コードのウィジェットに出す中身（qr.json の形のファイル）")
 	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
@@ -864,6 +881,8 @@ func main() {
 	replayCfg := flag.String("replay-config", "", "-replay-touch で、トラックパッドの設定を読む設定ファイル（省略すると既定値）")
 	replayParams := flag.String("replay-params", "", `-replay-touch で、上書きするトラックパッドの項目（JSON。例: {"speed":1.5,"smooth":4}）`)
 	replayOps := flag.Bool("replay-ops", false, "-replay-touch で、送るマウスの操作を 1 つずつ書く")
+	replayPenF := flag.Bool("replay-pen", false, "引数の記録（.touch）を、ペンタブレットと手書きメモの線の読み取りに通し、結果を書いて終わる（実機不要）。-replay-params で項目を変える")
+	replayPNG := flag.String("replay-png", "", "-replay-pen で、最後の記録から読み取った線を描いた PNG を書く")
 	showVersion := flag.Bool("version", false, "版を JSON で書いて終わる（brain-deck update が、新しい lefthand を確かめるのに使う）")
 	checkGadget := flag.String("check-gadget", "", "この gadget-setup.sh のディスクリプタが、この lefthand のものと同じかを確かめて終わる")
 	updateApply := flag.String("update-apply", "", "更新・再起動の係として、plan.json のとおりに入れ替えて終わる（デーモンが systemd-run で起動する）")
@@ -895,6 +914,12 @@ func main() {
 		restoreConsole()
 		restoreBacklight()
 		restoreTerminal(*gadgetSetup)
+		return
+	}
+	if *replayPenF {
+		if err := runReplayPen(os.Stdout, flag.Args(), *replayParams, *replayPNG); err != nil {
+			log.Fatal(err)
+		}
 		return
 	}
 	if *replay {
@@ -1108,6 +1133,21 @@ func main() {
 			env.Weather = &d
 		}
 		env.WeatherIcons = NewIconStore(iconsDir)
+		if *pngMemo != "" {
+			dir, err := os.MkdirTemp("", "lefthand-memo")
+			if err != nil {
+				log.Fatal(err)
+			}
+			b, err := os.ReadFile(*pngMemo)
+			if err == nil {
+				err = os.WriteFile(filepath.Join(dir, "m1.json"), b, 0o644)
+			}
+			if err != nil {
+				log.Fatal(err)
+			}
+			env.Memo = OpenMemoService(dir).Snapshot()
+			os.RemoveAll(dir)
+		}
 		for _, l := range km.Layers {
 			if l.Grid == nil {
 				continue
@@ -1181,7 +1221,7 @@ func main() {
 	hostWaker = NewWaker() // スリープ中の PC をキーで起こす
 	hl := detectHID(cfg.HIDDevice)
 	log.Printf("hid: %s", hl.Source)
-	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID), media: NewMedia(hid, hl.MediaID)}
+	s := &State{hid: hid, active: map[string]Combo{}, kbdID: hl.KeyboardID, mouse: NewMouse(hid, hl.MouseID), media: NewMedia(hid, hl.MediaID), pen: NewPen(hid, hl.PenID)}
 	if hl.MouseID == 0 && km.usesMouse() {
 		log.Printf("mouse: the config uses the mouse (mouse: or widget: trackpad), but it is off (boot keyboard); turn it on with usb_mode, brain-deck usb-mode mouse, or HID_MOUSE=1 in /etc/lefthand/gadget.env")
 	}
@@ -1272,6 +1312,11 @@ func main() {
 	widgetRT := NewWidgetRT(todos)
 	widgetRT.gadgets = gadgets
 	widgetRT.calc = calc
+	widgetRT.pen = s.pen
+	memos := OpenMemoService(filepath.Join(*dataDir, "memo"))
+	addAtExit(memos.Flush) // まだ書いていない線を書く
+	widgetRT.memos = memos
+	memos.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
@@ -1283,6 +1328,7 @@ func main() {
 		env.WeatherIcons = icons
 		env.Graph = graphs.Snapshot()
 		env.Calc = calc.Snapshot()
+		env.Memo = memos.Snapshot()
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1386,6 +1432,8 @@ func main() {
 				usb.OnChange(d.Invalidate) // トラックパッドの「マウスはオフ」と、メディアキーのセルを描き直す
 				images.Preload(preloadOrder(cfg))
 				widgetRT.SetScreen(first.W, first.H, d.Poke)
+				widgetRT.SetInk(d.Ink)
+				memos.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
 			}
@@ -1438,6 +1486,7 @@ func main() {
 			guard:   guard,
 			photos:  photos,
 			frame:   frame,
+			memos:   memos,
 			dataDir: *dataDir,
 			started: time.Now(),
 		}

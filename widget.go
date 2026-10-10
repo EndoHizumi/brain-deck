@@ -31,6 +31,7 @@ const (
 	widgetGraph     = "graph"
 	widgetPresenter = "presenter"
 	widgetCalc      = "calculator"
+	// widgetPenTab（pentablet）は pen.go、widgetMemo（memo）は memo.go
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -46,7 +47,7 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc, widgetPenTab, widgetMemo}
 
 // ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
@@ -89,6 +90,8 @@ type WidgetDef struct {
 	Prefix     bool             // calculator：16 進と 2 進の結果を、0x と 0b を付けて打ち込む
 	calc       *calcCell        // calculator：押しているボタン
 	home       *HomeDef         // home：ホーム画面（設定の home から作る）
+	PenTab     *PenTabDef       // pentablet：当てはめる範囲と筆圧
+	Memo       *MemoDef         // memo：線の読み取りの設定
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -109,10 +112,20 @@ type WidgetEnv struct {
 	Calc         map[string]CalcState   // calculator：id ごとの状態（写し）
 	Link         string                 // 状態の帯：PC とのつながり（UDC の state。分からなければ空）
 	LastSync     *time.Time             // 状態の帯：最後に PC から時刻を合わせた時刻。nil なら一度もない
+	Memo         *MemoView              // memo：今のページ（写し）。nil ならメモがない
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
 func compileWidget(s ActionSpec) (*WidgetDef, error) {
+	switch s.Widget {
+	case widgetPenTab:
+		return compilePenTab(s)
+	case widgetMemo:
+		return compileMemo(s)
+	}
+	if s.Map != "" || s.PCScreen != "" || s.Region != nil || s.Pressure != nil || s.PressureRange != nil {
+		return nil, fmt.Errorf("map, pc_screen, region, pressure and pressure_range are for widget: pentablet")
+	}
 	if s.Widget == widgetPad {
 		if s.Work != "" || s.Break != "" || s.States != nil {
 			return nil, fmt.Errorf("work, break and states cannot be used with widget: trackpad")
@@ -395,6 +408,10 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return fmt.Sprintf("trackpad\x00%v", env.MouseOff) // マウスのオンとオフで描き直す
 	case widgetHome:
 		return fmt.Sprintf("home\x00%d", w.home.Page())
+	case widgetPenTab:
+		return penTabKey(w.PenTab, env)
+	case widgetMemo:
+		return memoKey(w, env)
 	}
 	return gadgetKey(v, env)
 }
@@ -423,7 +440,7 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		return wthNext(v.Widget, env)
 	case widgetGraph:
 		return graphNext(v.Widget, env)
-	case widgetHome:
+	case widgetHome, widgetPenTab, widgetMemo:
 		return time.Time{}
 	}
 	return gadgetNext(v, env)
@@ -449,6 +466,10 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		drawGraph(cv, area, v.Widget, env, ink, subInk)
 	case widgetCalc:
 		drawCalc(cv, area, v.Widget, env)
+	case widgetPenTab:
+		drawPenTab(cv, area, v.Widget.PenTab, env)
+	case widgetMemo:
+		drawMemo(cv, area, env)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {

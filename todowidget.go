@@ -90,13 +90,34 @@ type WidgetRT struct {
 	mu      sync.Mutex
 	w, h    int // 画面の大きさ（論理）。画面を使わないときは 800x480
 	todos   *TodoService
-	gadgets *GadgetService   // ストップウォッチなどの状態。nil ならタップしても何もしない
-	calc    *CalcService     // 電卓。nil ならボタンを押しても何もしない
-	envFn   func() WidgetEnv // 今の時刻とデータ。nil なら Todo だけ
-	poke    func()           // 画面の描き直し。待たずに返ること
+	gadgets *GadgetService                      // ストップウォッチなどの状態。nil ならタップしても何もしない
+	calc    *CalcService                        // 電卓。nil ならボタンを押しても何もしない
+	envFn   func() WidgetEnv                    // 今の時刻とデータ。nil なら Todo だけ
+	poke    func()                              // 画面の描き直し。待たずに返ること
+	pen     *Pen                                // ペンタブレットの出力。nil なら送らない
+	memos   *MemoService                        // 手書きメモ。nil なら書けない
+	ink     func(func(*Canvas) image.Rectangle) // 手書きメモの線を描き足す（Display.Ink）。nil なら描き足さない
 }
 
 func NewWidgetRT(todos *TodoService) *WidgetRT { return &WidgetRT{w: 800, h: 480, todos: todos} }
+
+// inkFn は、手書きメモの線を描き足す関数（画面がなければ何もしない）。
+func (rt *WidgetRT) inkFn() func(func(*Canvas) image.Rectangle) {
+	rt.mu.Lock()
+	f := rt.ink
+	rt.mu.Unlock()
+	if f == nil {
+		return func(func(*Canvas) image.Rectangle) {}
+	}
+	return f
+}
+
+// SetInk は、手書きメモの線を描き足す関数を設定する（画面を開いたあと）。
+func (rt *WidgetRT) SetInk(f func(func(*Canvas) image.Rectangle)) {
+	rt.mu.Lock()
+	rt.ink = f
+	rt.mu.Unlock()
+}
 
 // SetEnv は、押した位置を解くときに使う、今の時刻とデータを返す関数を設定する（描画と同じもの）。
 func (rt *WidgetRT) SetEnv(f func() WidgetEnv) {
@@ -148,7 +169,7 @@ type widgetTouch struct {
 
 // ownsTouch は、ウィジェットがタップを自分で処理し、押した位置で働くか（セル全体を光らせない）。
 func (w *WidgetDef) ownsTouch() bool {
-	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc || w.Kind == widgetHome)
+	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc || w.Kind == widgetHome || w.Kind == widgetPenTab || w.Kind == widgetMemo)
 }
 
 // todoGeom は、Todo のセルの中の配置。

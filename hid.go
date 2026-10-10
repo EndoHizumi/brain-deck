@@ -40,6 +40,7 @@ const (
 	hidKeyboardID = 1 // キーボードのレポート ID（キーボードとマウスの形）
 	hidMouseID    = 2 // マウスのレポート ID
 	hidMediaID    = 3 // メディアキー（Consumer Control）のレポート ID（media.go）
+	hidPenID      = 4 // ペン（デジタイザ）のレポート ID（pen.go）
 )
 
 // hidDescCombo は、キーボード（レポート ID 1、9 バイト）とマウス（レポート ID 2、6 バイト）の形。
@@ -63,7 +64,21 @@ var hidDescCombo = []byte{
 	0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x85, hidMediaID,
 	0x15, 0x00, 0x26, 0xff, 0x03, 0x19, 0x00, 0x2a, 0xff, 0x03, 0x75, 0x10, 0x95, mediaSlots, 0x81, 0x00,
 	0xc0,
+	// ペン（Digitizer の Pen。pen.go）。Tip Switch、In Range、X、Y（0〜32767 の絶対座標）、Tip Pressure（0〜1023）。
+	// 物理の大きさは PW-SH2 の画面（5 型、108×65 mm。0.1 mm の単位）
+	0x05, 0x0d, 0x09, 0x02, 0xa1, 0x01, 0x85, hidPenID, 0x09, 0x20, 0xa1, 0x00,
+	0x09, 0x42, 0x09, 0x32, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02, // Tip Switch、In Range
+	0x95, 0x06, 0x81, 0x03, // 残りの 6 ビット
+	0x05, 0x01, 0x26, 0xff, 0x7f, 0x75, 0x10, 0x95, 0x01, 0x55, 0x0e, 0x65, 0x11, 0x35, 0x00,
+	0x46, 0x38, 0x04, 0x09, 0x30, 0x81, 0x02, // X（物理 108.0 mm）
+	0x46, 0x8a, 0x02, 0x09, 0x31, 0x81, 0x02, // Y（物理 65.0 mm）
+	0x45, 0x00, 0x65, 0x00, 0x55, 0x00,
+	0x05, 0x0d, 0x09, 0x30, 0x26, 0xff, 0x03, 0x81, 0x02, // Tip Pressure
+	0xc0, 0xc0,
 }
+
+// hidDescComboNoPen は、前の版（フェーズ G まで）のキーボードとマウスとメディアキーの形（ペンがない）。
+var hidDescComboNoPen = hidDescCombo[:bytes.Index(hidDescCombo, []byte{0x05, 0x0d, 0x09, 0x02, 0xa1, 0x01})]
 
 // hidDescComboNoMedia は、前の版のキーボードとマウスの形（メディアキーがない）。
 var hidDescComboNoMedia = hidDescCombo[:bytes.Index(hidDescCombo, []byte{0xc0, 0xc0, 0x05, 0x0c, 0x09, 0x01})+2]
@@ -80,6 +95,7 @@ type HIDLayout struct {
 	KeyboardID byte   // 0 ならキーボードのレポートに ID を付けない（キーボードだけの形）
 	MouseID    byte   // 0 ならマウスはない
 	MediaID    byte   // 0 ならメディアキーはない
+	PenID      byte   // 0 ならペンはない
 	Source     string // どこで決めたか（ログ用）
 }
 
@@ -119,7 +135,9 @@ func detectHID(dev string) HIDLayout {
 func layoutOf(desc []byte, where string) HIDLayout {
 	switch {
 	case bytes.Equal(desc, hidDescCombo):
-		return HIDLayout{KeyboardID: hidKeyboardID, MouseID: hidMouseID, MediaID: hidMediaID, Source: where + ": keyboard + mouse + media keys"}
+		return HIDLayout{KeyboardID: hidKeyboardID, MouseID: hidMouseID, MediaID: hidMediaID, PenID: hidPenID, Source: where + ": keyboard + mouse + media keys + pen"}
+	case bytes.Equal(desc, hidDescComboNoPen):
+		return HIDLayout{KeyboardID: hidKeyboardID, MouseID: hidMouseID, MediaID: hidMediaID, Source: where + ": keyboard + mouse + media keys (old descriptor: the pen tablet does not work until the gadget is set up again)"}
 	case bytes.Equal(desc, hidDescKeyboard):
 		return HIDLayout{Source: where + ": keyboard only (boot keyboard; usb_mode switches the mouse and the media keys on)"}
 	case bytes.Equal(desc, legacyDesc(hidDescComboNoMedia)):

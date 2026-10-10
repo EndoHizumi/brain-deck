@@ -467,6 +467,10 @@ type Display struct {
 	photoNew   bool
 	photoShown bool // 今、写真を描いている（描画側だけが触る）
 
+	// 手書きメモの描き足し（memo.go）。d.mu で守る。描くのは描画の goroutine
+	inks   []inkOp
+	inkGen uint64
+
 	// ウィジェット（描画の goroutine だけが触る）
 	env    func() WidgetEnv // 今の時刻など。nil なら時刻だけ
 	wkeys  []string         // セルごとに、前に描いたウィジェットの中身（widgetKey）
@@ -569,6 +573,23 @@ func (d *Display) SetPhoto(img *Image) {
 	if img == nil {
 		d.invalid = true // 格子を全体から描き直す
 	}
+	d.mu.Unlock()
+	d.poke()
+}
+
+// inkOp は、裏画面に描き足して、描いた範囲（論理）を返す。
+type inkOp struct {
+	gen uint64
+	f   func(*Canvas) image.Rectangle
+}
+
+// Ink は、今の格子の上に描き足す（手書きメモの線）。描画は待たない。格子が変わったら（レイヤーの切り替え）捨てる。
+func (d *Display) Ink(f func(*Canvas) image.Rectangle) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.inks = append(d.inks, inkOp{gen: d.wantGen, f: f})
 	d.mu.Unlock()
 	d.poke()
 }
@@ -879,6 +900,8 @@ func (d *Display) redraw() bool {
 	d.invalid = false
 	ov, ovNew := d.overlay, d.ovNew
 	d.ovNew = false
+	inks := d.inks
+	d.inks = nil
 	d.mu.Unlock()
 	d.drawMu.Lock()
 	defer d.drawMu.Unlock()
@@ -937,6 +960,20 @@ func (d *Display) redraw() bool {
 		d.updateOverlayLocked(ov)
 	}
 	d.redrawWidgets()
+	// 手書きメモの描き足しは、ウィジェットを描き直したあと（線を書き終えたときに紙を描き直しても、そのあとに足す）
+	if len(inks) > 0 {
+		t := time.Now()
+		var r image.Rectangle
+		for _, op := range inks {
+			if op.gen == d.layout.Gen {
+				r = r.Union(op.f(d.cv))
+			}
+		}
+		if !r.Empty() {
+			d.flushLocked(r)
+		}
+		vlogf("display: ink %d ops %v", len(inks), time.Since(t))
+	}
 	return true
 }
 

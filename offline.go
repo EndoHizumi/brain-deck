@@ -40,7 +40,7 @@ func (a *Action) needsPC() bool {
 	case actKey, actMouse, actMedia, actTerminal:
 		return true
 	}
-	return a.Widget != nil && a.Widget.Kind == widgetPad
+	return a.Widget != nil && (a.Widget.Kind == widgetPad || a.Widget.Kind == widgetPenTab)
 }
 
 // widgetFromPC は、中身を PC から受け取って出すタイル（外しているあいだは更新されない）か。

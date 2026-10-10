@@ -394,7 +394,7 @@ func padCellOf(km *Keymap, layer string, W, H int) (int, image.Rectangle, *Actio
 		}
 		if li < 0 && l.Grid != nil {
 			for _, a := range l.Grid.Cells {
-				if a.Widget != nil && a.Widget.Kind == widgetPad {
+				if a.Widget != nil && (a.Widget.Kind == widgetPad || a.Widget.Kind == widgetPenTab || a.Widget.Kind == widgetMemo) {
 					li = i
 				}
 			}
@@ -412,7 +412,7 @@ func padCellOf(km *Keymap, layer string, W, H int) (int, image.Rectangle, *Actio
 	}
 	v := km.view(stack)
 	for i, a := range v.Cells {
-		if a != nil && a.Widget != nil && a.Widget.Kind == widgetPad {
+		if a != nil && a.Widget != nil && (a.Widget.Kind == widgetPad || a.Widget.Kind == widgetPenTab || a.Widget.Kind == widgetMemo) {
 			s := a.Spec
 			return li, cellRect(i%v.Cols, i/v.Cols, a.SpanW, a.SpanH, v.Cols, v.Rows, W, H), &s, nil
 		}
