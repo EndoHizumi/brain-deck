@@ -333,11 +333,7 @@ type feedEntry struct {
 const defaultFeedItems = 10
 
 func feedsPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "brain-deck", "feeds.yaml"), nil
+	return filepath.Join(filepath.Dir(calendarsPath()), "feeds.yaml"), nil
 }
 
 func loadFeeds() (feedsFile, string, error) {

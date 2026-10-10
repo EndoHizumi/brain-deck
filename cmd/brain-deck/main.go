@@ -103,6 +103,12 @@ const usage = `使い方：
   brain-deck memo [list] [--json]     手書きメモ（widget: memo）の一覧（番号、id、ページと線の数、更新した日時）
   brain-deck memo get <番号|id> -o <ファイル.png> [--page N]   メモを PNG に描き出す（ページは縦に並べる）
   brain-deck memo rm <番号|id>...     メモを消す
+  brain-deck read add <ファイル | URL>...  読み物（青空文庫のテキストか zip、DRM のない EPUB、Web の記事）を取り込む
+                                      （-o <ファイル> で送らずにファイルに書く）。read [list]、read rm <番号>
+  brain-deck read feed add <URL> [--limit-items 10]、feed list、feed rm <番号>、feed sync   RSS の記事を取り込む
+  brain-deck sync [--wait 90s] [--if-older 10m]   時刻、予定、天気、読み物の RSS、手書きメモの取り出しを、まとめて行う
+                                      （~/.config/brain-deck/sync.yaml で選ぶ。--wait は Brain の準備を待つ。--if-older は、
+                                      Brain がその時間のうちに同期していれば何もしない）。終了コードは、失敗があれば 9
   brain-deck time sync                PC の時刻を Brain に送る
   brain-deck status                   Brain の状態（版、時刻と内蔵 RTC、PC とのつながり、レイヤー、USB の形、電池）
   brain-deck battery log [-n 行数]    電池だけで動かしたときの電圧の記録（CSV。Brain の battery-log.csv）
@@ -200,7 +206,7 @@ type options struct {
 
 // subValueOpts、subFlagOpts は、photo、memo、read、files、sync のオプション。
 var (
-	subValueOpts = map[string]bool{"o": true, "page": true, "out": true, "of": true, "zoom": true, "center": true, "brightness": true, "limit-items": true, "sort": true}
+	subValueOpts = map[string]bool{"o": true, "page": true, "wait": true, "if-older": true, "out": true, "of": true, "zoom": true, "center": true, "brightness": true, "limit-items": true, "sort": true}
 	subFlagOpts  = map[string]bool{"portrait": true, "no-dither": true, "all": true, "force": true, "du": true, "recursive": true}
 )
 
@@ -478,6 +484,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = memoCommand(o)
 	case "read":
 		cmd, err = readCommand(o)
+	case "sync":
+		return runSync(o, stdout, stderr)
 	case "time":
 		if len(o.args) != 2 || o.args[1] != "sync" {
 			err = usageError("time のあとには sync を書きます（brain-deck time sync）")
@@ -783,6 +791,11 @@ type rtcInfo struct {
 	OffsetMS  int64      `json:"offset_ms"`
 	Boot      string     `json:"boot"`
 	LastWrite string     `json:"last_write"`
+	Log       []struct {
+		At       time.Time `json:"at"`
+		OffsetMS int64     `json:"offset_ms"`
+		SinceSec int64     `json:"since_write_sec"`
+	} `json:"log"`
 }
 
 var rtcModeNames = map[string]string{"read": "読むだけ", "write": "時刻を合わせたら書き戻す", "off": "使わない"}
@@ -807,6 +820,11 @@ func (r rtcInfo) describe(brainNow time.Time, brainMinusPC time.Duration) string
 	s += "）"
 	if r.Boot != "" {
 		s += "\n\t起動したとき：" + r.Boot
+	}
+	// 書き戻す前の RTC と PC の差の記録（新しい 5 つ）
+	for i := max(len(r.Log)-5, 0); i < len(r.Log); i++ {
+		l := r.Log[i]
+		s += "\n\t" + l.At.Local().Format("2006-01-02 15:04") + " に合わせたとき：" + rtcDiffText(l.OffsetMS, l.SinceSec, false)
 	}
 	return s
 }
@@ -880,18 +898,49 @@ func setTime(c *Client) (string, error) {
 	var r struct {
 		Stepped  bool  `json:"stepped"`
 		OffsetMS int64 `json:"offset_ms"`
+		RTC      *struct {
+			OffsetMS int64 `json:"offset_ms"`
+			SinceSec int64 `json:"since_write_sec"`
+		} `json:"rtc"`
+		RTCWrite bool `json:"rtc_write"`
 		timeInfo
 	}
 	json.Unmarshal(raw, &r)
 	off := (time.Duration(r.OffsetMS) * time.Millisecond).Round(time.Millisecond)
+	var out string
 	if !r.Stepped {
-		return fmt.Sprintf("Brain の時刻は合っています（ずれ %v）", off), nil
+		out = fmt.Sprintf("Brain の時刻は合っています（ずれ %v）", off)
+	} else {
+		dir := "遅れていた"
+		if off < 0 {
+			dir, off = "進んでいた", -off
+		}
+		out = fmt.Sprintf("Brain の時刻を合わせました（%v %s。今 %s）", off, dir, r.Now.Local().Format("2006-01-02 15:04:05"))
 	}
-	dir := "遅れていた"
-	if off < 0 {
-		dir, off = "進んでいた", -off
+	if r.RTC != nil {
+		out += "\n" + rtcDiffText(r.RTC.OffsetMS, r.RTC.SinceSec, r.RTCWrite)
 	}
-	return fmt.Sprintf("Brain の時刻を合わせました（%v %s。今 %s）", off, dir, r.Now.Local().Format("2006-01-02 15:04:05")), nil
+	return out, nil
+}
+
+// rtcDiffText は、書き戻す前の内蔵 RTC と PC の差（RTC の遅れ方の記録）を書く。
+func rtcDiffText(offMS, sinceSec int64, written bool) string {
+	d := (time.Duration(offMS) * time.Millisecond).Round(100 * time.Millisecond)
+	dir := "進んでいた"
+	if d < 0 {
+		dir, d = "遅れていた", -d
+	}
+	s := fmt.Sprintf("内蔵 RTC は PC より %v %s（RTC は秒の単位なので ±1 秒）", d, dir)
+	if sinceSec > 0 {
+		s += fmt.Sprintf("。前に書いてから %s", longDuration(time.Duration(sinceSec)*time.Second))
+		if sinceSec >= 6*3600 {
+			s += fmt.Sprintf("、1 日に %+.1f 秒", float64(offMS)/1000/(float64(sinceSec)/86400))
+		}
+	}
+	if written {
+		s += "。PC の時刻を書き戻しました"
+	}
+	return s
 }
 
 func timeSync(c *Client) (string, error) { return setTime(c) }

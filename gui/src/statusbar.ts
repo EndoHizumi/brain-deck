@@ -1,6 +1,9 @@
 // 状態の帯（statusbar.go と同じ項目、文、色）。描くのは preview.ts の drawBar。
 
 import type { BarItem, BatteryInfo } from './types'
+// sync.go の「同期中」と、失敗したときの色（gadgetwidget.go の colInkOK、colInkWarn）
+const colInkOKBar: [number, number, number] = [0x50, 0xd8, 0x80]
+const colInkWarnBar: [number, number, number] = [0xff, 0xc0, 0x30]
 
 export const BAR_H = 28 // 帯の高さ
 export const BAR_SCALE = 2
@@ -30,6 +33,8 @@ export interface BarEnv {
   link: string // UDC の state（configured、suspended など）か power（電源だけ。link.go）。空なら出さない
   mouseOff: boolean
   lastSync: Date | null
+  syncing?: boolean // PC の brain-deck sync が同期している（sync.go）
+  syncFailed?: boolean // 最後の同期に失敗したものがあった
 }
 
 export interface BarItemView {
@@ -69,6 +74,10 @@ export function barItems(items: BarItem[], env: BarEnv): BarItemView[] {
     } else if (k === 'mouse') {
       if (!env.mouseOff) out.push({ kind: k, text: 'マウス', ink: colText })
     } else if (k === 'sync') {
+      if (env.syncing) {
+        out.push({ kind: k, text: '同期中', ink: colInkOKBar })
+        continue
+      }
       const t = env.lastSync
       if (!t) {
         out.push({ kind: k, text: '未同期', ink: colUnsynced })
@@ -76,7 +85,7 @@ export function barItems(items: BarItem[], env: BarEnv): BarItemView[] {
       }
       const n = env.now
       const same = t.getFullYear() === n.getFullYear() && t.getMonth() === n.getMonth() && t.getDate() === n.getDate()
-      out.push({ kind: k, text: '同期' + (same ? hhmm(t) : `${t.getMonth() + 1}/${t.getDate()}`), ink: colBarDim })
+      out.push({ kind: k, text: '同期' + (same ? hhmm(t) : `${t.getMonth() + 1}/${t.getDate()}`), ink: env.syncFailed ? colInkWarnBar : colBarDim })
     }
   }
   return out

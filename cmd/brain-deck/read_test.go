@@ -342,3 +342,58 @@ func TestReadAgainstFakeBrain(t *testing.T) {
 		t.Fatalf("-o: %d %s", code, out)
 	}
 }
+
+func TestSyncAgainstFakeBrain(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	conf := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", conf)
+	f := newFakeBrain(t)
+	var syncs []map[string]any
+	memo := `{"id":"m1","created":"2026-10-11T00:00:00Z","updated":"2026-10-11T01:00:00Z","pages":[{"w":20,"h":10,"strokes":[{"w":2,"p":[1,1,18,8]}]}]}`
+	f.handler = func(req map[string]any) (any, bool) {
+		switch req["cmd"] {
+		case "hello":
+			return map[string]any{"protocol": 1, "daemon": "lefthand", "version": "test",
+				"commands": []string{"hello", "set_time", "set_sync", "list_memos", "get_memo", "list_reads"}}, true
+		case "set_sync":
+			syncs = append(syncs, req)
+			return map[string]any{"running": req["state"] == "start"}, true
+		case "set_time":
+			return map[string]any{"stepped": false, "offset_ms": 3, "rtc": map[string]any{"offset_ms": -1500, "since_write_sec": 86400 * 2}, "rtc_write": true}, true
+		case "list_memos":
+			return map[string]any{"memos": []any{map[string]any{"id": "m1", "updated": "2026-10-11T01:00:00Z", "pages": 1, "strokes": 1}}}, true
+		case "get_memo":
+			return map[string]any{"total": len(memo), "data": base64.StdEncoding.EncodeToString([]byte(memo))}, true
+		}
+		return nil, false
+	}
+	go f.serve(nil)
+	// sync.yaml がない：時刻だけ（予定、天気、RSS、メモは設定がないので飛ばす）
+	code, out, errs := runCLI(t, "--port", f.slave, "sync")
+	if code != exitOK || !strings.Contains(out, "時刻") || !strings.Contains(out, "内蔵 RTC は PC より 1.5s 遅れていた") || !strings.Contains(out, "1 日に -0.8 秒") ||
+		!strings.Contains(out, "予定") || !strings.Contains(out, "飛ばした") {
+		t.Fatalf("sync: %d\n%s\n%s", code, out, errs)
+	}
+	if len(syncs) != 2 || syncs[0]["state"] != "start" || syncs[1]["state"] != "done" || syncs[1]["ok"] != true {
+		t.Fatalf("set_sync %v", syncs)
+	}
+	// メモを写す。2 回目は同じなので書かない。feeds.yaml があり、RSS が取れなければ失敗（ほかは続け、終了コード 9）
+	md := filepath.Join(t.TempDir(), "memo")
+	os.MkdirAll(filepath.Join(conf, "brain-deck"), 0o755)
+	os.WriteFile(filepath.Join(conf, "brain-deck", "sync.yaml"), []byte("memo:\n  dir: "+md+"\n"), 0o644)
+	os.WriteFile(filepath.Join(conf, "brain-deck", "feeds.yaml"), []byte("feeds:\n  - url: http://127.0.0.1:1/feed\n"), 0o644)
+	code, out, _ = runCLI(t, "--port", f.slave, "--fetch-timeout", "2s", "sync")
+	if code != exitSyncPartial || !strings.Contains(out, "読み物の RSS 失敗") || !strings.Contains(out, "1 個を") || !strings.Contains(out, "1 件が失敗") {
+		t.Fatalf("sync 2: %d\n%s", code, out)
+	}
+	if !fileExists(filepath.Join(md, "m1.png")) || !fileExists(filepath.Join(md, "m1.json")) {
+		t.Fatal("memo not exported")
+	}
+	if last := syncs[len(syncs)-1]; last["ok"] != false {
+		t.Errorf("done %v", last)
+	}
+	os.Remove(filepath.Join(conf, "brain-deck", "feeds.yaml"))
+	if code, out, _ = runCLI(t, "--port", f.slave, "sync"); code != exitOK || !strings.Contains(out, "0 個を") || !strings.Contains(out, "1 個は前と同じ") {
+		t.Fatalf("sync 3: %d\n%s", code, out)
+	}
+}
