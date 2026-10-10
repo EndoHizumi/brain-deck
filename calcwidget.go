@@ -272,7 +272,7 @@ func (w *WidgetDef) calcTouch(rt *WidgetRT, t widgetTouch, label string) {
 	w.calc.pressed = idx
 	w.calc.mu.Unlock()
 	if idx >= 0 {
-		rt.calc.Input(w.ID, calcButtons[idx/calcCols][idx%calcCols], w.Prefix)
+		rt.calc.Submit(w.ID, calcButtons[idx/calcCols][idx%calcCols], w.Prefix)
 	}
 	rt.redraw()
 }

@@ -96,7 +96,8 @@ func presenterView(w *WidgetDef, env WidgetEnv) presView {
 	now := env.Now
 	el := st.Elapsed(now)
 	rem := w.Duration - el
-	v := presView{Running: st.StartedAt != nil, Bar: int(min(el*1000/w.Duration, 1000))}
+	// 帯は、表示の秒と同じく秒の単位で伸ばす（秒の切り替わりのあいだに描き直さなくてよいように）
+	v := presView{Running: st.StartedAt != nil, Bar: int(min(el.Truncate(time.Second)*1000/w.Duration, 1000))}
 	elapsed := "経過 " + stopwatchText(el)
 	if rem > 0 {
 		v.Main = stopwatchText((rem + time.Second - 1) / time.Second * time.Second) // 秒を切り上げる（0:00 になった瞬間に超える）

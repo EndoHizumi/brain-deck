@@ -667,11 +667,17 @@ type CalcService struct {
 	typer    func(text string) error // PC に打ち込む（HID）。nil なら打ち込めない
 	dirty    chan struct{}
 	saved    chan struct{} // テスト用
+	queue    chan func()   // Submit の入力（入力の goroutine を待たせない）
 }
 
 // NewCalcService は calc.json を読む。
 func NewCalcService(store *Store) *CalcService {
-	c := &CalcService{m: map[string]*CalcState{}, store: store, dirty: make(chan struct{}, 1)}
+	c := &CalcService{m: map[string]*CalcState{}, store: store, dirty: make(chan struct{}, 1), queue: make(chan func(), 64)}
+	go func() {
+		for f := range c.queue {
+			f()
+		}
+	}()
 	var f calcSaved
 	if err := store.Load(calcStoreName, &f); err == nil {
 		for id, v := range f.Calc {
@@ -722,6 +728,26 @@ func (c *CalcService) Snapshot() map[string]CalcState {
 		out[id] = s.clone()
 	}
 	return out
+}
+
+// Submit は、Input を別の goroutine で順に行う（入力の goroutine から呼ぶ。計算と式の表示を待たせない）。
+// 実機（ARMv5、CPU 1 つ）では、= の計算と描き直しの始まりが重なると、入力の処理が 10 ms を超えることがあった。
+func (c *CalcService) Submit(id, in string, prefix bool) {
+	if c == nil {
+		return
+	}
+	select {
+	case c.queue <- func() { c.Input(id, in, prefix) }:
+	default:
+		log.Printf("calc: too many inputs at once; dropped %q", in)
+	}
+}
+
+// Sync は、Submit した入力がすべて終わるまで待つ（テスト用）。
+func (c *CalcService) Sync() {
+	done := make(chan struct{})
+	c.queue <- func() { close(done) }
+	<-done
 }
 
 // Input は、電卓 id にボタンかキー 1 つを入れる。prefix は、16 進と 2 進を 0x、0b を付けて打ち込むか。

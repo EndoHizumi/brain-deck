@@ -40,7 +40,7 @@ export function presenterView(p: PresenterDef, st: StopwatchState | undefined, n
   const el = stopwatchElapsed(st, now)
   const rem = p.duration - el
   const v: PresenterView = { main: '', sub: '', color: null, over: false, running: !!st?.started_at, blinkOn: false,
-    bar: Math.min(Math.trunc((el * 1000) / p.duration), 1000), next: 0 }
+    bar: Math.min(Math.trunc((Math.floor(el / 1000) * 1000 * 1000) / p.duration), 1000), next: 0 }
   const elapsed = '経過 ' + stopwatchText(el)
   if (rem > 0) {
     v.main = stopwatchText(Math.ceil(rem / 1000) * 1000)

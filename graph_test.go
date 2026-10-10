@@ -374,3 +374,16 @@ layers:
 		t.Fatalf("clear_graph without name = %v", m)
 	}
 }
+
+// 起動してから最初の値は、delay のあとに書く（every は待たない）
+func TestGraphFirstSaveAfterStart(t *testing.T) {
+	g := NewGraphService(OpenStore(t.TempDir()))
+	g.delay = 50 * time.Millisecond // every は既定の 5 分のまま
+	g.saved = make(chan struct{}, 1)
+	g.Add(graphVals("cpu", 1.0), time.Now(), true, "")
+	select {
+	case <-g.saved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first value was not saved soon")
+	}
+}

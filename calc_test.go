@@ -278,6 +278,7 @@ layers:
 	e.SetWidgets(rt)
 	tap := func(code evdev.EvCode) { e.PressKey(code); e.ReleaseKey(code) }
 	tap(evdev.KEY_Q) // base：PC に Q
+	calc.Sync()
 	if _, ok := calc.Snapshot()["calculator"]; ok {
 		t.Fatal("the key went to the calculator in the base layer")
 	}
@@ -289,6 +290,7 @@ layers:
 	tap(evdev.KEY_Q) // Ctrl+Q は PC へ
 	e.ReleaseKey(evdev.KEY_LEFTCTRL)
 	tap(evdev.KEY_ENTER)
+	calc.Sync()
 	if s := calc.Snapshot()["calculator"]; s.Result != "3/1" {
 		t.Fatalf("calc state %+v", s)
 	}

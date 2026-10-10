@@ -283,7 +283,7 @@ func (e *Engine) calcKeyLocked(code evdev.EvCode) bool {
 		return true
 	}
 	e.down[id] = nil
-	e.widgets.calc.Input(w.ID, in, w.Prefix)
+	e.widgets.calc.Submit(w.ID, in, w.Prefix)
 	return true
 }
 

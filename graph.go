@@ -113,8 +113,8 @@ func NewGraphService(store *Store) *GraphService {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		log.Printf("graph: %v", err)
 	}
-	// 読んだ時点を「前に書いた時刻」にする（起動してすぐ値が来ても、10 秒は待つ）
-	g.lastSave = time.Now()
+	// 起動してから最初の値は、10 秒後に書く（5 分は待たない）
+	g.lastSave = time.Now().Add(-g.every)
 	return g
 }
 
