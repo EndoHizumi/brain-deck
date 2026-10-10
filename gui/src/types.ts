@@ -56,9 +56,15 @@ export interface ActionSpec {
   tap_move?: number // タップとみなす動きの上限（ドット）
   drag_ms?: number // タップのあと、これより早く触れればドラッグ
   long_press?: 'none' | 'right' // 長押しで右クリック
+  // pentablet：ペンタブレット（pen.go）。memo（memo.go）も min_pressure、settle_ms、smooth を使う
+  map?: 'full' | 'aspect' | 'region' // PC の画面のどの範囲に当てはめるか
+  pc_screen?: string // PC の画面の大きさ（1920x1080 など）。aspect と region で使う
+  region?: [number, number, number, number] // map: region の範囲 [x, y, 幅, 高さ]（PC の画面の画素）
+  pressure?: boolean // 筆圧を送る（既定 true）
+  pressure_range?: [number, number] // 筆圧の 0 と最大にする押す強さ（既定 [400, 2400]）
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo'
 
 // プレゼン用タイマーの色の区切り 1 つ（presenter.go の PresenterColorSpec）
 export interface PresenterColorSpec {

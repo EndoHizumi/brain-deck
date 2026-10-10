@@ -1561,7 +1561,16 @@ export class App {
     if (w !== 'calendar') delete a.follow
     if (w !== 'calendar' && w !== 'month') delete a.calendars
     if (w !== 'month') delete a.week_start
-    if (w !== 'trackpad') for (const f of PAD_FIELDS) delete a[f]
+    // ペンタブレットと手書きメモは、トラックパッドの項目のうち min_pressure、settle_ms、smooth だけを使う
+    const penKeep = w === 'pentablet' || w === 'memo' ? ['min_pressure', 'settle_ms', 'smooth'] : []
+    if (w !== 'trackpad') for (const f of PAD_FIELDS) if (!penKeep.includes(f)) delete a[f]
+    if (w !== 'pentablet') {
+      delete a.map
+      delete a.pc_screen
+      delete a.region
+      delete a.pressure
+      delete a.pressure_range
+    }
     // Todo、カレンダー、トラックパッドは押した位置で働く（長押しで完了、▲▼ でページ送り、タップでクリック）ので、
     // タップしたときのキーやレイヤーは書けない
     if (ownsTouch(w)) for (const k of ACTION_FIELDS) delete a[k]
@@ -3008,8 +3017,54 @@ export class App {
         : own.widget === 'graph' ? this.viewGraphEditor(own)
         : own.widget === 'calculator' ? this.viewCalcEditor(own)
         : own.widget === 'trackpad' ? this.viewPadEditor(own)
+        : own.widget === 'pentablet' ? this.viewPenTabEditor(own)
+        : own.widget === 'memo' ? this.viewMemoEditor()
         : own.widget === 'clock' ? this.viewClockEditor(text, missing) : this.viewGadgetEditor(own),
     )
+  }
+
+  // viewPenTabEditor は、ペンタブレットのセルの欄（pen.go）。
+  private viewPenTabEditor(own: ActionSpec): HTMLElement[] {
+    const map = own.map ?? 'full'
+    const region = own.region ? own.region.join(',') : ''
+    const out: (HTMLElement | null)[] = [
+      this.mouseWarning('ペンタブレット'),
+      h('label', { class: 'row', title: 'セル全体を、PC の画面のどこに当てはめるか' }, '当てはめる範囲 ',
+        h('select', { id: 'pen-map', 'data-focus': 'pen-map', onchange: (e: Event) => {
+          const v = (e.target as HTMLSelectElement).value as 'full' | 'aspect' | 'region'
+          this.patchAction({ map: v === 'full' ? undefined : v, region: v === 'region' ? own.region : undefined })
+        } },
+          h('option', { value: 'full', selected: map === 'full' }, 'PC の画面全体（縦横比は変わる）'),
+          h('option', { value: 'aspect', selected: map === 'aspect' }, '縦横比を保つ（PC の画面の中央）'),
+          h('option', { value: 'region', selected: map === 'region' }, 'PC の画面の一部'))),
+      map !== 'full'
+        ? h('label', { class: 'row', title: 'PC の画面の大きさ（画素）。縦横比を保つときと、一部に当てはめるときに使います' }, 'PC の画面 ',
+          h('input', { id: 'pen-screen', 'data-focus': 'pen-screen', value: own.pc_screen ?? '', placeholder: '1920x1080',
+            onchange: (e: Event) => this.patchAction({ pc_screen: (e.target as HTMLInputElement).value.trim() || undefined }) }))
+        : null,
+      map === 'region'
+        ? h('label', { class: 'row', title: 'PC の画面の画素で、左上の x、y と、幅、高さ' }, '範囲 ',
+          h('input', { id: 'pen-region', 'data-focus': 'pen-region', value: region, placeholder: '0,0,960,1080',
+            onchange: (e: Event) => {
+              const n = (e.target as HTMLInputElement).value.split(/[,\s]+/).filter(Boolean).map(Number)
+              this.patchAction({ region: n.length === 4 && n.every(Number.isFinite) ? (n as [number, number, number, number]) : undefined })
+            } }))
+        : null,
+      h('label', { class: 'row', title: '押す強さ（抵抗膜の ABS_PRESSURE）を筆圧として送ります。値は粗く、同じ線でも 2〜3 倍変わります' },
+        h('input', { type: 'checkbox', id: 'pen-pressure', checked: own.pressure !== false,
+          onchange: (e: Event) => this.patchAction({ pressure: (e.target as HTMLInputElement).checked ? undefined : false }) }), ' 筆圧を送る'),
+      h('p', { class: 'hint' }, 'スタイラスでなぞると、PC にはペン（デジタイザ）として届きます。マウスと同じ USB の HID に入れてあるので、' +
+        'キーボードとマウスの形（usb_mode: mouse）のときだけ使えます。PC から外しているあいだは休みです。' +
+        '抵抗膜はペンを浮かせた位置を読めないので、触れているあいだだけペンが画面の上にあることになります。'),
+    ]
+    return out.filter((x): x is HTMLElement => !!x)
+  }
+
+  // viewMemoEditor は、手書きメモのセルの説明。線は Brain のデータで、brain-deck memo get で PNG に描き出す。
+  private viewMemoEditor(): HTMLElement[] {
+    return [h('p', { class: 'hint' }, 'スタイラスで書いた線を Brain に保存します（PC から外していても使えます）。上の帯で、ペンの太さ（細、中、太）、' +
+      '消しゴム、戻す、全消（長押し）、ページを足す、新しいメモ、ページをめくる。線は点の列で保存し、PC では brain-deck memo get <番号> -o メモ.png で描き出します。' +
+      '大きさは 1×1（レイヤー全体）がおすすめです。縦向きでも書けます。')]
   }
 
   // viewTextEditor は、テキストのタイルの欄。中身は設定ではなく Brain のデータで、PC から brain-deck で書き換える。
