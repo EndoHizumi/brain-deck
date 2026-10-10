@@ -1723,6 +1723,25 @@ brain-deck read feed list、feed rm <番号>
 6. `brain-deck read feed add <RSS>` と `read feed sync` で、記事が足されること。
 7. 終わったら `brain-deck config put config/current.yaml`。要らない読み物は `brain-deck read rm`。
 
+## ファイル
+
+Brain のファイルを、Brain の画面（ファイルエクスプローラ、`widget: files`）、PC のコマンド（`brain-deck files`）、設定 GUI の「ファイル」のタブで見る。どれも、設定の `files.roots` の場所だけ（[docs/config.md](docs/config.md) の「ファイル（files）」）。書かなければ、ホーム（`/home/user`）と、写真、メモ、読み物のデータ。例は `config/files-example.yaml`（本番の設定には入れていない）。
+
+| | Brain の画面 | brain-deck | 設定 GUI |
+| --- | --- | --- | --- |
+| 一覧（名前、大きさ、更新した日時、SD カードの空き） | タップでフォルダを開く、↑ で上へ | `files ls [<フォルダ>]` | フォルダの名前をクリック |
+| 大きい順（フォルダは中の合計） | 「並び」 | `--sort size` | 「大きい順」 |
+| 見る | テキスト（読み物と同じ描き方）、画像（写真と同じ変換） | — | 「見る」（テキストは最初の 64 KiB） |
+| 取り出す | — | `files get <ファイル> [-o 名前]` | 「取り出す」 |
+| 足す | — | `files put <ファイル>... <フォルダ>` | 「ファイルを足す…」かドロップ |
+| 消す | 行を 0.8 秒押し続けて「消す」 | `files rm <ファイル>...` | 「削除」 |
+| ほかのアプリで開く | 見ているときに真ん中をタップ：読み物、写真、背景画像に足す | — | — |
+
+- **見られないもの**：`/proc` `/sys` `/dev` `/run`、`/boot`、`/root`、`/etc/shadow` などのパスワードのファイル、`/etc/ssh`、`.ssh` と `.gnupg`。シンボリックリンクはたどらない。
+- **消す・足す**：`delete: true` の場所だけ。`delete: true` は `/home/` `/media/` `/mnt/` `/tmp/` の下と、写真、メモ、読み物のデータにだけ書ける（`/etc` や `/boot` に書くと設定の誤り）。写真、メモ、読み物のデータを消すと、それぞれのアプリの一覧からも消える。データの場所には足せない（`photo add`、`read add` を使う）。同じ名前のファイルがあれば足さない。
+- **重い画像**：Brain は遅い（ARM926、RAM 112 MB）。200 万画素を超える画像は「時間がかかります」と出し、600 万画素を超える画像と 64 MiB を超えるファイルは Brain では開かない（PC に取り出して見る）。テキストは 4 MiB まで。
+- **送る速さ**：96 KiB ずつ、USB のシリアルで送る。
+
 ## 同期
 
 `brain-deck sync` は、PC と Brain のあいだでやり取りするものを 1 つのコマンドでまとめて行う（フェーズ P3）。
@@ -2123,6 +2142,28 @@ terminal:
 8. 設定 GUI のコンソールのタブで接続し、Enter で Brain のログイン画面が出る。
 9. ログインの失敗が増えていないこと：PC で `journalctl -b | grep -iE 'FAILED LOGIN|authentication failure'`、Brain で `sudo journalctl --since today | grep -i 'FAILED LOGIN'`（2 で打ち間違えたぶんは増える）。
 
+### Brain 自身にログインする（terminal: brain）
+
+PC がなくても、Brain の画面とキーボードで Brain のシェル（Linux）を使える。
+
+| | |
+| --- | --- |
+| **入り方** | PC から外しているときは `{ terminal: on }`（か `toggle`）のセル・キー。PC につないでいるときは、同じ操作で「PC」と「Brain」を選ぶ画面が出る（タッチ、本体キーの P、B、戻るでやめる）。`{ terminal: brain }` で直接。PC からは `brain-deck terminal brain` |
+| **ログイン** | lefthand が `/bin/login user`（`terminal.brain_user`）を疑似端末（PTY）で動かす。パスワードは Brain の login が聞く（lefthand は覚えない。`login -f` は使わない）。root のシェルは開かない（`brain_user` に root は書けない） |
+| **USB** | 構成も Brain の getty（ttyGS0）も変えない。PC につないでいれば、キーボードやほかのシリアルはそのまま |
+| **PC をつなぐ・外す** | Brain のシェルは閉じない。PC の端末（シリアル）の途中で PC が外れたら、画面に「PC から外れました」と出す |
+| **ログアウト** | `exit` でログインの画面に戻る（決定でもう一度）。抜ける（HOME、文字切り替え + 戻る）とシェルは終わる |
+| **打ち方、画面** | PC の端末と同じ（100 桁 × 31 行、タッチの記号のキー） |
+
+目で確かめる手順（ユーザーが行う。パスワードを打つのでユーザーだけ）：
+
+1. PC から USB を抜き（電池で動かす）、ホーム画面の「本体」の「端末」を押す。黒い端末に `login:` ではなく `Password:` が出る（ユーザー名は `user` を渡している）。
+2. Brain の user のパスワードを打って決定。シェルのプロンプトが出る。`id` が `uid=1000(user)`、`tty` が `/dev/pts/N`、`stty size` が `31 100`。
+3. 記号のキー、`ls --color`、`vi` を試す。
+4. USB を PC につなぐ。シェルが閉じずに残る。
+5. `exit` でログインの画面に戻る。HOME で抜ける。
+6. PC につないだまま「端末」を押すと、「PC」と「Brain」を選ぶ画面が出る。B で Brain、戻るでやめる。
+
 ## 画面とコンソール
 
 Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も使っている。
@@ -2200,8 +2241,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | term.go | 端末（VT100 / xterm の一部）。制御シーケンスの解釈、画面の文字の格子、履歴、文字の幅 |
 | termkeys.go | 端末モードの本体キーの変換（US 配列、Ctrl、Alt、矢印）と、タッチのキーのページ |
 | termdraw.go | 端末モードの画面（状態の帯、文字の格子、タッチのキー）の描画 |
-| termmode.go | 端末モードの入り方と抜け方（Brain の getty、USB の付け直し、ttyGS0）、入力の振り分け、落ちたあとの後始末 |
-| termpty.go | terminal.command を PTY につないで動かす |
+| termmode.go | 端末モードの入り方と抜け方（Brain の getty、USB の付け直し、ttyGS0）、入力の振り分け、PC と Brain を選ぶ画面、PC が外れたとき、落ちたあとの後始末 |
+| termpty.go | terminal.command と Brain のログイン（/bin/login）を PTY につないで動かす |
 | trackpad.go | トラックパッドの判定（タップ、ドラッグ、スクロール、ブレ対策）と描画 |
 | record.go | タッチの記録（-record-touch）と再生（-replay-touch） |
 | config.go | 設定の読み込み、旧形式の変換、割り当ての組み立てと検証（誤りに場所を付ける） |
@@ -2225,6 +2266,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | readdoc.go | 読み物の形（ReadDoc）、置き場所、しおり、受け取り |
 | readlayout.go | 読み物のページの組み方（禁則、ルビ、縦中横、傍点、縦書き・横書き）とページの分け方 |
 | readerwidget.go | 読み物のアプリ（一覧、読む、道具、目次、キー） |
+| files.go | 見られる場所（files.roots）、ファイルの一覧、読み出し、削除、PC から足す（list_files、get_file、delete_file、kind: file） |
+| filewidget.go | ファイルエクスプローラ（widget: files。一覧、テキストと画像を見る、ほかのアプリに足す、長押しで消す） |
 | readfont.go | 読み物の文字（font/reader-*.lrf.gz）と、縦書きの文字の向き |
 | cmd/brain-deck/aozora.go、read.go、readweb.go | brain-deck read（青空文庫、EPUB、Web の記事、RSS） |
 | sync.go | 同期の状態（set_sync、状態の帯の「同期中」、sync.json）。cmd/brain-deck/sync.go は brain-deck sync |

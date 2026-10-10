@@ -225,7 +225,7 @@ USB の形を切り替える（キーボードだけ ⇔ キーボードとマ�
 
 ### set_terminal
 
-端末モードに入る・抜ける（[README の「端末モード」](../README.md#端末モード)）。`mode` は `on`、`off`、`toggle`。
+端末モードに入る・抜ける（[README の「端末モード」](../README.md#端末モード)）。`mode` は `on`、`off`、`toggle`、`pc`（PC に直接）、`brain`（Brain 自身にログイン）。PC につないでいるときの `on` と `toggle` は、Brain の画面に「PC」と「Brain」を選ぶ画面を出す（`info.state` が `choosing`）。PC から外しているときの `on` は Brain。Brain 自身のときは `info.transport` が `brain`。
 
 ```json
 → {"id":8,"cmd":"set_terminal","mode":"on"}
@@ -745,6 +745,30 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 - 文字の続き：`s`（文字）、`ruby`、`em`（傍点）、`tcy`（縦中横）。`flow` が `article` なら、段落のあいだを 1 行空ける。
 - 上限：1 つ 8 MiB（gzip）、戻して 32 MiB、ブロック 20 万。題名は 1〜200 文字。
 - 消すと、しおりも消す。開いていれば一覧に戻る。
+
+## ファイル（list_files、get_file、delete_file）
+
+ファイルエクスプローラ（widget: files。`files.go`）と同じ、見られる場所（設定の `files.roots`）のファイル。`path` は絶対パス（`..` やシンボリックリンクを通るものは `not_allowed`）。
+
+```json
+→ {"id":1,"cmd":"list_files","path":""}
+← {"id":1,"ok":true,"result":{"path":"","entries":[{"name":"ホーム","path":"/home/user","dir":true,"size":0,"mtime":"…"}],"free_bytes":…,"total_bytes":…}}
+→ {"id":2,"cmd":"list_files","path":"/home/user","by_size":true}
+← {"id":2,"ok":true,"result":{"path":"/home/user","root":"ホーム","delete":true,"put":true,"parent":"","entries":[
+     {"name":"src","path":"/home/user/src","dir":true,"size":1048576,"mtime":"…"},{"name":"a.txt","path":"/home/user/a.txt","size":12,"mtime":"…"}],
+     "free_bytes":…,"total_bytes":…}}
+→ {"id":3,"cmd":"get_file","path":"/home/user/a.txt","offset":0}
+← {"id":3,"ok":true,"result":{"path":"/home/user/a.txt","offset":0,"total":12,"data":"…"}}
+→ {"id":4,"cmd":"delete_file","path":"/home/user/a.txt"}
+← {"id":4,"ok":true,"result":{"deleted":"/home/user/a.txt"}}
+```
+
+- `list_files`：`path` が空なら場所の一覧。`by_size` で大きい順（フォルダは中の合計。8 秒までで、終わらなければ `partial`）。2000 個まで（超えたら `truncated`）。フォルダが先、名前順。`link` はシンボリックリンク（たどらない）。`parent` が空なら、上は場所の一覧。`delete` は消せる場所、`put` は足せる場所。
+- `get_file`：96 KiB ずつ base64。`total` までくり返す。
+- `delete_file`：`delete: true` の場所だけ。フォルダは空のときだけ。写真、メモ、読み物のデータは、その係を通して消す（一覧と索引も直す）。データの中の索引などのファイルとフォルダは消せない。
+- 足すのは `upload_*` の `kind: file`。`upload_begin` に `path`（置くフォルダ）と `name`（ファイルの名前）を書く。`put` の場所だけ（データの場所には足せない。写真と読み物はそれぞれの kind で）。同じ名前があれば断る。64 MiB まで。SD カードの空きを 64 MiB 残す。
+- 見られないもの：`/proc` `/sys` `/dev` `/run`、`/boot`、`/root`、`/etc/shadow` `/etc/gshadow` `/etc/sudoers` `/etc/sudoers.d` `/etc/ssh`、名前が `.ssh` と `.gnupg` のフォルダ。
+- 誤り：場所の外、見られないもの、消せない場所は `not_allowed`、ないものは `not_found`。
 
 ## 同期（set_sync）
 
