@@ -49,14 +49,15 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 15. [PC から外して使う](#pc-から外して使う)
 16. [フォトフレーム](#フォトフレーム)
 17. [読み物](#読み物)
-18. [タッチのキャリブレーション](#タッチのキャリブレーション)
-19. [日常の操作](#日常の操作)
-20. [シリアルコンソール](#シリアルコンソール)
-21. [端末モード](#端末モード)
-22. [画面とコンソール](#画面とコンソール)
-23. [困ったとき](#困ったとき)
-24. [開発](#開発)
-25. [フォントとライセンス](#フォントとライセンス)
+18. [同期](#同期)
+19. [タッチのキャリブレーション](#タッチのキャリブレーション)
+20. [日常の操作](#日常の操作)
+21. [シリアルコンソール](#シリアルコンソール)
+22. [端末モード](#端末モード)
+23. [画面とコンソール](#画面とコンソール)
+24. [困ったとき](#困ったとき)
+25. [開発](#開発)
+26. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -1722,6 +1723,74 @@ brain-deck read feed list、feed rm <番号>
 6. `brain-deck read feed add <RSS>` と `read feed sync` で、記事が足されること。
 7. 終わったら `brain-deck config put config/current.yaml`。要らない読み物は `brain-deck read rm`。
 
+## 同期
+
+`brain-deck sync` は、PC と Brain のあいだでやり取りするものを 1 つのコマンドでまとめて行う（フェーズ P3）。
+
+```sh
+brain-deck sync                    # sync.yaml のとおりに行う
+brain-deck sync --wait 90s         # Brain が答えるまで 90 秒まで待ってから（つないだ直後）
+brain-deck sync --if-older 10m     # Brain が 10 分のうちに同期していれば、何もしない
+```
+
+| 順 | すること | 既定 |
+| --- | --- | --- |
+| 1 | 時刻を合わせる（`time sync`）。内蔵 RTC にも書き戻す（`clock.rtc: write`）。**書き戻す前の RTC と PC の差**を出し、Brain に記録する | する |
+| 2 | 予定（`calendar sync`） | `~/.config/brain-deck/calendars.yaml` があれば |
+| 3 | 天気（`weather sync`） | `weather.yaml` があれば |
+| 4 | 読み物の RSS（`read feed sync`） | `feeds.yaml` があれば |
+| 5 | 手書きメモを PC に写す（`<id>.png` と `<id>.json`。前と同じものは書かない） | `sync.yaml` に `memo.dir` があれば |
+
+- **どれかが失敗しても、ほかは続ける**。最後に「成功・失敗・飛ばした」をまとめて書き、終了コードは、すべて成功（飛ばしたものを含む）なら 0、失敗があれば 9、Brain が見つからなければ 3。
+- **Brain の画面**：始めると画面の下に「同期しています…」、状態の帯の「同期」が「同期中」。終わると「同期しました」と、帯に最後に同期した時刻（失敗があれば橙）。`brain-deck status` と `get_status` の `sync` にも結果。
+- **Brain のデータが正**：同期は、Brain の Todo、手書きメモ、しおりを書き換えない。PC から外しているあいだに Brain で足した Todo や書いたメモはそのまま残る。PC に写しを持つのは手書きメモだけで、写しは Brain のメモで上書きする（PC で写しを書き換えても Brain には戻らない）。Todo としおりは PC に写しを持たない。
+
+`~/.config/brain-deck/sync.yaml` の例（**ユーザーが作る**。なければ上の既定）：
+
+```yaml
+time: true          # 時刻を合わせる（内蔵 RTC にも書き戻す）
+calendar: true      # 予定（calendars.yaml があれば）
+weather: true       # 天気（weather.yaml があれば）
+feeds: true         # 読み物の RSS（feeds.yaml があれば）
+memo:
+  dir: ~/Documents/Brain-memo   # 手書きメモを写すフォルダ（書かなければ取り出さない）
+wait: 90s           # Brain の準備を待つ（--wait と同じ）
+```
+
+### つないだときに自動で同期する（Linux）
+
+1. udev の規則で、Brain の設定用のシリアル（インターフェイス 5）ができたら、ユーザーの `brain-deck-sync.service` を起動する：
+   ```sh
+   sudo install -m 0644 contrib/udev/73-brain-sync.rules /etc/udev/rules.d/
+   sudo udevadm control --reload
+   install -D -m 0644 contrib/systemd/brain-deck-sync.service ~/.config/systemd/user/brain-deck-sync.service
+   systemctl --user daemon-reload
+   ```
+2. サービスは `brain-deck sync --wait 90s --if-older 10m`。つないだ直後は Brain の lefthand が答えるまで時間がかかる（Brain が起動したばかりなら 1 分ほど）ので、3 秒ごとに 90 秒まで試す。USB の形を切り替えたとき（usb_mode）や端末モードに入るときも USB を付け直すが、10 分のうちに同期していれば何もしない。
+3. ログは `journalctl --user -u brain-deck-sync`。手で動かすときは `systemctl --user start brain-deck-sync`。
+
+### Brain のボタンから同期する
+
+Brain のセルに Ctrl+F18（X11 の名前は `XF86Launch9` と Ctrl）を割り当て、PC の OS のショートカットで、そのキーに `brain-deck sync` を割り当てる（`brain-deck exec` と同じ考え方。README の「コマンドのショートカット」）。例の設定 `config/sync-example.yaml` のホーム画面の「同期」。
+
+- GNOME：「設定」→「キーボード」→「キーボードショートカット」→「カスタムショートカット」で、コマンド `brain-deck sync`、ショートカットに Brain の「同期」を押す（Ctrl+Launch9 と出る）。
+- KDE Plasma：「システム設定」→「ショートカット」→「カスタムショートカット」で同じく。
+- Enlightenment：「設定」→「入力」→「キー割り当て」で、Ctrl+XF86Launch9 に「コマンドを実行」→ `brain-deck sync`。
+- macOS：「ショートカット」アプリで「シェルスクリプトを実行」（`~/.local/bin/brain-deck sync`）を作り、「キーボードショートカットを追加」で Brain の「同期」を押す（Control+F18）。
+- 同期の結果は Brain の画面（帯と知らせ）に出る。
+
+### 内蔵 RTC の遅れ方
+
+同期の時刻合わせでは、書き戻す前に RTC を読み、PC の時刻との差（RTC は秒の単位なので ±1 秒）と、前に書いてからの時間を Brain に残す（`clock.json` の `rtc_log`。新しい 30 回）。`brain-deck time sync` と `brain-deck sync` が「内蔵 RTC は PC より 1.5 秒遅れていた。前に書いてから 2日0時間0分0秒、1 日に −0.8 秒」のように書き、`brain-deck status` の「内蔵 RTC」に新しい 5 回を出す。
+
+### 電源の動き（読むだけで調べた結果。2026-10-11）
+
+- ユーザーの試験：USB につないだまま電源を切ることはできる。切ったあとで USB をつなぐと起動する。
+- この起動のときのレジスタ（/dev/mem を読むだけ）：`HW_POWER_STS` 0x2007862e（電源の入った理由 PWRUP_SOURCE は bit 29 だけ。i.MX28 のリファレンスマニュアルでは 5V（VBUS）の差し込み、と読める。確かめ要）、`HW_RTC_PERSISTENT0` 0x00a00121（AUTO_RESTART（bit 17）は **0**。フェーズ P2 で読んだときは 0x00820121 で 1 だった。あいだに純正のファームウェアで時刻を合わせ、電源を何度か切ったので、そのどこかで変わった。bit 21 も 0 から 1 に変わった）、`HW_POWER_5VCTRL` 0x0403f113。
+- **「充電だけしたいのに起動する」のは、AUTO_RESTART ではなく、5V の差し込みで電源が入る i.MX28 の働きと考えられる**（AUTO_RESTART は「自分で電源を切ったあと約 180 ms で起動し直す」設定で、今は 0。それでも USB をつなぐと起動する）。5V の差し込みで電源が入るのを、レジスタで止める方法は見つけていない。
+- 提案（実装していない）：起動したときに `HW_POWER_STS` の PWRUP_SOURCE を読み、5V の差し込みだけで起動したとき（電源ボタンでない）は、lefthand が「充電中。キーを押すと起動します」と出し、10 秒のうちにキーかタッチがなければ電源を切る（純正のファームウェアの充電の画面と同じ考え方）。USB につないだまま電源を切るとそのまま切れていることは試験で分かっているので、切り直した電源は、USB を抜いて差し直すまで入らないはず。ビットの意味は、リファレンスマニュアルで確かめてから作る。
+- 電池が少ないときの電源断（`battery.poweroff`）と `brain-deck poweroff` は、この動きを前提にしている：USB の 5V があるあいだは電池で切らない（P2 のまま）。`brain-deck poweroff` で切ったあとに USB を差し直すと起動する。
+
 ## タッチのキャリブレーション
 
 パネルの座標と画面の端の対応を測り、`touch` の min_x などに書く。
@@ -2158,6 +2227,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | readerwidget.go | 読み物のアプリ（一覧、読む、道具、目次、キー） |
 | readfont.go | 読み物の文字（font/reader-*.lrf.gz）と、縦書きの文字の向き |
 | cmd/brain-deck/aozora.go、read.go、readweb.go | brain-deck read（青空文庫、EPUB、Web の記事、RSS） |
+| sync.go | 同期の状態（set_sync、状態の帯の「同期中」、sync.json）。cmd/brain-deck/sync.go は brain-deck sync |
 | photo.go | フォトフレーム：写真の置き場所（/var/lib/lefthand/photos）、受け取り、一覧、削除、向きに合わせて縮める、順に出す係（自動減光の段階から呼ぶ） |
 | internal/imgconv | 画像の変換（縮小、切り抜き、面積の平均、明るさ、Floyd–Steinberg、帯を入れて縮める）。整数だけで計算し、gui/src/image.ts と同じ結果にする。brain-deck と lefthand が使う |
 | update.go | 更新のファイルの展開と確かめ（-version、-check-gadget、-check、GADGET_CHECK）、係の起動、restart、power、get_logs、起動の知らせ（-ready-file） |

@@ -746,6 +746,20 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 - 上限：1 つ 8 MiB（gzip）、戻して 32 MiB、ブロック 20 万。題名は 1〜200 文字。
 - 消すと、しおりも消す。開いていれば一覧に戻る。
 
+## 同期（set_sync）
+
+`brain-deck sync` が、始めるときと終わったときに送る（`sync.go`）。Brain は、同期しているあいだ状態の帯に「同期中」と出し、終わったら最後に同期した時刻を出す（失敗があれば橙）。
+
+```json
+→ {"id":1,"cmd":"set_sync","state":"start","source":"brain-deck"}
+← {"id":1,"ok":true,"result":{"running":true,"started":"…"}}
+→ {"id":2,"cmd":"set_sync","state":"done","ok":false,"summary":"4 件を行った、1 件が失敗","steps":[{"name":"時刻","ok":true},{"name":"天気","ok":false,"note":"…"}],"source":"brain-deck"}
+← {"id":2,"ok":true,"result":{"running":false,"last":{"at":"…","ok":false,"summary":"…","steps":[…]}}}
+```
+
+- `get_status` の `sync`：`{"running":false,"last":{…}}`。最後の結果は `sync.json` に残る。`done` が 10 分来なければ「同期中」をやめる。
+- `set_time` の結果の `rtc`：書き戻す前の内蔵 RTC と送られた時刻の差 `{"at":…,"offset_ms":-1500,"since_write_sec":172800,"source":"brain-deck"}`（RTC を読めるときだけ）と、`rtc_write`（書き戻すか）。`get_status` の `rtc.log` に新しい 30 回。
+
 ## 更新、再起動、電源、ログ（ssh を使わない保守）
 
 README の「Brain の保守」。lefthand が systemd のサービスとして動いていないとき（`-unit` も `/proc/self/cgroup` も分からない）は、`update_apply`、`update_rollback`、`restart` が `internal_error` になる。

@@ -1,0 +1,10 @@
+# PC（Linux）用。Brain をつないだら、ユーザー単位の systemd で brain-deck sync を動かす（contrib/systemd/brain-deck-sync.service）。
+# Brain の 2 つ目のシリアル（インターフェイス 5。/dev/serial/by-id/…-if05、設定用）ができたときに、ログインしているユーザーの
+# brain-deck-sync.service を起動する（SYSTEMD_USER_WANTS）。PC の設定はユーザーが行う：
+#   sudo install -m 0644 73-brain-sync.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+#   install -D -m 0644 ../systemd/brain-deck-sync.service ~/.config/systemd/user/brain-deck-sync.service
+#   systemctl --user daemon-reload
+# USB の形を切り替える（usb_mode）と、Brain は USB を付け直すので、このデバイスもでき直す。brain-deck sync の --if-older で、
+# 少し前に同期していれば何もしない。端末モードに入るときも付け直すが、同じく何もしない。
+ACTION=="add", SUBSYSTEM=="tty", KERNEL=="ttyACM*", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0104", ENV{ID_USB_INTERFACE_NUM}=="05", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="brain-deck-sync.service"

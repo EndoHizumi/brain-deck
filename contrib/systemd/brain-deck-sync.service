@@ -1,0 +1,13 @@
+# ~/.config/systemd/user/brain-deck-sync.service の例。Brain をつないだときに、contrib/udev/73-brain-sync.rules が起動する。
+# つないだ直後は、Brain の lefthand が答えるまでに時間がかかる（起動したばかりなら 1 分ほど）ので、--wait で待つ。
+# 10 分のうちに同期していれば何もしない（USB の付け直しのたびに同期しない）。手で動かすときは systemctl --user start brain-deck-sync。
+# ログは journalctl --user -u brain-deck-sync。
+[Unit]
+Description=brain-deck sync（Brain をつないだとき）
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/brain-deck sync --wait 90s --if-older 10m
+# 失敗したもの（終了コード 9）があっても、サービスとしては失敗にしない（結果はログと Brain の画面に出る）
+SuccessExitStatus=9
+TimeoutStartSec=20min
