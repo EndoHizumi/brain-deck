@@ -1,6 +1,10 @@
 # /etc/lefthand/config.yaml
-# 設定 GUI が書き出したファイル。手で編集してもよいが、GUI で保存するとコメントは消える。
-# 書き方は docs/config.md、本体のキーの名前は docs/keymap-pwsh2.md を参照
+# 本番の設定（フェーズ R、2026-10-10）。「PC のための手元の PDA」として、ホーム画面（home）からアプリに入る。
+# 今までのレイヤー（左手デバイスの base、メニュー、コード、ブラウザ、デバッグ、記号、ウィンドウ、ダッシュボード、入力）は
+# そのままアプリにした（変えたのは HOME のソフトキーだけ。どのレイヤーからもホーム画面に戻る）。
+# 足したアプリ：Todo、カレンダー（月の表示と予定）、天気、電卓、道具（ストップウォッチ、ポモドーロなど）、発表、本体、画面の向き。
+# PC から外したらホーム画面に切り替え、つなぎ直したら前の画面に戻す。自動減光、電池の知らせ（電源は切らない）。
+# 設定 GUI で保存するとコメントは消える。書き方は docs/config.md、本体のキーの名前は docs/keymap-pwsh2.md を参照
 hid_device: /dev/hidg0
 keyboard: brain-kbd-i2c
 touch:
@@ -106,7 +110,6 @@ layers:
       back: LGUI
       down: {layer_toggle: browser}
       enter: {layer_toggle: symbol}
-      home: {layer_to: base}
       menu: {layer_toggle: menu}
       right: {layer_toggle: debug}
       up: {layer_toggle: code}
@@ -224,6 +227,8 @@ layers:
         "3,2": {key: LGUI+SPACE, label: Spotlight}
   - name: dashboard
     label: ダッシュボード
+    # 状態の帯を出す（キーのレイヤーは、セルの大きさを優先して出さない）
+    status_bar: true
     touch:
       cols: 4
       rows: 3
@@ -249,11 +254,223 @@ layers:
       back: ESC
       down: {mouse: scroll_down}
       enter: ENTER
-      home: {layer_to: menu}
       left: {mouse: scroll_right}
       menu: {terminal: toggle}
       right: {mouse: scroll_left}
       up: {mouse: scroll_up}
+  # ここから下はフェーズ R で足したアプリのレイヤー。どれもホーム画面から入り、HOME で戻る
+  - name: todo
+    label: Todo
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 項目を 0.5 秒押し続けると完了を切り替える。PC からは brain-deck todo add で足す
+        "0,0": {widget: todo, span: [2, 3], label: Todo}
+        "2,0": {widget: clock, span: [2, 1]}
+        # Brain のキーボードで Todo を足す（英数字と記号。日本語は入れられない）。PC から外していても使える
+        "2,1": {input: todo, label: "Todo\n追加"}
+        # PC がないときに、Brain のキーボードで時刻を合わせる（2026-10-10 09:41 の形）
+        "3,1": {input: clock, label: 時刻合わせ}
+        "2,2": {widget: text, id: notify, span: [2, 1], label: お知らせ}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: clock, span: [2, 1]}
+        "0,1": {widget: todo, span: [2, 2], label: Todo}
+        "0,3": {input: todo, label: "Todo\n追加"}
+        "1,3": {input: clock, label: 時刻合わせ}
+    # Todo のレイヤーでは、決定（KEY_ENTER）でも Todo を足す欄を開く（PC には送らない）
+    keys:
+      KEY_ENTER: {input: todo}
+  - name: calendar
+    label: カレンダー
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 月の表示。▲▼ で前後の月、日付をタップでその日の予定を右に出す。1 分触らなければ今日に戻る
+        "0,0": {widget: month, id: cal, span: [2, 3]}
+        "2,0": {widget: clock, span: [2, 1]}
+        "2,1": {widget: calendar, follow: cal, span: [2, 2], label: 予定}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: month, id: cal, span: [2, 2]}
+        "0,2": {widget: calendar, follow: cal, span: [2, 2], label: 予定}
+  - name: weather
+    label: 天気
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 予報は PC の brain-deck weather sync で送る（~/.config/brain-deck/weather.yaml の city が要る）
+        "0,0": {widget: weather, span: [2, 3]}
+        "2,0": {widget: clock, span: [2, 1]}
+        "2,1": {widget: calendar, span: [2, 2], label: 予定}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: weather, span: [2, 2]}
+        "0,2": {widget: clock, span: [2, 1]}
+        "0,3": {widget: calendar, span: [2, 1], label: 予定}
+  - name: calc
+    label: 電卓
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 「入力」で結果を PC に打ち込む。電卓のセルがあるあいだ、Brain のキーは電卓の入力になる
+        "0,0": {widget: calculator, span: [3, 3]}
+        "3,0": {key: LGUI+C, label: コピー}
+        "3,1": {key: LGUI+V, label: 貼り付け}
+        "3,2": {key: TAB, label: Tab}
+  - name: tools
+    label: 道具
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # タップで開始と停止、0.5 秒押し続けると 0 に戻す
+        "0,0": {widget: stopwatch, span: [2, 1], label: ストップウォッチ}
+        "2,0": {widget: battery, label: 電池}
+        # タップで +1、0.5 秒押し続けると 0 に戻す
+        "3,0": {widget: counter, label: カウンター}
+        "0,1": {widget: pomodoro, span: [2, 2], work: 25m, break: 5m, label: ポモドーロ}
+        # 在席ランプ。タップで次の状態。PC から brain-deck presence 会議中 でも変えられる
+        "2,1": {widget: presence, span: [2, 2]}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: stopwatch, span: [2, 1], label: ストップウォッチ}
+        "0,1": {widget: pomodoro, span: [2, 2], work: 25m, break: 5m, label: ポモドーロ}
+        "0,3": {widget: counter, label: カウンター}
+        "1,3": {widget: presence}
+  - name: presen
+    label: 発表
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 持ち時間 20 分（残り 5 分で黄、1 分で赤、過ぎたら赤で点滅）。動いているあいだは自動減光しない
+        "0,0": {widget: presenter, id: talk, duration: 20m, label: 発表 20分, span: [2, 2]}
+        # スライド送り（プレゼンター用のリモコンと同じ PageUp と PageDown）
+        "2,0": {key: PAGEUP, label: 前へ, span: [1, 2]}
+        "3,0": {key: PAGEDOWN, label: 次へ, span: [1, 2]}
+        "0,2": {key: F5, label: "開始\n(F5)"}
+        "1,2": {key: B, label: 黒い画面}
+        "2,2": {key: ESC, label: 終了}
+        "3,2": {key: HOME, label: 最初へ}
+    soft_keys:
+      # 画面右の帯の ◀ ▶ でも、前後のスライドに移る
+      left: LEFT
+      right: RIGHT
+  - name: system
+    label: 本体
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {widget: battery, label: 電池}
+        "1,0": {widget: clock, span: [2, 1]}
+        "3,0": {input: clock, label: 時刻合わせ}
+        # USB をキーボードとマウスの形に切り替える（USB を付け直すので 2〜3 秒切れる）
+        "0,1": {usb_mode: toggle, span: [2, 1]}
+        "2,1": {terminal: on, label: 端末, span: [2, 1]}
+        "0,2": {layer_to: rotate, label: 画面の向き, span: [2, 1]}
+        "2,2": {layer_to: input, label: トラックパッド, span: [2, 1]}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: battery, label: 電池}
+        "1,0": {input: clock, label: 時刻合わせ}
+        "0,1": {widget: clock, span: [2, 1]}
+        "0,2": {usb_mode: toggle}
+        "1,2": {terminal: on, label: 端末}
+        "0,3": {layer_to: rotate, label: 画面の向き}
+        "1,3": {layer_to: input, label: トラックパッド}
+  - name: rotate
+    label: 画面の向き
+    status_bar: true
+    touch:
+      cols: 2
+      rows: 2
+      cells:
+        # 向きは保存され、再起動しても残る。縦向きは、本体を反時計回りに 90 度回して持つ（ソフトキーの帯が上）
+        "0,0": {rotate: 0, label: 横向き}
+        "1,0": {rotate: 90, label: 縦向き}
+        "0,1": {rotate: next, label: "回す\n(90 度ずつ)"}
+        "1,1": {rotate: 270, label: "縦向き\n(逆)"}
+    # 縦向きでも同じ並び（書かなければ列と行が入れ替わる）
+    touch_portrait:
+      cols: 2
+      rows: 2
+      cells:
+        "0,0": {rotate: 0, label: 横向き}
+        "1,0": {rotate: 90, label: 縦向き}
+        "0,1": {rotate: next, label: "回す\n(90 度ずつ)"}
+        "1,1": {rotate: 270, label: "縦向き\n(逆)"}
+# ホーム画面。起動するとここから始まり、画面右の帯の HOME でどのレイヤーからも戻る。
+# 1 ページは横向き 4×3、縦向き 3×4。2 ページ目へは下の ▶ か画面右の帯の ▶
+home:
+  cols: 4
+  rows: 3
+  portrait: {cols: 3, rows: 4}
+  apps:
+    - {name: 左手デバイス, icon: keyboard, layer: base}
+    - {name: ダッシュボード, icon: info, layer: dashboard}
+    - {name: Todo, icon: todo, layer: todo}
+    - {name: カレンダー, icon: month, layer: calendar}
+    - {name: 天気, icon: weather, layer: weather}
+    - {name: 電卓, icon: calculator, layer: calc}
+    - {name: 道具, icon: stopwatch, layer: tools}
+    - {name: 入力, icon: trackpad, layer: input}
+    - {name: 発表, icon: presenter, layer: presen}
+    - {name: 本体, icon: settings, layer: system}
+    - {name: 画面の向き, icon: rotate, layer: rotate}
+    - {name: メニュー, icon: app, layer: menu}
+    - {name: コード, icon: code, layer: code}
+    - {name: ブラウザ, icon: browser, layer: browser}
+    - {name: デバッグ, icon: command, layer: debug}
+    - {name: 記号, icon: symbol, layer: symbol}
+    - {name: ウィンドウ, icon: window, layer: window}
+# 状態の帯は、ホーム画面（既定で出す）と、status_bar: true を書いたレイヤー（ダッシュボードと、足したアプリ）にだけ出す。
+# キーのレイヤー（base、メニュー、コードなど）、入力、電卓、発表は、セルの大きさを優先して出さない
+status_bar:
+  show: false
+# 自動減光。つないでいるときは 3 分触らなければ暗くし、15 分で消す。PC から外しているあいだは 1 分で暗く、5 分で消す。
+# 暗いときのタッチは明るくするだけ（セルは押さない）。本体キーはそのまま PC に送り、画面も明るくする。端末モードのあいだは暗くしない
+backlight:
+  dim_after: 3m
+  dim_level: 1
+  off_after: 15m
+  wake_on_key: true
+  in_terminal: false
+  offline:
+    dim_after: 1m
+    off_after: 5m
+# PC から外れたら（USB を抜いた、PC の電源が切れた）、ホーム画面に切り替え、つなぎ直したら前の画面に戻す
+offline:
+  home: true
+# 電池だけで動いているあいだ、残り 20% と 10% で知らせる。電源は自動では切らない（poweroff は書かない。
+# 電池だけで動かした記録で残りの見積もりを見直してから決める）。電圧の記録（battery-log.csv）は既定で取る
+battery:
+  warn: 20
+  critical: 10
+# 時刻：起動したとき、時刻が合っていなければ内蔵 RTC の時刻に合わせる（狂っていれば使わない）。RTC には書かない
+# （write は、純正のファームウェアの時計と比べてから）
+clock:
+  rtc: read
 display:
   enabled: true
   device: /dev/fb0
