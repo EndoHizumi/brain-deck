@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -1549,7 +1550,10 @@ func (c *Controller) readCmd(id json.RawMessage, req request) response {
 	}
 	switch req.Cmd {
 	case "list_reads":
-		free, size, _ := imageFreeSpace(c.reads.dir)
+		free, size, err := imageFreeSpace(c.reads.dir)
+		if err != nil { // まだ読み物を置いていない（ディレクトリがない）
+			free, size, _ = imageFreeSpace(filepath.Dir(c.reads.dir))
+		}
 		return response{ID: id, OK: true, Result: map[string]any{"reads": c.reads.List(), "total_bytes": c.reads.TotalBytes(),
 			"limit_bytes": readQuota, "free_bytes": free, "reserve_bytes": reserveFor(size)}}
 	case "delete_read":
