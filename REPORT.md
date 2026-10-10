@@ -6,6 +6,91 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 無人のセッションのまとめ（2026-10-11、フェーズ R2 → G → H → I → P3 → J）
+
+ユーザーが寝ているあいだに、質問せずに 6 つのフェーズを順に行った。どのフェーズも終わり、デーモンは本番に反映した。本番の設定を変えたのは R2 だけ。push はしていない（main は origin/main より 109 コミット先）。各フェーズの細かい記録は、下の「追記：フェーズ …」。
+
+### フェーズごとの結果
+
+| フェーズ | 作ったもの | 終わり方 | 途中で詰まったこと |
+| --- | --- | --- | --- |
+| R2 RTC の書き戻し | 本番の設定の `clock.rtc: write` | 終わり。RTC に初めて書いた（PC との差 1 秒以内） | 始めたとき RTC が **23 時間 58 分進んでいた**（Brain の時刻も 1 日先だった） |
+| G フォトフレーム | 写真の置き場所、減光の代わりに写真、夜は出さない、GUI の「写真」、brain-deck photo、画像の変換を整数の計算に | 終わり | 実機で、写真を止めるときの競合と、回したときの描き方の誤りを見つけて直した |
+| H ペンタブレットと手書きメモ | widget: pentablet（HID のペン）、widget: memo、線の読み取り、brain-deck memo、`-replay-pen` | 終わり。Linux の PC が「SHARP Brain」のタブレットと認めた | **ペンの記録がないので、線の読み取りの値は指の記録からの仮の値** |
+| I 読み物 | widget: reader（縦書き・横書き、ルビ、禁則、しおり、目次）、Noto Serif JP（OFL）を埋め込み、brain-deck read（青空文庫、DRM のない EPUB、Web、RSS） | 終わり。ページめくり約 80 ms | 実行ファイルが 9.3 → 12.1 MB |
+| P3 同期 | brain-deck sync、Brain の帯の「同期中」、RTC の遅れ方の記録、udev とユーザーのサービスの例、Ctrl+F18 のボタンの例、電源のレジスタを読むだけで調べた | 終わり。本番では sync を動かしていない（本番のデータに書くため。試験のデーモンで確かめた） | — |
+| J ファイルと Brain の端末 | Brain 自身へのログイン（`/bin/login user` を PTY）、PC と Brain を選ぶ画面、widget: files、brain-deck files、GUI の「ファイル」 | 終わり。Brain へのログインは試していない（パスワードはユーザーだけ） | 実機で、PC から足すときの空きの読み違いを見つけて直した |
+
+### 反映したもの（今の本番）
+
+```
+$ brain-deck update --status
+lefthand	8dd144e9196d（lefthand.service）
+前の版	あり（brain-deck update --rollback で戻せる）
+最後の update	53b427552923 → 8dd144e9196d、成功
+```
+
+- デーモン：9ecd42e28a7c（G）→ 4eee939c30d3（H）→ 36b6bf49ec22（I）→ 64d8bdb36652（P3）→ e508f0756286 → a7a1b1155e50 → 53b427552923 → 8dd144e9196d（J と直し）。どれも成功、本番の画面と `-render-png` は 0 画素の違い（状態の帯の分を合わせて）。`.prev` は 53b427552923。
+- 本番の設定：`config/current.yaml`（8fdc3c3。R のものに `clock.rtc: write` を足しただけ）。`brain-deck config get` と同じことを最後に確かめた。
+- 最後の状態：lefthand.service は active、試験のユニットとタイマーはなし、Brain の試験のファイルは消した。PC の `~/.local/bin/brain-deck` は 8dd144e9196d。
+
+### 反映していないものと理由
+
+| もの | 理由 |
+| --- | --- |
+| 例の設定（`config/photo-example.yaml`、`pen-example.yaml`、`reader-example.yaml`、`sync-example.yaml`、`files-example.yaml`） | 指示：R2 のほかは `/etc/lefthand/config.yaml` を書き換えない。試すときは `brain-deck config put config/<例>.yaml`、戻すのは `config put config/current.yaml` |
+| PC 側の udev の規則とユーザーのサービス（`contrib/udev/73-brain-sync.rules`、`contrib/systemd/brain-deck-sync.service`） | 指示：PC のシステムの設定は変えない。手順は README の「同期」 |
+| 本番での brain-deck sync | 本番のデータ（sync.json、clock.json）に書くため |
+| 「充電だけ」の動き（5V で起動したら電源を切る） | 提案だけ（README の「同期」→「電源の動き」）。電源の動きを変えるので、ユーザーが決める |
+
+### あとで確かめてほしいこと（無人で決めたことと理由）
+
+1. **電池が PC につないでいても減り続けている**：01:34 に 90%（4.05 V）→ 03:40 に 59% → 04:15 に 47%（3.76 V）。「充電中」は電圧からの見積もりで、本当に充電しているかは読めない。試験で画面を明るくしたまま CPU を使ったことも効いているが、PC の USB からの電流が足りていないと考えられる。**朝いちばんに、USB の AC アダプタか、別の USB ポートで充電してほしい**。
+2. **RTC が 1 日進んでいた**（R2）：純正のファームウェアで日付を 1 日先にしたのか、RTC の読み方が 1 日ずれているのか分からない。前に「同じ形」と確かめてあったので前者とみなし、書き戻しを有効にした。純正のファームウェアの時計と比べてほしい。今は RTC を PC と同じにした。
+3. **「本体」→「端末」の動きが変わった**（J）：PC につないでいると、前はすぐ PC の端末だったのが、「PC」「Brain」を選ぶ画面になった（指示どおり）。P で前と同じ。
+4. **ペンの値は仮**（H）：min_pressure 400、settle 20 ms、smooth 3、hold_back 2、join 120 ms・24 ドット。スタイラスの記録で見直す。
+5. **ファイルの消せる場所**（J）：`delete: true` は `/home/` `/media/` `/mnt/` `/tmp/` の下とデータだけにした（指示の「/boot、/etc を消せない」より狭く）。`/boot`、`/root`、`/etc/shadow` などのパスワードのファイル、`/etc/ssh`、`.ssh`、`.gnupg` は、場所に入れても出さない。
+6. **Brain で開く画像の上限**（J）：400 万画素。実機で 200 万画素に 5 秒、380 万画素に 9 秒かかった。重いものは「時間がかかります」と出す。
+7. **フォント**（I）：Noto Serif JP（SIL OFL 1.1）を lefthand に埋め込んだ（`font/reader-OFL.txt`）。OFL は埋め込みと再配布を認めているが、ライセンスの文書の置き方でよいか見てほしい。
+8. **試験の読み物**（I）：`testdata/reader/kumono_ito_aozora.zip`（青空文庫の「蜘蛛の糸」。著作権の切れた作品。青空文庫の取り扱い規準どおりに、ファイルを変えずに置いた。`testdata/reader/README`）。リポジトリに置いてよいか見てほしい。
+9. **SD カードの空き**：「約 98 MB」と聞いていたが、`df` では 11.4 GB 空いている（ルートが 14.7 GB に広げてある）。上限（64 MiB を残す）はそのまま。
+10. **Brain のデータに作ったフォルダ**：`/var/lib/lefthand/files-tmp`（空。PC からファイルを足すときの一時の置き場所。試験で一度足して消した）。既存のデータは書き換えていない（reader の state はデーモンが止まるときに自分で書く）。
+11. **テストが一度だけ落ちた**（J）：`go test .` 全体が 1 回 FAIL と出た（どのテストか残していない）。そのあと全体を 9 回、files を 30 回、files と端末を -race で 3 回行い、どれも通った。時間に頼るテストのどれかと考えられる。
+12. **電源のレジスタ**（P3）：AUTO_RESTART は 0 だった（P2 では 1 と読んでいた）。「充電したいのに起動する」は 5V の差し込みで電源が入るためと考えた。
+
+### 朝にユーザーにしてほしいこと
+
+| フェーズ | すること | 手順 |
+| --- | --- | --- |
+| （まず） | 充電する（上の 1） | AC アダプタにつなぎ、`brain-deck status` の電池が 4.15 V を超えるのを見る |
+| R2 | 純正のファームウェアの時計と比べる（上の 2） | README の「時刻と内蔵 RTC」 |
+| G | 写真を足して、減光の代わりに写真が出ること、タッチで戻る、縦向き、夜は出さない | README の「フォトフレーム」→「目で確かめる手順（フェーズ G）」 |
+| H | スタイラスで 4 つの記録を取る。ペンタブレットで PC の絵のアプリに描く、手書きメモ | README の「ペンの記録を取る」と「目で確かめる手順（フェーズ H）」 |
+| I | 青空文庫の作品を取り込み、縦書きと横書き、ルビ、しおり、目次 | README の「目で確かめる手順（フェーズ I）」 |
+| P3 | Ctrl+F18 のショートカット、udev とユーザーのサービスを入れ、抜き差しで同期する | README の「同期」、REPORT の P3 の「目で確かめる手順」 |
+| J | **Brain にログインする**（USB を抜いて「本体」→「端末」、パスワード、`id`、USB をつないでも残る、`exit`）。選ぶ画面。ファイルエクスプローラ、GUI の「ファイル」 | README の「Brain 自身にログインする」、REPORT の J の「目で確かめる手順」 |
+| 電池 | 電池だけで動かした記録（満充電から止まるまで） | README の「電池だけで動かして記録を取る」 |
+
+### 変更したファイルとコミット
+
+108 ファイル、+18551 行、−275 行（8fdc3c3^..8fb9eec）。
+
+- **R2**：8fdc3c3（config/current.yaml）、743a56e（記録）
+- **G**：aab27d2（internal/imgconv、GUI の image.ts）、22e449c（photo.go、backlight.go、display.go）、baf432f（cmd/brain-deck/photo.go、decode.go）、49d1917（GUI の「写真」）、41ea45f、77b15e0（実機で直したこと）、213e10c、9ecd42e（文書）、3c323ea（記録）
+- **H**：c8a03a8（stroke.go、pen.go、hid.go、gadget-setup.sh）、78af414（memo.go、internal/ink、cmd/brain-deck/memo.go）、a266cdb（GUI の penwidget.ts）、7a6baf0、a491135（Digitizer）、4eee939（文書）、1432ea6（記録）
+- **I**：2da4b70（readfont.go、font/reader-*.lrf.gz、tools/mkreadfont）、072e17f（readdoc.go、readlayout.go、readerwidget.go）、ad0cee2（cmd/brain-deck/read.go、aozora.go、readweb.go、testdata/reader）、deb53a2（GUI の「読み物」）、36b6bf4（文書）、f835277、bd63c25（記録）
+- **P3**：466fb8d（sync.go、timesync.go）、06c4f48（cmd/brain-deck/sync.go）、64d8bdb（contrib、config/sync-example.yaml、文書）、d786a7a（記録）
+- **J**：50ecc3c（termmode.go、termpty.go、termdraw.go）、a5c8ef3（files.go、filewidget.go、config/files-example.yaml）、3458fce（cmd/brain-deck/files.go）、8d72c1a（GUI の「ファイル」）、9a3130d（文書）、e508f07、a7a1b11、53b4275、8dd144e（実機で直したこと）、8fb9eec（記録）
+
+### 次に進む前に決めてほしいこと
+
+1. **充電**：PC の USB で充電が足りないなら、つないだまま使うときの明るさ（自動減光）を強めるか、電池の知らせを早めるか。
+2. **例の設定を本番に入れるか**：フォトフレーム、読み物、手書きメモ、ファイル、同期のボタン。入れるならホーム画面のどこに置くか。
+3. **ペンの値**：記録を取ったあとで、見直してよいか。
+4. **「充電だけ」の動き**：5V で起動したら電源を切る、を作るか（README の提案）。
+5. **ファイルの場所**：SD カードのほかの場所（/media など）や、`/var/log` を読むだけで見せるか。
+6. **push**：まだしていない。確かめてから push してよいか。
+
 ## 追記：フェーズ J　ファイルと Brain の端末（2026-10-11）
 
 Brain 自身のシェルを端末モードで使えるようにし、Brain のファイルを Brain の画面、PC のコマンド、設定 GUI で扱えるようにしたフェーズ。デーモンは本番に反映した（8dd144e9196d）。本番の設定は変えていない（例の設定 `config/files-example.yaml`）。Brain へのログインは、パスワードを打つので試していない（ユーザーの手順）。
