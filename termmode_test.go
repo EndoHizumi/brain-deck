@@ -143,6 +143,9 @@ func TestTerminalEnterExit(t *testing.T) {
 	// 端末モードに入る（KEY_DELETE に terminal: toggle）
 	r.e.PressKey(evdev.KEY_DELETE)
 	r.e.ReleaseKey(evdev.KEY_DELETE)
+	// PC につないでいるので、「PC」と「Brain」を選ぶ画面になる。PC を選ぶ
+	r.waitState("choosing")
+	r.m.choose(termTargetPC)
 	r.waitState("on")
 	if !r.m.Active() {
 		t.Fatal("not active")
@@ -211,15 +214,15 @@ func TestTerminalEnterExit(t *testing.T) {
 func TestTerminalGettyNeverBoth(t *testing.T) {
 	r := newTermRig(t)
 	for i := 0; i < 3; i++ {
-		r.m.Request("on")
+		r.m.Request("pc")
 		r.waitState("on")
 		r.m.Request("off")
 		r.waitState("off")
 	}
 	// 入るのと抜けるのを、待たずに続けても
-	r.m.Request("on")
+	r.m.Request("pc")
 	r.m.Request("off")
-	r.m.Request("toggle")
+	r.m.Request("pc")
 	r.waitState("on")
 	r.m.Request("off")
 	r.waitState("off")
@@ -274,7 +277,7 @@ func TestTerminalReleasesHeldKeys(t *testing.T) {
 	r.e.PressKey(evdev.KEY_LEFTALT) // layer_hold: edit
 	r.e.PressKey(evdev.KEY_Q)       // edit の Ctrl+C を押したまま
 	r.hid.take()
-	r.m.Request("on")
+	r.m.Request("pc")
 	r.waitState("on")
 	reps := r.hid.take()
 	if len(reps) == 0 || reps[len(reps)-1][0] != 0 || reps[len(reps)-1][2] != 0 {
@@ -300,7 +303,7 @@ func TestTerminalConfigValidate(t *testing.T) {
 		"terminal: { port: ttyGS0 }":                               "terminal.port",
 		"terminal: { getty: getty }":                               "terminal.getty",
 		"terminal: { scrollback: -1 }":                             "terminal.scrollback",
-		"layers: [{name: base, keys: {KEY_A: {terminal: maybe}}}]": "terminal must be on, off or toggle",
+		"layers: [{name: base, keys: {KEY_A: {terminal: maybe}}}]": "terminal must be on, off, toggle, pc or brain",
 	} {
 		if !strings.Contains(src, "layers") {
 			src += "\nlayers: [{name: base}]"
@@ -318,7 +321,7 @@ func TestTerminalConfigValidate(t *testing.T) {
 // 押し続けたときは、0.5 秒たってから繰り返す。それより早く離せば 1 文字だけ
 func TestTerminalKeyRepeat(t *testing.T) {
 	r := newTermRig(t)
-	r.m.Request("on")
+	r.m.Request("pc")
 	r.waitState("on")
 	r.e.PressKey(evdev.KEY_A)
 	time.Sleep(300 * time.Millisecond) // カーネルなら繰り返し始めている長さ

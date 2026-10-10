@@ -58,7 +58,7 @@ export const MEDIA_OFF_LABEL = 'マウスオフでは無効'
 export const USB_LABELS: Record<UsbMode, string> = { keyboard: 'マウスオフ', mouse: 'マウスオン', toggle: 'マウス切替' }
 
 // 端末モードの切り替えと、画面に出す名前（termmode.go の termLabels）
-export const TERM_LABELS: Record<TermMode, string> = { on: '端末', off: '端末を出る', toggle: '端末' }
+export const TERM_LABELS: Record<TermMode, string> = { on: '端末', off: '端末を出る', toggle: '端末', pc: 'PC の端末', brain: 'Brain の端末' }
 
 // ACTION_FIELDS は、割り当ての種類を決める項目（ちょうど 1 つを書く）。ウィジェットのセルでは省略できる
 export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode', 'terminal', 'rotate', 'input'] as const

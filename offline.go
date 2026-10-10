@@ -37,8 +37,11 @@ func (a *Action) needsPC() bool {
 		return false
 	}
 	switch a.Kind {
-	case actKey, actMouse, actMedia, actTerminal:
+	case actKey, actMouse, actMedia:
 		return true
+	case actTerminal:
+		// 端末は、PC から外しているあいだ Brain のシェルを開く（termmode.go）。PC を選ぶものだけ休み
+		return a.Spec.Terminal == termTargetPC
 	}
 	return a.Widget != nil && (a.Widget.Kind == widgetPad || a.Widget.Kind == widgetPenTab)
 }

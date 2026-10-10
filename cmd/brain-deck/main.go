@@ -115,7 +115,8 @@ const usage = `使い方：
   brain-deck battery log --fit        記録から、残りの見積もりの表（設定の battery.curve）を作る
   brain-deck usb-mode [keyboard|mouse|toggle]  USB の形を見る・切り替える。keyboard はキーボードだけ（ブートキーボード。
                                       起動したときの形）、mouse はキーボードとマウス。USB を付け直すので、2〜3 秒切れる
-  brain-deck terminal [on|off|toggle] 端末モード（Brain の画面とキーボードで PC にログインする）を見る・切り替える。
+  brain-deck terminal [on|off|toggle|pc|brain]  端末モード（Brain の画面とキーボードで PC か Brain 自身にログインする）を
+                                      見る・切り替える。on は Brain の画面で PC か Brain かを選ぶ。pc、brain で直接選ぶ。
                                       シリアルの端末モードでは、入るとき・抜けるときに USB を付け直す
   brain-deck update <ファイル.update.tar.gz>  lefthand と gadget-setup.sh を組で入れ替える（go run ./tools/mkupdate で作る）。
                                       Brain が確かめてから入れ替え、つなぎ直して確かめる。失敗したら前の版に戻す。
@@ -1097,7 +1098,7 @@ func (t termInfo) describe() string {
 // terminalCommand は terminal。引数がなければ今の状態を出し、あれば切り替える。
 func terminalCommand(o *options) (func(*Client) (string, error), error) {
 	if len(o.args) > 2 {
-		return nil, usageError("terminal の引数は on、off、toggle のどれか 1 つです")
+		return nil, usageError("terminal の引数は on、off、toggle、pc、brain のどれか 1 つです")
 	}
 	old := errors.New("Brain の lefthand が古く、端末モードがありません")
 	if len(o.args) == 1 {
@@ -1118,9 +1119,9 @@ func terminalCommand(o *options) (func(*Client) (string, error), error) {
 	}
 	mode := o.args[1]
 	switch mode {
-	case "on", "off", "toggle":
+	case "on", "off", "toggle", "pc", "brain":
 	default:
-		return nil, usageError("terminal の引数は on、off、toggle のどれかです（" + strconv.Quote(mode) + "）")
+		return nil, usageError("terminal の引数は on、off、toggle、pc、brain のどれかです（" + strconv.Quote(mode) + "）")
 	}
 	return func(c *Client) (string, error) {
 		if !c.Hello.has("set_terminal") {

@@ -36,6 +36,11 @@ import (
 // コマンド（terminal.command）：ssh などのコマンドを、Brain の上で疑似端末（PTY）につないで動かす。
 //   getty も USB も触らない。端末の大きさは PTY でそのまま伝わる。
 //
+// Brain（terminal: brain、PC から外しているときの terminal: on）：Brain 自身にログインする。デーモンは root で動いて
+//   いるが、root のシェルは開かない。/bin/login <terminal.brain_user（既定 user）> を PTY で動かし、パスワードを聞く
+//   （login -f は使わない）。USB の構成は変えない。PC をつないだり外したりしても、シェルは閉じない。
+//   PC につないでいるときの terminal: on と toggle は、「PC」と「Brain」を選ぶ画面を出す（terminal: pc、brain で直接選べる）。
+//
 // 途中で lefthand が落ちたときは、/run/lefthand-terminal の印を見て、lefthand -restore-console（ExecStopPost）と
 // 次の起動が、USB の構成の名前と Brain の getty を元に戻す。
 
@@ -44,6 +49,13 @@ const (
 	termEntering
 	termOn
 	termLeaving
+)
+
+// 端末の相手
+const (
+	termTargetPC     = "pc"    // PC（シリアル、または terminal.command）
+	termTargetBrain  = "brain" // Brain 自身（/bin/login）
+	defaultBrainUser = "user"
 )
 
 const (
@@ -64,6 +76,7 @@ type TerminalConfig struct {
 	User       string   `yaml:"user,omitempty" json:"user,omitempty"`             // command を動かすユーザー
 	Font       string   `yaml:"font,omitempty" json:"font,omitempty"`             // wide（100 桁、既定）か narrow（200 桁）
 	Scrollback int      `yaml:"scrollback,omitempty" json:"scrollback,omitempty"` // 履歴の行数。既定 1000
+	BrainUser  string   `yaml:"brain_user,omitempty" json:"brain_user,omitempty"` // Brain にログインするユーザー（既定 user。root は不可）
 }
 
 // termConn は、端末の相手（シリアルか PTY）。
@@ -105,18 +118,56 @@ type TermMode struct {
 	lastErr  string
 	openedAt time.Time
 	lastRx   time.Time
-	gettyOn  bool // 止めた Brain の getty（抜けるときに起動し直す）
+	gettyOn  bool   // 止めた Brain の getty（抜けるときに起動し直す）
+	target   string // 今の相手（pc か brain）
+	choosing bool   // 「PC」と「Brain」を選ぶ画面を出している
+	online   func() bool
+	pcGone   bool // PC の端末の途中で PC から外れた（知らせた）
 
 	// テストで差し替える
-	systemctl func(args ...string) error
-	openPort  func(path string) (termConn, error)
-	startCmd  func(tc TerminalConfig, cols, rows int) (termConn, error)
+	systemctl  func(args ...string) error
+	openPort   func(path string) (termConn, error)
+	startCmd   func(tc TerminalConfig, cols, rows int) (termConn, error)
+	startLogin func(user string, cols, rows int) (termConn, error)
 }
 
 // NewTermMode は端末モードを作る。cfg は今の設定を返す関数。
 func NewTermMode(cfg func() *Config, usb *USBMode, out *State, script string) *TermMode {
 	return &TermMode{cfg: cfg, usb: usb, out: out, script: script, pressed: -1,
-		systemctl: runSystemctl, openPort: openTermSerial, startCmd: startPTY}
+		systemctl: runSystemctl, openPort: openTermSerial, startCmd: startPTY, startLogin: startLoginPTY,
+		online: func() bool { return true }}
+}
+
+// SetOnline は、PC とつながっているかを返す関数を設定する（link.go）。
+func (m *TermMode) SetOnline(f func() bool) {
+	m.mu.Lock()
+	m.online = f
+	m.mu.Unlock()
+}
+
+// LinkChanged は、PC とのつながりが変わったときに呼ぶ。PC の端末の途中で外れたら、画面に出す。
+// Brain のシェルは、つないでも外しても閉じない。
+func (m *TermMode) LinkChanged(online bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	pc := m.state == termOn && m.target == termTargetPC
+	note := ""
+	switch {
+	case pc && !online && !m.pcGone:
+		m.pcGone = true
+		note = "PC から外れました。つなぎ直すと続きます（HOME で抜ける）"
+		m.status, m.level = "PC から外れました", 2
+	case pc && online && m.pcGone:
+		m.pcGone = false
+		note = "PC につながりました"
+	}
+	m.mu.Unlock()
+	if note != "" {
+		m.feedNote(note)
+		m.notify()
+	}
 }
 
 // SetDisplay は画面を設定する（画面がなければ呼ばない）。
@@ -154,10 +205,15 @@ func (m *TermMode) Info() TermInfo {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	in := TermInfo{Active: m.want || m.state != termOff, State: termStateNames[m.state]}
+	in := TermInfo{Active: m.want || m.state != termOff || m.choosing, State: termStateNames[m.state]}
+	if m.choosing {
+		in.State = "choosing"
+	}
 	if m.state != termOff {
 		in.Transport = "serial"
-		if len(m.tc.Command) > 0 {
+		if m.target == termTargetBrain {
+			in.Transport = "brain"
+		} else if len(m.tc.Command) > 0 {
 			in.Transport = "command"
 		}
 		in.Status, in.Cols, in.Rows = m.status, m.geom.Cols, m.geom.Rows
@@ -165,27 +221,118 @@ func (m *TermMode) Info() TermInfo {
 	return in
 }
 
-// Request は、mode（on、off、toggle）へ切り替える。待たずに返る。入るかどうか（切り替えたあと）を返す。
+// Request は、mode（on、off、toggle、pc、brain）へ切り替える。待たずに返る。入るかどうか（切り替えたあと）を返す。
+// on と toggle は、PC につないでいれば「PC」と「Brain」を選ぶ画面を出し、外していれば Brain にする。
 func (m *TermMode) Request(mode string) (bool, error) {
 	if m == nil {
 		return false, errors.New("the terminal mode is not available")
 	}
 	m.mu.Lock()
-	var want bool
+	defer m.mu.Unlock()
+	on := m.want || m.choosing
 	switch mode {
-	case "on":
-		want = true
+	case "on", "toggle":
+		if mode == "toggle" && on {
+			m.cancelChooseLocked()
+			m.setWantLocked(false)
+			return false, nil
+		}
+		if on {
+			return true, nil
+		}
+		if !m.online() {
+			m.startLocked(termTargetBrain)
+			return true, nil
+		}
+		m.chooseLocked()
+		return true, nil
 	case "off":
-		want = false
-	case "toggle":
-		want = !(m.want)
-	default:
-		m.mu.Unlock()
-		return false, fmt.Errorf(`mode must be "on", "off" or "toggle"`)
+		m.cancelChooseLocked()
+		m.setWantLocked(false)
+		return false, nil
+	case termTargetPC, termTargetBrain:
+		if mode == termTargetPC && !m.online() {
+			return false, errors.New("the PC is not connected; use terminal: brain (or on) for a shell on the Brain")
+		}
+		if on && m.target == mode {
+			return true, nil
+		}
+		if on {
+			return true, fmt.Errorf("the terminal is already open (%s); leave it first", m.target)
+		}
+		m.cancelChooseLocked()
+		m.startLocked(mode)
+		return true, nil
 	}
-	m.setWantLocked(want)
-	m.mu.Unlock()
-	return want, nil
+	return false, fmt.Errorf(`mode must be "on", "off", "toggle", "pc" or "brain"`)
+}
+
+// startLocked は、相手 target で端末モードに入る。
+func (m *TermMode) startLocked(target string) {
+	m.target = target
+	m.pcGone = false
+	m.setWantLocked(true)
+}
+
+// chooseLocked は、「PC」と「Brain」を選ぶ画面を出す（入力は端末モードに回す）。
+func (m *TermMode) chooseLocked() {
+	W, H := 800, 480
+	if m.disp != nil {
+		W, H = m.disp.Size()
+	}
+	tc := TerminalConfig{}
+	if cfg := m.cfg(); cfg != nil && cfg.Terminal != nil {
+		tc = *cfg.Terminal
+	}
+	m.geom = termLayout(W, H, tc.withDefaults().Font)
+	m.choosing = true
+	m.out.releaseAll()
+	m.keys.reset()
+	m.active.Store(true)
+	m.status, m.level = "つなぐ先を選んでください", 1
+	if m.disp != nil {
+		m.disp.SetTerminal(m)
+	}
+	go m.notify()
+}
+
+func (m *TermMode) cancelChooseLocked() {
+	if !m.choosing {
+		return
+	}
+	m.choosing = false
+	if !m.want {
+		m.active.Store(false)
+		if m.disp != nil {
+			m.disp.SetTerminal(nil)
+		}
+	}
+	go m.notify()
+}
+
+// chooseRects は、選ぶ画面の「PC」と「Brain」のボタン（端末の文字の範囲の中）。
+func (g termGeom) chooseRects() (pc, brain image.Rectangle) {
+	t := g.Text
+	h := t.Dy() / 2
+	pc = image.Rect(t.Min.X+40, t.Min.Y+20, t.Max.X-40, t.Min.Y+h-10)
+	brain = image.Rect(t.Min.X+40, t.Min.Y+h+10, t.Max.X-40, t.Max.Y-20)
+	return pc, brain
+}
+
+// choose は、選ぶ画面で選んだとき。
+func (m *TermMode) choose(target string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.choosing {
+		return
+	}
+	if target == termTargetPC && !m.online() {
+		m.status, m.level = "PC につながっていません", 2
+		go m.notify()
+		return
+	}
+	m.choosing = false
+	m.startLocked(target)
 }
 
 func (m *TermMode) setWantLocked(want bool) {
@@ -275,6 +422,22 @@ func (m *TermMode) enter() {
 	m.notify()
 	go m.writer(ch)
 
+	if m.target == termTargetBrain {
+		m.setStatus("Brain にログインします…", 1)
+		user := tc.BrainUser
+		if user == "" {
+			user = defaultBrainUser
+		}
+		c, err := m.startLogin(user, m.geom.Cols, m.geom.Rows)
+		if err != nil {
+			log.Printf("terminal: brain login: %v", err)
+			m.feedNote("Brain のログインを始められません：" + err.Error())
+			m.finishEnter(nil, "ログインを始められません", 2)
+			return
+		}
+		m.finishEnter(c, "", 0)
+		return
+	}
 	if len(tc.Command) > 0 {
 		m.setStatus("起動中…", 1)
 		c, err := m.startCmd(tc, m.geom.Cols, m.geom.Rows)
@@ -372,7 +535,7 @@ func (m *TermMode) leave() {
 	}
 	m.wmu.Unlock()
 	m.notify()
-	if len(tc.Command) > 0 {
+	if len(tc.Command) > 0 || m.target == termTargetBrain {
 		if c != nil {
 			c.Close()
 		}
@@ -511,7 +674,13 @@ func (m *TermMode) closed(c termConn, gen int, err error) {
 	c.Close()
 	m.conn = nil
 	tc := m.tc
+	brain := m.target == termTargetBrain
 	m.mu.Unlock()
+	if brain {
+		m.feedNote("Brain のシェルが終わりました（ログアウト）。決定（Enter）でもう一度ログイン。HOME で抜ける")
+		m.setStatus("ログアウトしました", 2)
+		return
+	}
 	if len(tc.Command) > 0 {
 		code := ""
 		if p, ok := c.(*ptyConn); ok {
@@ -556,13 +725,24 @@ func (m *TermMode) closed(c termConn, gen int, err error) {
 // restartCommand は、終わったコマンドをもう一度動かす（決定を押したとき）。
 func (m *TermMode) restartCommand() {
 	m.mu.Lock()
-	if m.state != termOn || m.conn != nil || len(m.tc.Command) == 0 {
+	if m.state != termOn || m.conn != nil || len(m.tc.Command) == 0 && m.target != termTargetBrain {
 		m.mu.Unlock()
 		return
 	}
 	tc := m.tc
+	brain := m.target == termTargetBrain
 	m.mu.Unlock()
-	c, err := m.startCmd(tc, m.geom.Cols, m.geom.Rows)
+	var c termConn
+	var err error
+	if brain {
+		user := tc.BrainUser
+		if user == "" {
+			user = defaultBrainUser
+		}
+		c, err = m.startLogin(user, m.geom.Cols, m.geom.Rows)
+	} else {
+		c, err = m.startCmd(tc, m.geom.Cols, m.geom.Rows)
+	}
 	if err != nil {
 		m.feedNote("起動できません：" + err.Error())
 		return
@@ -592,6 +772,12 @@ func (m *TermMode) watch(gen int) {
 
 // connStatusLocked は、つないだあとの帯の表示。
 func (m *TermMode) connStatusLocked() (string, int) {
+	if m.target == termTargetBrain {
+		if m.conn == nil {
+			return "ログアウトしました", 2
+		}
+		return m.rxStatusLocked()
+	}
 	if len(m.tc.Command) > 0 {
 		if m.conn == nil {
 			return "コマンドが終わりました", 2
@@ -612,6 +798,12 @@ func (m *TermMode) connStatusLocked() (string, int) {
 
 // rxStatusLocked は、PC から何か届いたあとの帯の表示。
 func (m *TermMode) rxStatusLocked() (string, int) {
+	if m.target == termTargetBrain {
+		if loginPrompt(m.term) {
+			return "Brain のログイン画面", 3
+		}
+		return "Brain のシェル", 3
+	}
 	if len(m.tc.Command) > 0 {
 		return "動作中", 3
 	}
@@ -650,7 +842,7 @@ func (m *TermMode) KeyEvent(code evdev.EvCode, value int32) {
 		return // カーネルのオートリピートは使わない（termKeys.event）
 	}
 	m.mu.Lock()
-	if m.state == termOff && !m.want {
+	if m.state == termOff && !m.want && !m.choosing {
 		m.mu.Unlock()
 		return
 	}
@@ -670,11 +862,28 @@ func (m *TermMode) KeyEvent(code evdev.EvCode, value int32) {
 			poke = true
 		}
 	}
-	restart := len(r.out) == 1 && r.out[0] == '\r' && m.conn == nil && m.state == termOn && len(m.tc.Command) > 0
+	restart := len(r.out) == 1 && r.out[0] == '\r' && m.conn == nil && m.state == termOn && (len(m.tc.Command) > 0 || m.target == termTargetBrain)
+	choosing := m.choosing
 	if m.keys.oneCtrl || m.keys.oneAlt || value == 1 {
 		poke = true // 帯の [Ctrl] を消す
 	}
 	m.mu.Unlock()
+	if choosing && value == 1 {
+		// 選ぶ画面：P で PC、B で Brain、Esc（戻る）か BS でやめる
+		switch code {
+		case evdev.KEY_P:
+			m.choose(termTargetPC)
+		case evdev.KEY_B:
+			m.choose(termTargetBrain)
+		case evdev.KEY_ESC, evdev.KEY_BACKSPACE:
+			m.Request("off")
+		}
+		m.disp.Poke()
+		return
+	}
+	if choosing {
+		return
+	}
 	if r.exit {
 		log.Printf("terminal: leaving (Alt+Esc)")
 		m.Request("off")
@@ -727,6 +936,20 @@ var softActions = map[string]string{
 // soft は、その座標にあるソフトキーの区画の名前（なければ空）。
 func (m *TermMode) Touch(soft string, p image.Point) {
 	m.mu.Lock()
+	if m.choosing {
+		pc, brain := m.geom.chooseRects()
+		m.mu.Unlock()
+		switch {
+		case soft == "home" || soft == "back":
+			m.Request("off")
+		case p.In(pc):
+			m.choose(termTargetPC)
+		case p.In(brain):
+			m.choose(termTargetBrain)
+		}
+		m.disp.Poke()
+		return
+	}
 	if m.state == termOff && !m.want {
 		m.mu.Unlock()
 		return
@@ -809,10 +1032,16 @@ func (m *TermMode) takeFrame(f *termFrame) termStatus {
 		m.term.TakeFrame(f)
 	}
 	st := termStatus{State: m.status, Level: m.level, Ctrl: m.keys.oneCtrl || m.keys.ctrl > 0,
-		Alt: m.keys.oneAlt, Page: m.page, Pressed: m.pressed, Exitable: m.hasHome()}
-	if len(m.tc.Command) > 0 {
+		Alt: m.keys.oneAlt, Page: m.page, Pressed: m.pressed, Exitable: m.hasHome(), Choosing: m.choosing}
+	switch {
+	case m.choosing:
+		st.Transport = "端末"
+		st.Online = m.online()
+	case m.target == termTargetBrain:
+		st.Transport = "Brain"
+	case len(m.tc.Command) > 0:
 		st.Transport = "コマンド"
-	} else {
+	default:
 		st.Transport = "シリアル"
 	}
 	if m.state == termLeaving {
@@ -840,7 +1069,7 @@ func (m *TermMode) geometry() termGeom {
 // ---------- 設定 ----------
 
 // termLabels は、terminal のセルに出す名前。
-var termLabels = map[string]string{"on": "端末", "off": "端末を出る", "toggle": "端末"}
+var termLabels = map[string]string{"on": "端末", "off": "端末を出る", "toggle": "端末", termTargetPC: "PC の端末", termTargetBrain: "Brain の端末"}
 
 func (tc TerminalConfig) withDefaults() TerminalConfig {
 	if tc.Port == "" {
@@ -890,6 +1119,11 @@ func (tc *TerminalConfig) validate(fail func(path, format string, args ...any)) 
 	}
 	if tc.User == "root" {
 		fail("/terminal/user", "terminal.user must not be root")
+	}
+	if tc.BrainUser == "root" || tc.BrainUser == "0" {
+		fail("/terminal/brain_user", "terminal.brain_user must not be root (lefthand does not open a root shell)")
+	} else if tc.BrainUser != "" && (strings.ContainsAny(tc.BrainUser, " /:\t") || strings.HasPrefix(tc.BrainUser, "-")) {
+		fail("/terminal/brain_user", "terminal.brain_user must be a user name")
 	}
 }
 

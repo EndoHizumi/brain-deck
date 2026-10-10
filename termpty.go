@@ -133,3 +133,60 @@ func startPTY(tc TerminalConfig, cols, rows int) (termConn, error) {
 	}()
 	return p, nil
 }
+
+// startLoginPTY は、/bin/login <user> を PTY で動かす（Brain 自身にログインする。terminal: brain）。
+// login は root で動かす必要があるので、デーモンの権限のまま起動する。login がパスワードを聞き、正しければ
+// user のシェルを開く（root のシェルは開かない。-f は使わない）。user が root なら断る。
+func startLoginPTY(name string, cols, rows int) (termConn, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return nil, err
+	}
+	if u.Uid == "0" || name == "root" {
+		return nil, errors.New("terminal.brain_user must not be root")
+	}
+	ptmx, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		return nil, err
+	}
+	var n uint32
+	var unlock int32
+	if err := ioctl(int(ptmx.Fd()), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); err != nil {
+		ptmx.Close()
+		return nil, fmt.Errorf("unlockpt: %w", err)
+	}
+	if err := ioctl(int(ptmx.Fd()), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n))); err != nil {
+		ptmx.Close()
+		return nil, fmt.Errorf("ptsname: %w", err)
+	}
+	ws := winsize{Row: uint16(rows), Col: uint16(cols)}
+	ioctl(int(ptmx.Fd()), syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&ws)))
+	pts, err := os.OpenFile("/dev/pts/"+strconv.Itoa(int(n)), os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		ptmx.Close()
+		return nil, err
+	}
+	path, err := exec.LookPath("login")
+	if err != nil {
+		pts.Close()
+		ptmx.Close()
+		return nil, err
+	}
+	cmd := exec.Command(path, "--", u.Username)
+	cmd.Dir = "/"
+	cmd.Env = []string{"TERM=xterm-256color", "LANG=en_US.UTF-8", "PATH=/usr/local/bin:/usr/bin:/bin", "BRAIN_TERMINAL=1"}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = pts, pts, pts
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if err := cmd.Start(); err != nil {
+		pts.Close()
+		ptmx.Close()
+		return nil, err
+	}
+	pts.Close()
+	p := &ptyConn{File: ptmx, cmd: cmd, done: make(chan struct{})}
+	go func() {
+		p.err = cmd.Wait()
+		close(p.done)
+	}()
+	return p, nil
+}

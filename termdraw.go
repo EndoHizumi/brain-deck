@@ -86,6 +86,8 @@ type termStatus struct {
 	Pressed    int    // 押しているタッチのキー（row*12+col）。-1 なら押していない
 	Exitable   bool   // HOME で抜けられる（ソフトキーの帯がある）
 	ExitingMsg string // 抜けている途中の知らせ
+	Choosing   bool   // 「PC」と「Brain」を選ぶ画面
+	Online     bool   // PC とつながっている（選ぶ画面）
 }
 
 // termRenderer は端末モードの画面を描く。描画の goroutine だけが触る。
@@ -94,6 +96,7 @@ type termRenderer struct {
 	frame      termFrame
 	lastStatus string
 	lastPad    string
+	lastChoose string // 選ぶ画面を描いたときの中身
 }
 
 var termLevelColors = [...]RGB{{0x3a, 0x48, 0x5c}, {0xd0, 0xa0, 0x20}, {0xd0, 0x40, 0x40}, {0x2e, 0x9e, 0x5b}}
@@ -124,12 +127,51 @@ func (r *termRenderer) render(cv *Canvas, full bool, take func(f *termFrame) ter
 		r.drawPad(cv, st)
 		rs = append(rs, image.Rect(0, r.g.Pad.Min.Y, r.g.W, r.g.H)) // 右の、ページの名前も
 	}
-	rs = append(rs, r.drawText(cv, f)...)
+	if st.Choosing {
+		if k := "choose" + boolS(st.Online) + st.State; k != r.lastChoose || full {
+			r.lastChoose = k
+			r.drawChoose(cv, st)
+			rs = append(rs, r.g.Text)
+		}
+	} else {
+		if r.lastChoose != "" {
+			r.lastChoose = ""
+			for i := range f.Dirty {
+				f.Dirty[i] = true
+			}
+			f.All = true
+		}
+		rs = append(rs, r.drawText(cv, f)...)
+	}
 	if full {
 		// 帯、格子、キーのあいだの隙間にも、前の画面が残らないよう、全体を写す
 		return []image.Rectangle{image.Rect(0, 0, cv.W, cv.H)}
 	}
 	return rs
+}
+
+// drawChoose は、「PC」と「Brain」を選ぶ画面を、文字の範囲に描く。
+func (r *termRenderer) drawChoose(cv *Canvas, st termStatus) {
+	cv.fill(r.g.Text, colBG)
+	pc, brain := r.g.chooseRects()
+	draw := func(b image.Rectangle, title, sub string, on bool) {
+		fill, ink := RGB{0x1c, 0x34, 0x58}, colText
+		if !on {
+			fill, ink = RGB{0x24, 0x28, 0x30}, colSub
+		}
+		cv.fill(b, fill)
+		cv.frame(b, 2, colBorder)
+		s := min(fitScaleMax([]string{title}, b.Dx()-16, b.Dy()/2, 4), 4)
+		y := b.Min.Y + (b.Dy()-fontH*s-fontH*2-6)/2
+		drawCentered(cv, b, y, title, s, ink)
+		drawCentered(cv, b, y+fontH*s+6, sub, 2, colSub)
+	}
+	pcSub := "USB の端末で PC にログイン（P）"
+	if !st.Online {
+		pcSub = "PC につながっていません"
+	}
+	draw(pc, "PC", pcSub, st.Online)
+	draw(brain, "Brain", "この Brain にログイン（B）。パスワードを聞きます", true)
 }
 
 func (r *termRenderer) statusKey(st termStatus, f *termFrame) string {

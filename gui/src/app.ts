@@ -3572,7 +3572,8 @@ export class App {
     return [
       h('label', { class: 'row' }, '切り替え ', h('select', { 'data-focus': 'terminal', id: 'terminal',
         onchange: (e: Event) => this.patchAction({ terminal: (e.target as HTMLSelectElement).value as TermMode }) },
-        ([['toggle', '押すたびに入る・抜ける（toggle）'], ['on', '入る（on）'], ['off', '抜ける（off）']] as const)
+        ([['toggle', '押すたびに入る・抜ける（toggle。PC か Brain を選ぶ）'], ['on', '入る（on。PC か Brain を選ぶ）'], ['pc', 'PC の端末に入る（pc）'],
+          ['brain', 'Brain 自身にログインする（brain）'], ['off', '抜ける（off）']] as const)
           .map(([v, t]) => h('option', { value: v, selected: own.terminal === v }, t)))),
       h('p', { class: 'hint' }, '端末モードでは、Brain の画面とキーボードで PC にログインして操作します（PC 側の設定が要ります。README の「端末モード」）。' +
         '端末モードのあいだ、本体キーは PC にキーとして送らず、端末の入力になります。抜けるのは、画面右の帯の HOME か、文字切り替え + 戻る。' +

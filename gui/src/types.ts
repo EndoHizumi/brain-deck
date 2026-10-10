@@ -80,7 +80,7 @@ export interface PresenceSpec {
 
 export type UsbMode = 'keyboard' | 'mouse' | 'toggle'
 
-export type TermMode = 'on' | 'off' | 'toggle'
+export type TermMode = 'on' | 'off' | 'toggle' | 'pc' | 'brain'
 
 // 設定の terminal（termmode.go の TerminalConfig）。GUI では編集せず、そのまま残す
 export interface TerminalConfig {

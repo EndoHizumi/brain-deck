@@ -1341,7 +1341,9 @@ func main() {
 	setOnline := func(on bool) {
 		e.SetOffline(!on)
 		dim.SetOffline(!on)
+		term.LinkChanged(on) // PC の端末の途中で外れたら、画面に出す（Brain のシェルはそのまま）
 	}
+	term.SetOnline(link.Online)
 	link.OnOnline(setOnline)
 	if !link.Online() {
 		setOnline(false)

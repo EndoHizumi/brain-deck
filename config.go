@@ -626,9 +626,9 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		case s.Terminal != "":
 			a.Kind = actTerminal
 			switch s.Terminal {
-			case "on", "off", "toggle":
+			case "on", "off", "toggle", termTargetPC, termTargetBrain:
 			default:
-				fail(path, "%s: terminal must be on, off or toggle", where)
+				fail(path, "%s: terminal must be on, off, toggle, pc or brain", where)
 			}
 		case s.Rotate != "":
 			a.Kind = actRotate
