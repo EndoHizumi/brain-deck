@@ -125,6 +125,8 @@ type ActionSpec struct {
 	// presenter：プレゼン用タイマー（presenter.go）
 	Duration string               `yaml:"duration,omitempty" json:"duration,omitempty"` // 持ち時間（20m など）
 	Colors   []PresenterColorSpec `yaml:"colors,omitempty" json:"colors,omitempty"`     // 残り時間に応じた色。省略すると残り 5 分で黄、1 分で赤
+	// calculator：電卓（calc.go）
+	Prefix bool `yaml:"prefix,omitempty" json:"prefix,omitempty"` // 16 進と 2 進の結果を、0x と 0b を付けて打ち込む
 
 	// trackpad：トラックパッド（trackpad.go）。省略すると既定値
 	Speed           *float64 `yaml:"speed,omitempty" json:"speed,omitempty"`                       // 感度（画面の 1 ドットを、PC のマウスの何カウントにするか）
@@ -162,7 +164,7 @@ var actionFields = map[string]bool{
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 	"page_reset": true, "stale": true, "calendars": true, "follow": true, "week_start": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
 	"terminal": true, "work": true, "break": true, "states": true,
-	"unit": true, "min": true, "max": true, "chart": true, "points": true, "decimals": true, "duration": true, "colors": true,
+	"unit": true, "min": true, "max": true, "chart": true, "points": true, "decimals": true, "duration": true, "colors": true, "prefix": true,
 	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
 }
@@ -178,7 +180,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, duration, colors, background, and the trackpad fields)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, duration, colors, prefix, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -649,6 +651,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			}
 			checkOverlaps(g, tp, lc.Name, fail)
 			monthWarns = append(monthWarns, linkFollows(g, tp, lc.Name, fail)...)
+			monthWarns = append(monthWarns, calcWarns(g, lc.Name)...)
 			l.Grid = g
 			if li == 0 {
 				baseGrid = g

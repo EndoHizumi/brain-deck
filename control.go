@@ -432,6 +432,7 @@ type Controller struct {
 	cals    *CalendarService
 	weather *WeatherService
 	graphs  *GraphService
+	calc    *CalcService
 	icons   *IconStore // 天気アイコン
 	images  *ImageStore
 	usb     *USBMode
@@ -691,7 +692,7 @@ func (c *Controller) addGraph(id json.RawMessage, req request) response {
 func (c *Controller) widgets() map[string]any {
 	cfg := c.store.Current()
 	ids := map[string][]string{}
-	for _, k := range []string{widgetStopwatch, widgetPomodoro, widgetCounter, widgetPresence, widgetQR, widgetPresenter, widgetGraph} {
+	for _, k := range []string{widgetStopwatch, widgetPomodoro, widgetCounter, widgetPresence, widgetQR, widgetPresenter, widgetGraph, widgetCalc} {
 		ids[k] = gadgetIDs(cfg, k)
 	}
 	states := map[string][]map[string]string{}
@@ -702,7 +703,11 @@ func (c *Controller) widgets() map[string]any {
 		}
 		states[pid] = l
 	}
-	return map[string]any{"widgets": widgetsJSON(c.gadgets.Snapshot()), "ids": ids, "presence_states": states,
+	calcs := c.calc.Snapshot()
+	if calcs == nil {
+		calcs = map[string]CalcState{}
+	}
+	return map[string]any{"widgets": widgetsJSON(c.gadgets.Snapshot()), "calculator": calcs, "ids": ids, "presence_states": states,
 		"battery": c.battery.Info(), "now": time.Now()}
 }
 

@@ -241,7 +241,50 @@ func (e *Engine) PressKey(code evdev.EvCode) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.calcKeyLocked(code) {
+		return
+	}
 	e.press(keyID(code), e.km.lookupKey(e.layers(), code))
+}
+
+// calcKeyLocked は、今の画面に電卓のセルがあり、キーが電卓の使うものなら、電卓に入れて true を返す。
+// Ctrl か Alt を押しているあいだはショートカットなので、電卓に入れない。離したときは何もしない（down に nil を置く）。
+func (e *Engine) calcKeyLocked(code evdev.EvCode) bool {
+	if e.widgets == nil || e.widgets.calc == nil || e.view == nil {
+		return false
+	}
+	var w *WidgetDef
+	for _, a := range e.view.Cells {
+		if a != nil && a.Widget != nil && a.Widget.Kind == widgetCalc {
+			w = a.Widget
+			break
+		}
+	}
+	if w == nil {
+		return false
+	}
+	held := func(cs ...evdev.EvCode) bool {
+		for _, c := range cs {
+			if _, ok := e.down[keyID(c)]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	if held(evdev.KEY_LEFTCTRL, evdev.KEY_RIGHTCTRL, evdev.KEY_LEFTALT, evdev.KEY_RIGHTALT) {
+		return false
+	}
+	in, ok := calcKeyInput(code, held(evdev.KEY_LEFTSHIFT, evdev.KEY_RIGHTSHIFT))
+	if !ok {
+		return false
+	}
+	id := keyID(code)
+	if _, dup := e.down[id]; dup {
+		return true
+	}
+	e.down[id] = nil
+	e.widgets.calc.Input(w.ID, in, w.Prefix)
+	return true
 }
 
 // ReleaseKey は本体キーが離されたときに呼ぶ。端末モードに入る前に押したキーは、押したときの割り当てで離す。

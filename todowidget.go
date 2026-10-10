@@ -91,6 +91,7 @@ type WidgetRT struct {
 	w, h    int // 画面の大きさ（論理）。画面を使わないときは 800x480
 	todos   *TodoService
 	gadgets *GadgetService   // ストップウォッチなどの状態。nil ならタップしても何もしない
+	calc    *CalcService     // 電卓。nil ならボタンを押しても何もしない
 	envFn   func() WidgetEnv // 今の時刻とデータ。nil なら Todo だけ
 	poke    func()           // 画面の描き直し。待たずに返ること
 }
@@ -144,7 +145,7 @@ type widgetTouch struct {
 
 // ownsTouch は、ウィジェットがタップを自分で処理し、押した位置で働くか（セル全体を光らせない）。
 func (w *WidgetDef) ownsTouch() bool {
-	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth)
+	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc)
 }
 
 // todoGeom は、Todo のセルの中の配置。
@@ -324,6 +325,10 @@ func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
 		w.monthTouch(rt, t, label)
 		return
 	}
+	if w != nil && w.Kind == widgetCalc && rt != nil {
+		w.calcTouch(rt, t, label)
+		return
+	}
 	if !w.ownsTouch() || rt == nil || w.pager == nil { // トラックパッドは Pad が処理する
 		return
 	}
@@ -398,6 +403,10 @@ func (w *WidgetDef) touchUp(rt *WidgetRT, cancel bool) {
 	}
 	if w != nil && w.Kind == widgetMonth {
 		w.monthRelease(rt)
+		return
+	}
+	if w != nil && w.Kind == widgetCalc {
+		w.calcRelease(rt)
 		return
 	}
 	if !w.ownsTouch() || w.pager == nil {

@@ -244,6 +244,29 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // 電卓。config/calculator-example.yaml の「電卓」「電卓(小)」レイヤー、状態は fixtures/calc*.json（-render-calc）
+  // TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/calc.png -render-layer calc -render-time 2026-10-06T09:41:27+09:00 -render-calc gui/test/fixtures/calc.json config/calculator-example.yaml
+  const calcCfg = parseConfigText(repoFile('config/calculator-example.yaml').toString('utf8'))
+  const calcLayer = (n: string) => calcCfg.layers.findIndex((l) => l.name === n)
+  const calcCases: { file: string; layer: string; state: string | null; pressed?: number }[] = [
+    { file: 'calc.png', layer: 'calc', state: 'calc.json' },
+    { file: 'calc-small.png', layer: 'calc-small', state: 'calc.json' },
+    { file: 'calc-result.png', layer: 'calc', state: 'calc-result.json', pressed: 4 * 6 + 4 },
+    { file: 'calc-small-error.png', layer: 'calc-small', state: 'calc-result.json', pressed: 6 },
+    { file: 'calc-none.png', layer: 'calc-small', state: null },
+  ]
+  for (const c of calcCases) {
+    it(`電卓も lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const calc = c.state ? JSON.parse(repoFile(`gui/test/fixtures/${c.state}`).toString('utf8')) : undefined
+      const { pixels } = renderPreview(font, { cfg: calcCfg, stack: [0, calcLayer(c.layer)], mode: 'latched', now, calc, calcPressed: c.pressed })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   // 天気のウィジェット。config/weather-example.yaml の「天気」「天気(小)」レイヤー、予報は fixtures/weather*.json（-render-weather）、
   // アイコンは fixtures/weather-icons（-render-weather-icons。テスト用に描いた円と帯で、気象庁のアイコンではない）
   const wcfg2 = parseConfigText(repoFile('config/weather-example.yaml').toString('utf8'))

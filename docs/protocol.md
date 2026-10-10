@@ -504,6 +504,7 @@ QR コードのセル（`{ widget: qr, id: share }`）の中身を書き換え�
 | `pomodoro` | 動いているとき（`running`）：`anchor`（最初の作業を始めたことにした時刻）、`work_ms`、`break_ms`、`done`（`anchor` より前に終えた作業の数）。今の段階は、`anchor` からの経過を `work_ms + break_ms` で割って求める。止めているとき：`phase`（`work` か `break`。なければ、まだ始めていない）、`remaining_ms`、`done`。`ack_at` は点滅をタップで止めた時刻 |
 | `counter` | `value` |
 | `presenter` | プレゼン用タイマー。`stopwatch` と同じ形（経過時間）。持ち時間と色はセルの設定 |
+| `calculator` | 結果の一番上の項目（`widgets` の外）。電卓の id ごとの状態：`base`（10、16、2）、`tokens`（式。`t` が `num`（`s` は打った文字）、`op`（`s` は `+ - * /`）、`lp`、`rp`、`val`（`v` は前の結果の値 `分子/分母`））、`result`（= のあとの結果 `分子/分母`）、`done`（計算した式の表示）、`msg`、`msg_err`、`history`（`expr`、`value`、`base`。新しい順）、`rev`。電卓は通知しない（接続したときに読む） |
 | `presence` | `state`（状態の名前）、`source`（変えた側。Brain でタップしたときは `brain`） |
 | `ids` | 今の設定で、種類ごとに使われている id（id を書かないセルは種類の名前） |
 | `presence_states` | id ごとの、在席ランプの状態の並び（同じ id のセルの状態を、出てきた順に重なりを除いて並べたもの） |

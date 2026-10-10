@@ -39,6 +39,7 @@ export interface ActionSpec {
   // presenter：プレゼン用タイマー（presenter.go）
   duration?: string // 持ち時間（20m など）
   colors?: PresenterColorSpec[] // 残り時間に応じた色。省略すると残り 5 分で黄、1 分で赤
+  prefix?: boolean // calculator：16 進と 2 進の結果を、0x と 0b を付けて打ち込む
   // trackpad：トラックパッド（trackpad.go）。省略すると既定値
   speed?: number // 感度（画面の 1 ドットを、PC のマウスの何カウントにするか）
   accel?: number // 加速（0 で加速しない）
@@ -55,7 +56,7 @@ export interface ActionSpec {
   long_press?: 'none' | 'right' // 長押しで右クリック
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator'
 
 // プレゼン用タイマーの色の区切り 1 つ（presenter.go の PresenterColorSpec）
 export interface PresenterColorSpec {
@@ -260,6 +261,7 @@ export interface BatteryInfo {
 
 export interface GetWidgetsResult {
   widgets: WidgetsState
+  calculator?: Record<string, import('./calc').CalcState>
   ids: Record<string, string[]>
   presence_states: Record<string, PresenceSpec[]>
   battery: BatteryInfo | null

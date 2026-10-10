@@ -1,0 +1,36 @@
+{
+ "calculator": {
+  "base": 10,
+  "tokens": [],
+  "result": "2/3",
+  "done": "2÷3 =",
+  "history": [
+   {
+    "expr": "2÷3",
+    "value": "2/3",
+    "base": 10
+   }
+  ],
+  "rev": 2
+ },
+ "hex": {
+  "base": 2,
+  "tokens": [
+   {
+    "t": "num",
+    "s": "1011"
+   },
+   {
+    "t": "op",
+    "s": "/"
+   },
+   {
+    "t": "num",
+    "s": "0"
+   }
+  ],
+  "msg": "0 で割れません",
+  "msg_err": true,
+  "rev": 4
+ }
+}

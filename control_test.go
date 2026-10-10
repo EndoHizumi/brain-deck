@@ -66,6 +66,7 @@ type testDaemon struct {
 	cals    *CalendarService
 	weather *WeatherService
 	graphs  *GraphService
+	calc    *CalcService
 	icons   *IconStore
 	images  *ImageStore
 	dataDir string
@@ -137,9 +138,11 @@ func newTestDaemon(t *testing.T, src string, setup ...func(*testDaemon)) *testDa
 	d.images = OpenImageStore(filepath.Join(d.dataDir, "images"))
 	d.weather = NewWeatherService(OpenStore(d.dataDir))
 	d.graphs = NewGraphService(OpenStore(d.dataDir))
+	d.calc = NewCalcService(OpenStore(d.dataDir))
+	rt.calc = d.calc
 	d.icons = OpenIconStore(filepath.Join(d.dataDir, "weather-icons"))
 	d.ctl = &Controller{store: d.store, engine: d.engine, monitor: d.monitor, clock: d.clock, texts: d.texts, todos: d.todos,
-		cals: d.cals, weather: d.weather, graphs: d.graphs, icons: d.icons, images: d.images, qrs: d.qrs, gadgets: d.gadgets, started: time.Now()}
+		cals: d.cals, weather: d.weather, graphs: d.graphs, calc: d.calc, icons: d.icons, images: d.images, qrs: d.qrs, gadgets: d.gadgets, started: time.Now()}
 	for _, f := range setup {
 		f(d)
 	}

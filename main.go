@@ -812,6 +812,8 @@ func main() {
 	pngMouseOff := flag.Bool("render-mouse-off", false, "-render-png で、USB にマウスがないとき（キーボードだけの形）のトラックパッドを描く")
 	pngBattery := flag.String("render-battery", "", "-render-png で、電池のウィジェットに出す状態（87、87,charging、87,plugged。省略すると読めないとき）")
 	pngGadgets := flag.String("render-widgets", "", "-render-png で、ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（widgets.json の形のファイル）")
+	pngCalc := flag.String("render-calc", "", "-render-png で、電卓のセルに出す状態（{\"<id>\": CalcState} の JSON。get_widgets の calculator と同じ形）")
+	pngCalcPressed := flag.String("render-calc-pressed", "", "-render-png で、電卓で押しているボタン（行,列。例: 4,4 は =）")
 	pngGraph := flag.String("render-graph", "", "-render-png で、グラフのセルに出す値（graph.json の形のファイル）")
 	pngQR := flag.String("render-qr", "", "-render-png で、QR コードのウィジェットに出す中身（qr.json の形のファイル）")
 	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
@@ -993,6 +995,31 @@ func main() {
 			}
 			env.QR = f.Texts
 		}
+		if *pngCalc != "" {
+			b, err := os.ReadFile(*pngCalc)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if err := json.Unmarshal(b, &env.Calc); err != nil {
+				log.Fatalf("%s: %v", *pngCalc, err)
+			}
+		}
+		if *pngCalcPressed != "" {
+			var r, c int
+			if _, err := fmt.Sscanf(*pngCalcPressed, "%d,%d", &r, &c); err != nil || r < 0 || r >= calcRows || c < 0 || c >= calcCols {
+				log.Fatalf("bad -render-calc-pressed %q (row,col)", *pngCalcPressed)
+			}
+			for _, l := range km.Layers {
+				if l.Grid == nil {
+					continue
+				}
+				for _, a := range l.Grid.Cells {
+					if a.Widget != nil && a.Widget.Kind == widgetCalc {
+						a.Widget.calc.pressed = r*calcCols + c
+					}
+				}
+			}
+		}
 		if *pngGraph != "" {
 			b, err := os.ReadFile(*pngGraph)
 			if err != nil {
@@ -1111,6 +1138,7 @@ func main() {
 	cals := NewCalendarService(store)
 	weather := NewWeatherService(store)
 	graphs := NewGraphService(store)
+	calc := NewCalcService(store)
 	addAtExit(graphs.Flush) // 間引いて、まだ書いていない値を書く
 	icons := OpenIconStore(iconsDir)
 	gadgets := NewGadgetService(store)
@@ -1129,6 +1157,8 @@ func main() {
 	}
 	widgetRT := NewWidgetRT(todos)
 	widgetRT.gadgets = gadgets
+	widgetRT.calc = calc
+	calc.SetTyper(func(text string) error { return typeOnHID(s, text) })
 	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
@@ -1139,6 +1169,7 @@ func main() {
 		env.Weather = weather.Snapshot()
 		env.WeatherIcons = icons
 		env.Graph = graphs.Snapshot()
+		env.Calc = calc.Snapshot()
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1190,6 +1221,7 @@ func main() {
 				cals.SetOnChange(d.Poke)
 				weather.SetOnChange(d.Poke)
 				graphs.SetOnChange(d.Poke)
+				calc.SetOnChange(d.Poke)
 				icons.SetOnChange(d.Poke)
 				images.SetOnChange(d.Invalidate)
 				usb.OnChange(d.Invalidate) // トラックパッドの「マウスはオフ」と、メディアキーのセルを描き直す
@@ -1232,6 +1264,7 @@ func main() {
 			cals:    cals,
 			weather: weather,
 			graphs:  graphs,
+			calc:    calc,
 			icons:   icons,
 			images:  images,
 			usb:     usb,

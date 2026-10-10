@@ -643,6 +643,26 @@ describe('Todo', () => {
     expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'stopwatch', label: '消しゴム' })
   })
 
+  it('セルを電卓にすると、タップの動きは選べず、id と 0x を付けるかを決められる。小さいと注意を出す', async () => {
+    const t = await connected()
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    t.change('#tap', 'key')
+    t.change('#combo-text', 'F5')
+    t.change('#widget', 'calculator')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'calculator', label: '消しゴム' })
+    expect(t.root.querySelector('#tap')).toBeNull()
+    expect(t.$('.inspector').textContent).toContain('2×2 以上')
+    t.change('#calc-id', 'hex')
+    const box = t.$<HTMLInputElement>('#calc-prefix')
+    box.checked = true
+    box.dispatchEvent(new Event('change'))
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'calculator', label: '消しゴム', id: 'hex', prefix: true })
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.change('#widget', 'clock')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
+  })
+
   it('セルを月の表示にし、id、週の始まり、戻るまでの時間、印のカレンダーを決め、カレンダーのセルで選んだ日を見られる', async () => {
     const daemon = new FakeDaemon(sampleConfig())
     const cal = demoCalendar(new Date('2026-10-06T09:41:27+09:00'))

@@ -26,6 +26,7 @@ import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
 import { DEFAULT_MONTH_ID, MONTH_MIN_SPAN } from './monthwidget'
 import { parseIcon, type Icon } from './weatherwidget'
+import { DEFAULT_CALC_ID, type CalcState } from './calc'
 import { DEFAULT_PRESENTER_COLORS, presenterDef, presenterView } from './presenter'
 import { DEFAULT_GRAPH_POINTS, GRAPH_MAX_POINTS, formatGraph, graphDecimals } from './graphwidget'
 import {
@@ -157,6 +158,7 @@ export class App {
   // QR コードの中身、ストップウォッチなどの状態、電池（接続したときに Brain から読む。状態は Brain で変わると通知が届く）
   qr: Record<string, TextEntry> = {}
   widgetsState: WidgetsState = {}
+  calcState: Record<string, CalcState> = {} // 電卓の状態（Brain の get_widgets。接続したときに読む）
   brainBattery: BatteryInfo | null = null
   // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
   section: 'config' | 'todo' | 'console' = 'config'
@@ -461,7 +463,11 @@ export class App {
     this.brainBattery = st.battery ?? null
     if (this.hello?.commands?.includes('get_text')) this.texts = (await c.request<GetTextResult>('get_text')).texts ?? {}
     if (this.hello?.commands?.includes('get_qr')) this.qr = (await c.request<GetTextResult>('get_qr')).texts ?? {}
-    if (this.hello?.commands?.includes('get_widgets')) this.widgetsState = (await c.request<GetWidgetsResult>('get_widgets')).widgets ?? {}
+    if (this.hello?.commands?.includes('get_widgets')) {
+      const w = await c.request<GetWidgetsResult>('get_widgets')
+      this.widgetsState = w.widgets ?? {}
+      this.calcState = w.calculator ?? {}
+    }
     await this.loadTodo()
     this.calendar = this.hello?.commands?.includes('get_calendar') ? await c.request<CalendarData>('get_calendar') : null
     this.weather = this.hello?.commands?.includes('get_weather') ? await c.request<WeatherData>('get_weather') : null
@@ -1084,6 +1090,7 @@ export class App {
     if (a.label === '') delete a.label
     for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale', 'work', 'break', 'follow', 'unit', 'duration'] as const) if (a[f] === '') delete a[f]
     if (a.colors && !a.colors.length) delete a.colors
+    if (!a.prefix) delete a.prefix
     for (const f of GRAPH_NUM_FIELDS) if (a[f] === undefined || !Number.isFinite(a[f])) delete a[f]
     if (!a.chart) delete a.chart
     if (!a.week_start) delete a.week_start
@@ -1112,6 +1119,7 @@ export class App {
       delete a.break
     }
     if (w !== 'presence') delete a.states
+    if (w !== 'calculator') delete a.prefix
     if (w !== 'presenter') {
       delete a.duration
       delete a.colors
@@ -1830,7 +1838,7 @@ export class App {
         const pressed = new Set(t.kind === 'cell' && e.showPressed ? [cellKey(t.col, t.row)] : [])
         const { pixels } = renderPreview(this.font, { cfg, stack: editStack(t.layer), mode: this.previewMode(t.layer), pressed,
           w: pv.width, h: pv.height, now: new Date(), texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar,
-          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery, weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph,
+          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery, weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph, calc: this.calcState,
           images: (id) => (id === '__edit__' ? img : this.images.get(id)?.img) })
         pctx.putImageData(new ImageData(pixels as any, pv.width, pv.height), 0, 0)
       }
@@ -2162,7 +2170,7 @@ export class App {
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
       texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img,
       mouseOff: this.brainMouse === false, widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery,
-      weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph })
+      weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph, calc: this.calcState })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
   }
@@ -2301,6 +2309,7 @@ export class App {
         : own.widget === 'calendar' ? this.viewCalendarEditor(own) : own.widget === 'month' ? this.viewMonthEditor(own)
         : own.widget === 'weather' ? this.viewWeatherEditor(own)
         : own.widget === 'graph' ? this.viewGraphEditor(own)
+        : own.widget === 'calculator' ? this.viewCalcEditor(own)
         : own.widget === 'trackpad' ? this.viewPadEditor(own)
         : own.widget === 'clock' ? this.viewClockEditor(text, missing) : this.viewGadgetEditor(own),
     )
@@ -2606,6 +2615,30 @@ export class App {
         '幅があれば今日と明日を並べ、大きさに応じて天気のアイコン、最高と最低の気温、6 時間ごとの降水確率を出します。' +
         'アイコンはセルの大きさに合わせて PC が作るので、セルの大きさを変えたら、保存してから brain-deck weather sync を実行してください（プレビューでは、それまでアイコンが出ません）。' +
         '出典：気象庁ホームページ（天気予報、天気アイコンを加工して作成）。'))
+    return out
+  }
+
+  // viewCalcEditor は、電卓のセルの欄。
+  private viewCalcEditor(own: ActionSpec): HTMLElement[] {
+    const id = own.id ?? ''
+    const out: HTMLElement[] = [
+      h('label', { class: 'row', title: `英数字と _ . -（32 文字まで）。省略すると「${DEFAULT_CALC_ID}」。同じ id のセルは、同じ式と履歴を出します` }, 'id ',
+        h('input', { value: id, 'data-focus': 'id', id: 'calc-id', placeholder: `省略すると ${DEFAULT_CALC_ID}`,
+          onchange: (ev: Event) => this.patchAction({ id: (ev.target as HTMLInputElement).value.trim() }) })),
+      h('label', { class: 'row', title: '16 進は 0x1f、2 進は 0b101 のように打ち込みます（x と b は、US と JIS のどちらの配列でも同じキー）' },
+        h('input', { type: 'checkbox', checked: !!own.prefix, 'data-focus': 'prefix', id: 'calc-prefix',
+          onchange: (e: Event) => this.patchAction({ prefix: (e.target as HTMLInputElement).checked }) }), ' 16 進と 2 進は 0x、0b を付けて入力する'),
+    ]
+    if (id && !TEXT_ID_PATTERN.test(id)) out.push(h('div', { class: 'err' }, 'id は、英数字と _ . - の 32 文字までです'))
+    const [w, hh] = spanOf(own)
+    if (w < 2 || hh < 2) out.push(h('div', { class: 'warn' }, 'ボタンが小さくなるので、大きさは 2×2 以上にしてください'))
+    const st = this.calcState[id || DEFAULT_CALC_ID]
+    if (this.connected && st?.history?.length) out.push(h('p', { class: 'hint gadget-now' }, `最後の計算：${st.history[0].expr}`))
+    out.push(h('p', { class: 'hint' }, '四則演算と括弧、10 進・16 進・2 進（DEC のボタンで切り替え）。数は分数のまま計算するので、0.1+0.2 も 1÷3×3 も誤差が出ません。' +
+      '「入力」で結果を PC にキーとして打ち込みます（数字、−、.、A〜F だけを使うので、US 配列でも JIS 配列でも同じ文字になります。PC の日本語入力はオフにしてください）。' +
+      '「履歴」で前の結果を式に入れます（続けて押すと、もっと前の結果）。電卓のセルがあるレイヤーにいるあいだは、Brain のキーでも入力できます' +
+      '（Q〜P が 1〜0、L が +、− が −、X が ×、K が ÷、H と J が括弧、N が小数点、決定か空白が =、Shift+決定 か Z が入力、BS、Shift+BS が AC、G が基数、S が ±、↑↓ が履歴。' +
+      'A、B、C、D、F は 16 進の数字、E は Shift+E）。電卓が使わないキーと、Ctrl か Alt を押しながらのキーは、ふだんどおり PC に送ります。'))
     return out
   }
 

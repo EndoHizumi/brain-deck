@@ -12,9 +12,11 @@ import { unpack565, type Image565 } from './image'
 import { blend8, weatherWidgetOf, wthLayout, type Icon, type WeatherWidget } from './weatherwidget'
 import { encodeQR } from './qr'
 import { presenterDef, presenterView, type PresenterDef } from './presenter'
+import { CALC_BUTTONS, CALC_COLS, CALC_PAD, DEFAULT_CALC_ID, baseName, buttonColor, buttonLabel, calcBigText, calcDisplay, calcGeom, calcTail,
+  colCalcBase, colCalcDisp, validDigit, type CalcState } from './calc'
 import { GRAPH_LINE_W, GRAPH_NONE, graphLayout, graphSegment, graphWidgetOf, type GraphWidget } from './graphwidget'
 import {
-  GAUGE_H, QR_NONE, QR_TOO_BIG, STOPWATCH_IDLE, batteryLines, colInkError, colInkWarn, colQRDark, colQRDarkOld, colQRLight, colQRLitOld,
+  GAUGE_H, QR_NONE, QR_TOO_BIG, STOPWATCH_IDLE, batteryLines, colInkError, colInkOK, colInkWarn, colQRDark, colQRDarkOld, colQRLight, colQRLitOld,
   contrastInk, pomoDurations, pomoInk, pomoText, pomodoroView, presenceStates, presenceView, qrFit, stateId, stopwatchElapsed,
   stopwatchText, type PresenceDef,
 } from './gadgetwidget'
@@ -97,6 +99,7 @@ export interface CellView {
   month?: MonthWidget // 月の表示のウィジェット
   weather?: WeatherWidget // 天気のウィジェット
   graph?: GraphWidget // グラフのウィジェット
+  calcId?: string // 電卓のウィジェットの id
   padScroll?: number // トラックパッドのスクロールの帯の幅（0 なら帯なし）
   background?: string // セルの背景画像の id
   gadget?: Gadget // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ
@@ -144,6 +147,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'month') v.month = monthWidgetOf(a)
     if (a.widget === 'weather') v.weather = weatherWidgetOf(a)
     if (a.widget === 'graph') v.graph = graphWidgetOf(a)
+    if (a.widget === 'calculator') v.calcId = a.id || DEFAULT_CALC_ID
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
     if (['battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'presenter'].includes(a.widget)) {
       v.gadget = { kind: a.widget as Gadget['kind'], id: stateId(a), work: pomoDurations(a).work, states: presenceStates(a.states) }
@@ -329,6 +333,8 @@ export interface PreviewParams {
   weather?: WeatherData | null // 天気予報（Brain の get_weather）
   weatherIcons?: (name: string) => Icon | undefined // 天気アイコン（Brain の get_weather_icon）。ないアイコンは描かない
   graph?: Record<string, GraphSeries> // グラフの値（Brain の get_graph）
+  calc?: Record<string, CalcState> // 電卓の状態（Brain の get_widgets の calculator）
+  calcPressed?: number // 電卓で押しているボタン（行 × 6 + 列。-render-calc-pressed）
 }
 
 export interface WidgetEnv {
@@ -347,6 +353,8 @@ export interface WidgetEnv {
   weather: WeatherData | null
   weatherIcons: (name: string) => Icon | undefined
   graph: Record<string, GraphSeries>
+  calc: Record<string, CalcState>
+  calcPressed: number
 }
 
 export interface PreviewLayout {
@@ -371,7 +379,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
     todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage,
     month: { offset: Math.max(Math.min(p.monthOffset ?? 0, MONTH_MAX_OFFSET), -MONTH_MAX_OFFSET), sel: p.monthSelect ?? '' }, mouseOff: p.mouseOff ?? false,
     widgets: p.widgets ?? {}, qr: p.qr ?? {}, battery: p.battery ?? null, weather: p.weather ?? null,
-    weatherIcons: p.weatherIcons ?? (() => undefined), graph: p.graph ?? {} }
+    weatherIcons: p.weatherIcons ?? (() => undefined), graph: p.graph ?? {}, calc: p.calc ?? {}, calcPressed: p.calcPressed ?? -1 }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -557,6 +565,10 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
     drawGraph(font, px, area, v.graph, env, ink, subInk)
     return
   }
+  if (v.calcId !== undefined) {
+    drawCalc(font, px, area, v.calcId, env)
+    return
+  }
   if (v.gadget) {
     drawGadget(font, px, area, v.gadget, env, ink, subInk)
     return
@@ -594,6 +606,38 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
   const y = area.y0 + Math.trunc((ah - FONT_H * ts - bh) / 2)
   drawCentered(font, px, area, y, time, ts, ink)
   if (date) drawCentered(font, px, area, y + FONT_H * ts + widgetLineGap, date, ds, subInk)
+}
+
+// drawCalc は calcwidget.go の drawCalc と同じ。
+function drawCalc(font: BitmapFont, px: Pixels, area: Rect, id: string, env: WidgetEnv): void {
+  const s: CalcState = Object.hasOwn(env.calc, id) ? env.calc[id] : { base: 10, tokens: [] }
+  const g = calcGeom(area)
+  px.fill(g.disp, colCalcDisp)
+  const inn = inset(g.disp, CALC_PAD)
+  const d = calcDisplay(s)
+  const ss = inn.y1 - inn.y0 >= FONT_H * 6 ? 2 : 1
+  const bn = baseName(s.base)
+  px.text(font, inn.x0, inn.y0, bn, ss, colCalcBase, inn)
+  if (d.small) {
+    const x0 = inn.x0 + (font.textWidth(bn) + 4) * ss
+    const t = calcTail(font, d.small, Math.trunc((inn.x1 - x0) / ss))
+    const c = d.smallErr === null ? colSub : d.smallErr ? colUnsynced : colInkOK
+    px.text(font, inn.x1 - font.textWidth(t) * ss, inn.y0, t, ss, c, inn)
+  }
+  const big = { x0: inn.x0, y0: inn.y0 + FONT_H * ss + 2, x1: inn.x1, y1: inn.y1 }
+  const [t, sc] = calcBigText(font, d, s.base, big.x1 - big.x0, big.y1 - big.y0)
+  px.text(font, big.x1 - font.textWidth(t) * sc, big.y1 - FONT_H * sc, t, sc, d.dim ? colTodoOff : colText, big)
+  g.buttons.forEach((r, i) => {
+    const b = CALC_BUTTONS[Math.trunc(i / CALC_COLS)][i % CALC_COLS]
+    const label = buttonLabel(b, s.base)
+    let fill = buttonColor(b)
+    let ink = colText
+    if (validDigit(b, 16) && !validDigit(b, s.base)) ink = colTodoOff
+    if (i === env.calcPressed) [fill, ink] = [colPressed, colPressedText]
+    px.fill(r, fill)
+    const bs = Math.min(fitScale(font, [label], r.x1 - r.x0 - 4, r.y1 - r.y0 - 4, 3), 3)
+    drawCentered(font, px, r, r.y0 + Math.trunc((r.y1 - r.y0 - FONT_H * bs) / 2), label, bs, ink)
+  })
 }
 
 // drawGraph は graphwidget.go の drawGraph と同じ。area は見出しの下の範囲。

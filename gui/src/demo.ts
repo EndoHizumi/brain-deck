@@ -453,7 +453,7 @@ export function validate(cfg: Config): Problem[] {
     if (!cell && (a.widget || a.span || a.background)) return out.push({ path, message: `${where}: widget, span and background can be used only in touch cells` })
     if (a.background !== undefined && !/^[0-9a-f]{16}$/.test(a.background))
       out.push({ path, message: `${where}: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got "${a.background}"` })
-    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month', 'weather', 'graph', 'presenter'].includes(a.widget))
+    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month', 'weather', 'graph', 'presenter', 'calculator'].includes(a.widget))
       out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad, battery, stopwatch, pomodoro, counter, qr, presence, month)` })
     if (isTapWidget(a.widget) && n > 0)
       out.push({ path, message: `${where}: widget: ${a.widget} handles taps itself; remove key, layer_*, mouse, usb_mode and terminal` })
@@ -474,6 +474,8 @@ export function validate(cfg: Config): Problem[] {
     if (a.states !== undefined && a.widget !== 'presence') out.push({ path, message: `${where}: states is for widget: presence` })
     if (a.widget === 'todo' && n > 0) out.push({ path, message: `${where}: widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*` })
     if (a.widget === 'calendar' && n > 0) out.push({ path, message: `${where}: widget: calendar handles taps itself (▲▼ to turn pages); remove key and layer_*` })
+    if (a.widget === 'calculator' && n > 0) out.push({ path, message: `${where}: widget: calculator handles taps itself (tap the buttons); remove key and layer_*` })
+    if (a.prefix !== undefined && a.widget !== 'calculator') out.push({ path, message: `${where}: prefix is for widget: calculator` })
     if (a.widget === 'month' && n > 0) out.push({ path, message: `${where}: widget: month handles taps itself (▲▼ to change the month, tap a day to select it); remove key and layer_*` })
     const paged = a.widget === 'todo' || a.widget === 'calendar'
     if (a.rows !== undefined && !paged) out.push({ path, message: `${where}: rows is for widget: todo and calendar` })
@@ -493,7 +495,7 @@ export function validate(cfg: Config): Problem[] {
     if (a.rows !== undefined && !(Number.isInteger(a.rows) && a.rows >= 1 && a.rows <= 20)) out.push({ path, message: `${where}: rows must be 1..20 (omit it to fit the cell height)` })
     if ((a.widget === 'text' || a.widget === 'qr' || a.widget === 'graph') && !TEXT_ID_PATTERN.test(a.id ?? ''))
       out.push({ path, message: `${where}: widget: ${a.widget} needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
-    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter and month` })
+    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter, calculator and month` })
     if (!a.widget && (a.format || a.date_format || a.tz)) out.push({ path, message: `${where}: format, date_format and tz need widget: clock` })
     if (a.tz) {
       try {

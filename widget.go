@@ -30,6 +30,7 @@ const (
 	widgetWeather   = "weather"
 	widgetGraph     = "graph"
 	widgetPresenter = "presenter"
+	widgetCalc      = "calculator"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -45,7 +46,7 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc}
 
 // ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
@@ -85,6 +86,8 @@ type WidgetDef struct {
 	Graph      *GraphDef        // graph：単位、範囲、描き方
 	Duration   time.Duration    // presenter：持ち時間
 	Colors     []PresenterColor // presenter：残り時間に応じた色（残りの長い順）
+	Prefix     bool             // calculator：16 進と 2 進の結果を、0x と 0b を付けて打ち込む
+	calc       *calcCell        // calculator：押しているボタン
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -102,6 +105,7 @@ type WidgetEnv struct {
 	// WeatherIcons は、天気アイコンの読み込み先。nil ならアイコンを描かない
 	WeatherIcons *IconStore
 	Graph        map[string]GraphSeries // graph：id ごとの値（写し。書き換えない）
+	Calc         map[string]CalcState   // calculator：id ごとの状態（写し）
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
@@ -137,6 +141,9 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	if s.WeekStart != "" && s.Widget != widgetMonth {
 		return nil, fmt.Errorf("week_start is for widget: month")
 	}
+	if s.Prefix && s.Widget != widgetCalc {
+		return nil, fmt.Errorf("prefix is for widget: calculator")
+	}
 	if (s.Duration != "" || s.Colors != nil) && s.Widget != widgetPresenter {
 		return nil, fmt.Errorf("duration and colors are for widget: presenter")
 	}
@@ -155,14 +162,14 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		}
 		return nil, fmt.Errorf("format, date_format and tz are for widget: clock")
 	}
-	if s.ID != "" && !hasStateID(s.Widget) && s.Widget != widgetMonth {
+	if s.ID != "" && !hasStateID(s.Widget) && s.Widget != widgetMonth && s.Widget != widgetCalc {
 		switch {
 		case paged:
 			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: %s", s.Widget)
 		case s.Widget == "":
-			return nil, fmt.Errorf("id needs widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter or month")
+			return nil, fmt.Errorf("id needs widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter, calculator or month")
 		}
-		return nil, fmt.Errorf("id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter and month")
+		return nil, fmt.Errorf("id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter, calculator and month")
 	}
 	switch s.Widget {
 	case widgetClock:
@@ -211,6 +218,8 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		return &WidgetDef{Kind: s.Widget}, nil
 	case widgetGraph:
 		return compileGraph(s)
+	case widgetCalc:
+		return compileCalc(s)
 	case widgetWeather:
 		w := &WidgetDef{Kind: s.Widget, Stale: defaultWthStale}
 		if s.Stale != "" {
@@ -377,6 +386,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return wthKey(w, env)
 	case widgetGraph:
 		return graphKey(w, env)
+	case widgetCalc:
+		return calcKey(w, env)
 	case widgetPad:
 		return fmt.Sprintf("trackpad\x00%v", env.MouseOff) // マウスのオンとオフで描き直す
 	}
@@ -429,6 +440,8 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		drawWeather(cv, area, v.Widget, env)
 	case widgetGraph:
 		drawGraph(cv, area, v.Widget, env, ink, subInk)
+	case widgetCalc:
+		drawCalc(cv, area, v.Widget, env)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {
