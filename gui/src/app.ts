@@ -39,7 +39,7 @@ import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './ports'
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
-  ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, PhotoListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
+  ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, PhotoListResult, ReadListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode, InputKind,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
@@ -181,7 +181,8 @@ export class App {
   previewOffline = false // プレビューを、PC から外したときの画面にする
   brainLastSync: Date | null = null // Brain で最後に時刻を合わせた時刻（get_status の time.last_set）
   // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
-  section: 'config' | 'todo' | 'photos' | 'console' = 'config'
+  section: 'config' | 'todo' | 'photos' | 'reads' | 'console' = 'config'
+  reads: ReadListResult | null = null // Brain の読み物（list_reads）
   photos: PhotoListResult | null = null // Brain の写真（list_photos）
   photoView: { id: string; img: Image565 } | null = null // 「見る」で読んだ写真
   photoBusy = false
@@ -985,6 +986,62 @@ export class App {
       const img = v.img.w === w && v.img.h === hh ? v.img : fit565(v.img, w, hh)
       ctx.putImageData(new ImageData(image565RGBA(img) as any, w, hh), 0, 0)
     }
+  }
+
+  // ---------- 読み物 ----------
+
+  get readsSupported(): boolean {
+    return !!this.hello?.commands?.includes('list_reads')
+  }
+
+  async loadReads(): Promise<void> {
+    if (!this.connected || !this.readsSupported) return
+    try {
+      this.reads = await this.client!.request<ReadListResult>('list_reads')
+    } catch (e: any) {
+      this.say(`読み物の一覧を読めませんでした：${e?.message ?? e}`, 'error')
+    }
+    this.render()
+  }
+
+  async deleteRead(id: string): Promise<void> {
+    const r = this.reads?.reads.find((x) => x.id === id)
+    if (!this.deps.confirm(`読み物「${r?.title || id}」としおりを Brain から消します。よいですか？`)) return
+    try {
+      await this.client!.request('delete_read', { read: id })
+      this.say('読み物を消しました', 'ok')
+    } catch (e: any) {
+      this.say(`読み物を消せませんでした：${e?.message ?? e}`, 'error')
+    }
+    await this.loadReads()
+  }
+
+  private viewReads(): HTMLElement {
+    const panel = (...c: (HTMLElement | null)[]) => h('section', { class: 'panel reads-panel' }, h('h2', null, '読み物（Brain に保存）'), c)
+    if (!this.connected) return panel(h('p', { class: 'hint' }, 'Brain に接続すると、取り込んだ読み物の一覧を見て、消せます。'))
+    if (!this.readsSupported) return panel(h('div', { class: 'warn' }, 'Brain の lefthand が読み物に対応していません。lefthand を新しくしてください'))
+    const l = this.reads
+    const kinds: Record<string, string> = { aozora: '青空文庫', epub: 'EPUB', web: 'Web', rss: 'RSS', text: 'テキスト' }
+    return panel(
+      l
+        ? l.reads.length
+          ? h('table', { class: 'reads' },
+            h('thead', null, h('tr', null, ['', '題名', '著者', '種類', '文字', 'しおり', ''].map((x) => h('th', null, x)))),
+            h('tbody', null, l.reads.map((r, i) => h('tr', { dataset: { read: r.id } },
+              h('td', null, String(i + 1)),
+              h('td', { title: r.source ?? '' }, r.title),
+              h('td', null, [r.author, r.date].filter(Boolean).join(' ')),
+              h('td', null, kinds[r.kind] ?? r.kind),
+              h('td', null, `${r.chars.toLocaleString()}（${kb(r.bytes)}）`),
+              h('td', null, r.pos ? `${Math.round((r.progress ?? 0) * 100)}%` : ''),
+              h('td', null, h('button', { class: 'small danger', onclick: () => void this.deleteRead(r.id) }, '削除'))))))
+          : h('p', { class: 'hint' }, 'まだ読み物がありません。')
+        : h('p', { class: 'hint' }, '読み込んでいます…'),
+      l ? h('p', { class: 'hint' }, `${l.reads.length} 件、${kb(l.total_bytes)} / 上限 ${kb(l.limit_bytes)}。SD カードの空き ${kb(l.free_bytes)}（${kb(l.reserve_bytes)} は残します）。`) : null,
+      h('p', { class: 'hint' }, '読み物を足すのは PC のコマンドです：brain-deck read add <青空文庫のテキストか zip | EPUB | Web のページの URL>、' +
+        'RSS は brain-deck read feed add <URL> と brain-deck read feed sync。DRM のかかった電子書籍は扱いません。' +
+        'Brain では、読み物のアプリ（セルの種類「ウィジェット」→「読み物」）で読みます。'),
+    )
   }
 
   // ---------- Todo ----------
@@ -1874,7 +1931,7 @@ export class App {
       { class: 'app' },
       this.viewHeader(),
       this.viewMessages(),
-      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' || this.section === 'photos' ? this.viewEditor() : this.viewStart(),
+      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' || this.section === 'photos' || this.section === 'reads' ? this.viewEditor() : this.viewStart(),
       this.diff ? this.viewDiff() : null,
       this.imageEdit ? this.viewImageEdit() : null,
     )
@@ -1954,6 +2011,8 @@ export class App {
         ? this.viewTodo()
         : this.section === 'photos'
         ? this.viewPhotos()
+        : this.section === 'reads'
+        ? this.viewReads()
         : [
             h('div', { class: 'source' }, `編集中：${this.source}`, this.dirty ? h('span', { class: 'dirty' }, '（未保存の変更あり）') : null),
             this.viewTabs(),
@@ -1972,9 +2031,10 @@ export class App {
     )
   }
 
-  showSection(s: 'config' | 'todo' | 'photos' | 'console'): void {
+  showSection(s: 'config' | 'todo' | 'photos' | 'reads' | 'console'): void {
     this.section = s
     if (s === 'photos') void this.loadPhotos()
+    if (s === 'reads') void this.loadReads()
     this.render()
     if (s === 'console') this.console.focus()
   }
@@ -1991,6 +2051,9 @@ export class App {
       h('button', { role: 'tab', id: 'section-photos', class: ['section', this.section === 'photos' && 'active'],
         'aria-selected': this.section === 'photos' ? 'true' : 'false', onclick: () => this.showSection('photos') },
         '写真', this.photos?.photos.length ? h('span', { class: 'count' }, String(this.photos.photos.length)) : null),
+      h('button', { role: 'tab', id: 'section-reads', class: ['section', this.section === 'reads' && 'active'],
+        'aria-selected': this.section === 'reads' ? 'true' : 'false', onclick: () => this.showSection('reads') },
+        '読み物', this.reads?.reads.length ? h('span', { class: 'count' }, String(this.reads.reads.length)) : null),
       h('button', { role: 'tab', id: 'section-console', class: ['section', this.section === 'console' && 'active'],
         'aria-selected': this.section === 'console' ? 'true' : 'false', onclick: () => this.showSection('console') },
         'コンソール', this.console.open ? h('span', { class: 'count ok' }, '接続中') : null))
@@ -3019,6 +3082,7 @@ export class App {
         : own.widget === 'trackpad' ? this.viewPadEditor(own)
         : own.widget === 'pentablet' ? this.viewPenTabEditor(own)
         : own.widget === 'memo' ? this.viewMemoEditor()
+        : own.widget === 'reader' ? this.viewReaderEditor()
         : own.widget === 'clock' ? this.viewClockEditor(text, missing) : this.viewGadgetEditor(own),
     )
   }
@@ -3058,6 +3122,13 @@ export class App {
         '抵抗膜はペンを浮かせた位置を読めないので、触れているあいだだけペンが画面の上にあることになります。'),
     ]
     return out.filter((x): x is HTMLElement => !!x)
+  }
+
+  // viewReaderEditor は、読み物のアプリのセルの説明。読み物は Brain のデータ（「読み物」のタブ、brain-deck read add）。
+  private viewReaderEditor(): HTMLElement[] {
+    return [h('p', { class: 'hint' }, '取り込んだ読み物（青空文庫、EPUB、Web の記事、RSS）を、Brain で読みます（PC から外していても読めます）。' +
+      '左右をタップしてページをめくり、真ん中で道具（一覧、目次、文字の大きさ、縦書き・横書き）。本体キーの ← → とスペースでもめくります。' +
+      '大きさは 1×1（レイヤー全体）がおすすめです。読み物は「読み物」のタブで見て消せます。足すのは PC の brain-deck read add です。')]
   }
 
   // viewMemoEditor は、手書きメモのセルの説明。線は Brain のデータで、brain-deck memo get で PNG に描き出す。

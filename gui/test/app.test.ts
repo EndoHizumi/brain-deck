@@ -900,6 +900,32 @@ describe('写真（フォトフレーム）', () => {
   })
 })
 
+describe('読み物', () => {
+  it('Brain の読み物の一覧を出し、消せる。セルを読み物のアプリにできる', async () => {
+    const t = await connected()
+    t.daemon.reads = [
+      { id: 'aaaaaaaaaaaaaaaa', title: '蜘蛛の糸', author: '芥川龍之介', kind: 'aozora', bytes: 5000, chars: 3127, added: '2026-10-11T00:00:00Z', pos: { b: 3, c: 0 }, progress: 0.25 },
+      { id: 'bbbbbbbbbbbbbbbb', title: '記事', kind: 'rss', bytes: 900, chars: 400, added: '2026-10-11T00:00:00Z' },
+    ]
+    t.click('#section-reads')
+    await vi.waitFor(() => expect(t.app.reads?.reads.length).toBe(2))
+    const txt = t.$('.reads-panel').textContent!
+    expect(txt).toContain('蜘蛛の糸')
+    expect(txt).toContain('青空文庫')
+    expect(txt).toContain('25%')
+    expect(txt).toContain('brain-deck read add')
+    t.$<HTMLButtonElement>('tr[data-read="aaaaaaaaaaaaaaaa"] button.danger').click()
+    await vi.waitFor(() => expect(t.daemon.reads.length).toBe(1))
+    // セルを読み物のアプリに
+    t.click('#section-config')
+    t.click('[data-cell="0,0"]')
+    t.change('#kind', 'widget')
+    t.change('#widget', 'reader')
+    expect(t.app.ownAction()).toMatchObject({ widget: 'reader' })
+    expect(t.$('.widget-editor').textContent).toContain('左右をタップ')
+  })
+})
+
 describe('マウスとトラックパッド', () => {
   it('キーとセルにマウスの操作を割り当て、保存できる', async () => {
     const t = await connected()

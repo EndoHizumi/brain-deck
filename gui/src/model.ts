@@ -87,7 +87,7 @@ export const ROTATE_LABELS: Record<string, string> = { next: '回す', '0': '横
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
 export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド',
   battery: '電池', stopwatch: 'ストップウォッチ', pomodoro: 'ポモドーロ', counter: 'カウンター', qr: 'QR コード', presence: '在席ランプ', month: '月の表示', weather: '天気', graph: 'グラフ', presenter: 'プレゼン用タイマー', calculator: '電卓',
-  pentablet: 'ペンタブレット', memo: '手書きメモ' }
+  pentablet: 'ペンタブレット', memo: '手書きメモ', reader: '読み物' }
 // トラックパッドの項目（数）
 export const PAD_NUM_FIELDS = ['speed', 'accel', 'scroll_width', 'scroll_step', 'settle_ms', 'smooth', 'deadzone', 'min_pressure', 'tap_ms', 'tap_move', 'drag_ms'] as const
 // トラックパッドの項目
@@ -110,7 +110,7 @@ export const PAD_DEFAULTS = {
 } as const
 // ウィジェットが押した位置で働く（タップしたときのキーやレイヤーを書けない）
 export function ownsTouch(w: WidgetKind | undefined): boolean {
-  return w === 'todo' || w === 'calendar' || w === 'trackpad' || w === 'month' || w === 'calculator' || w === 'pentablet' || w === 'memo' || isTapWidget(w)
+  return w === 'todo' || w === 'calendar' || w === 'trackpad' || w === 'month' || w === 'calculator' || w === 'pentablet' || w === 'memo' || w === 'reader' || isTapWidget(w)
 }
 // タップと長押しを自分で処理する（タップしたときのキーやレイヤーを書けない。押すと枠が光る）
 export function isTapWidget(w: WidgetKind | undefined): boolean {

@@ -19,6 +19,25 @@ function to565(px: Uint8ClampedArray): Uint8Array {
 // フェーズ H：ペンタブレットと手書きメモ（config/pen-example.yaml）
 // TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/pen-memo-portrait.png -render-layer memo -render-rotate 90 -render-time 2026-10-06T09:41:27+09:00 config/pen-example.yaml
 // （pen-tablet.png は -render-layer pen、pen-tablet-mouseoff.png はさらに -render-mouse-off）
+// フェーズ I：読み物のアプリ（config/reader-example.yaml の「読む」。読み物がないときの一覧）
+describe('読み物のアプリのプレビュー', () => {
+  const font = testFont()
+  const cfg = parseConfigText(repoFile('config/reader-example.yaml').toString('utf8'))
+  const now = new Date('2026-10-06T09:41:27+09:00')
+  for (const t of [{ file: 'reader-empty.png', portrait: false }, { file: 'reader-empty-portrait.png', portrait: true }]) {
+    it(`lefthand -render-png と画素単位で同じ（${t.file}）`, () => {
+      const l = cfg.layers.findIndex((x) => x.name === 'read')
+      const [w, h] = t.portrait ? [480, 800] : [800, 480]
+      const { pixels } = renderPreview(font, { cfg, stack: [0, l], mode: 'latched', w, h, now, battery: null })
+      const want = decodePNG(repoFile(`gui/test/fixtures/${t.file}`))
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+})
+
 describe('ペンタブレットと手書きメモのプレビュー', () => {
   const font = testFont()
   const cfg = parseConfigText(repoFile('config/pen-example.yaml').toString('utf8'))

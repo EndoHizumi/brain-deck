@@ -64,7 +64,7 @@ export interface ActionSpec {
   pressure_range?: [number, number] // 筆圧の 0 と最大にする押す強さ（既定 [400, 2400]）
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo' | 'reader'
 
 // プレゼン用タイマーの色の区切り 1 つ（presenter.go の PresenterColorSpec）
 export interface PresenterColorSpec {
@@ -166,6 +166,29 @@ export interface PhotoListResult {
   free_bytes: number
   reserve_bytes: number
   showing?: string
+}
+
+// list_reads の結果（readdoc.go の ReadInfo）
+export interface ReadInfo {
+  id: string
+  title: string
+  author?: string
+  kind: string
+  source?: string
+  date?: string
+  bytes: number
+  chars: number
+  added: string
+  pos?: { b: number; c: number }
+  progress?: number
+}
+
+export interface ReadListResult {
+  reads: ReadInfo[]
+  total_bytes: number
+  limit_bytes: number
+  free_bytes: number
+  reserve_bytes: number
 }
 
 export interface ImageListResult {
