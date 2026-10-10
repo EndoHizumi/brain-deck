@@ -143,6 +143,10 @@ func barItems(items []string, env WidgetEnv) []barItem {
 				out = append(out, barItem{kind: k, text: "マウス", ink: colText})
 			}
 		case barSync:
+			if env.Syncing {
+				out = append(out, barItem{kind: k, text: "同期中", ink: colInkOK})
+				continue
+			}
 			if env.LastSync == nil {
 				out = append(out, barItem{kind: k, text: "未同期", ink: colUnsynced})
 				continue
@@ -152,7 +156,11 @@ func barItems(items []string, env WidgetEnv) []barItem {
 			if y1, m1, d1 := t.Date(); y1 != env.Now.Year() || m1 != env.Now.Month() || d1 != env.Now.Day() {
 				s = t.Format("1/2")
 			}
-			out = append(out, barItem{kind: k, text: "同期" + s, ink: colBarDim})
+			ink := colBarDim
+			if env.SyncFailed {
+				ink = colInkWarn
+			}
+			out = append(out, barItem{kind: k, text: "同期" + s, ink: ink})
 		}
 	}
 	return out

@@ -1358,9 +1358,17 @@ func main() {
 	reads := OpenReadStore(filepath.Join(*dataDir, "reader"))
 	addAtExit(reads.FlushState) // しおり
 	reader := NewReaderService(reads)
+	syncs := NewSyncService(store)
 	widgetRT.reader = reader
 	memos.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	reader.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
+	syncs.SetNotify(func(msg string, ok bool) {
+		if ok {
+			prompt.Notify(msg, noticeInfo)
+		} else {
+			prompt.Notify(msg, noticeWarn)
+		}
+	})
 	e.SetWidgets(widgetRT)
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
@@ -1380,6 +1388,12 @@ func main() {
 		env.Link = link.State()
 		if ti := clock.Info(); ti.LastPCSet != nil {
 			env.LastSync = ti.LastPCSet
+		}
+		// brain-deck sync の結果があれば、そちらを「同期」に出す（時刻だけを合わせたときより新しければ、そちら）
+		running, last, failed := syncs.envFields()
+		env.Syncing = running
+		if last != nil && (env.LastSync == nil || !last.Before(*env.LastSync)) {
+			env.LastSync, env.SyncFailed = last, failed
 		}
 		return env
 	}
@@ -1480,6 +1494,7 @@ func main() {
 				widgetRT.SetInk(d.Ink)
 				memos.SetOnChange(d.Poke)
 				reader.SetOnChange(d.Poke)
+				syncs.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
 			}
@@ -1534,6 +1549,7 @@ func main() {
 			frame:   frame,
 			memos:   memos,
 			reads:   reads,
+			sync:    syncs,
 			reader:  reader,
 			dataDir: *dataDir,
 			started: time.Now(),

@@ -177,6 +177,10 @@ type request struct {
 	Photo   string `json:"photo,omitempty"`   // get_photo、delete_photo：写真の id
 	Memo    string `json:"memo,omitempty"`    // get_memo、delete_memo：メモの id（m1 など）
 	Read    string `json:"read,omitempty"`    // delete_read：読み物の id
+	// set_sync：同期の始めと終わり（sync.go）
+	OK      *bool      `json:"ok,omitempty"`
+	Summary string     `json:"summary,omitempty"`
+	Steps   []SyncStep `json:"steps,omitempty"`
 }
 
 type response struct {
@@ -449,6 +453,7 @@ type Controller struct {
 	photos  *PhotoStore
 	memos   *MemoService
 	reads   *ReadStore
+	sync    *SyncService
 	reader  *ReaderService
 	frame   *PhotoFrame
 	dataDir string // battery-log.csv の置き場所
@@ -486,7 +491,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
-				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read"},
+				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -534,7 +539,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
 			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "usb_state": USBState()},
-			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(),
+			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(), "sync": c.sync.Info(),
 			"rtc": c.clock.RTCInfo(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()}})
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)
@@ -623,6 +628,19 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.photo(id, req)
 	case "list_memos", "get_memo", "delete_memo":
 		return c.memo(id, req)
+	case "set_sync":
+		if c.sync == nil {
+			return errResp(id, errInternal, "sync is not available", nil)
+		}
+		switch req.State {
+		case "start":
+			c.sync.Start(req.Source)
+		case "done":
+			c.sync.Done(SyncRecord{OK: req.OK != nil && *req.OK, Summary: req.Summary, Steps: req.Steps, Source: req.Source})
+		default:
+			return errResp(id, errBadRequest, `"state" must be start or done`, nil)
+		}
+		return ok(c.sync.Info())
 	case "list_reads", "delete_read":
 		return c.readCmd(id, req)
 	case "get_battery_log":

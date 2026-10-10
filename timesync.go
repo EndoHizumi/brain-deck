@@ -73,7 +73,21 @@ type clockRecord struct {
 	PCSetAt *time.Time `json:"pc_set_at,omitempty"`
 	// LastKnown は、合っていると分かっていた最後の時刻（rtc.go。起動したときの下限と、目安）
 	LastKnown *time.Time `json:"last_known,omitempty"`
+	// RTCLog は、PC から時刻を合わせたときの、書き戻す前の内蔵 RTC と PC の時刻の差の記録（新しいものが後。rtcLogMax まで）
+	RTCLog []RTCSample `json:"rtc_log,omitempty"`
+	// RTCWrittenAt は、最後に内蔵 RTC に書いた時刻
+	RTCWrittenAt *time.Time `json:"rtc_written_at,omitempty"`
 }
+
+// RTCSample は、内蔵 RTC と PC の時刻の差を 1 回測ったもの（RTC の遅れ方の記録）。
+type RTCSample struct {
+	At       time.Time `json:"at"`               // 測った時刻（UTC）
+	OffsetMS int64     `json:"offset_ms"`        // RTC − PC（RTC は秒の単位なので、±1 秒の誤差がある）
+	SinceSec int64     `json:"since_write_sec"`  // 前に RTC に書いてからの時間（秒）。0 なら分からない
+	Source   string    `json:"source,omitempty"` // 合わせた側
+}
+
+const rtcLogMax = 30
 
 // 時刻を合わせた側のうち、PC でないもの
 const (
@@ -191,6 +205,10 @@ func (ts *TimeService) save() {
 type SetResult struct {
 	Stepped  bool  `json:"stepped"`   // システムの時刻を動かした（ずれが 0.5 秒以上だった）
 	OffsetMS int64 `json:"offset_ms"` // 合わせる前のずれ（送られた時刻 − Brain の時刻）
+	// RTC は、書き戻す前の内蔵 RTC と、送られた時刻の差（RTC を読めたときだけ）
+	RTC *RTCSample `json:"rtc,omitempty"`
+	// RTCWrite は、この時刻合わせで RTC に書き戻すか
+	RTCWrite bool `json:"rtc_write,omitempty"`
 	TimeInfo
 }
 
@@ -201,8 +219,24 @@ func (ts *TimeService) Set(t time.Time, source string) (SetResult, error) {
 	if t.Before(minSettable) || !t.Before(maxSettable) {
 		return SetResult{}, errBadTime
 	}
+	entry := time.Now()
+	var sample *RTCSample
+	ts.mu.Lock()
+	measure := ts.rtcMode != rtcOff && ts.rtcMode != "" && source != sourceBrain && source != sourceRTC
+	var since int64
+	if ts.last != nil && ts.last.RTCWrittenAt != nil {
+		since = int64(t.Sub(*ts.last.RTCWrittenAt).Seconds())
+	}
+	ts.mu.Unlock()
+	if measure {
+		// 書き戻す前の RTC を読み、PC の時刻と比べる（RTC の遅れ方の記録）
+		if r, err := readRTC(); err == nil {
+			pcAtRead := t.Add(r.ReadAt.Sub(entry))
+			sample = &RTCSample{At: t.UTC(), OffsetMS: r.Time.Sub(pcAtRead).Milliseconds(), SinceSec: max(since, 0), Source: source}
+		}
+	}
 	off := t.Sub(time.Now())
-	res := SetResult{OffsetMS: off.Milliseconds()}
+	res := SetResult{OffsetMS: off.Milliseconds(), RTC: sample}
 	if off.Abs() >= stepThreshold {
 		// 測ってから設定するまでの時間も足す
 		if err := setSystemClock(time.Now().Add(off)); err != nil {
@@ -215,6 +249,14 @@ func (ts *TimeService) Set(t time.Time, source string) (SetResult, error) {
 	ts.mu.Lock()
 	if ts.last != nil {
 		rec.PCSetAt = ts.last.PCSetAt
+		rec.RTCLog = ts.last.RTCLog
+		rec.RTCWrittenAt = ts.last.RTCWrittenAt
+	}
+	if sample != nil {
+		rec.RTCLog = append(append([]RTCSample(nil), rec.RTCLog...), *sample)
+		if len(rec.RTCLog) > rtcLogMax {
+			rec.RTCLog = rec.RTCLog[len(rec.RTCLog)-rtcLogMax:]
+		}
 	}
 	if source != sourceBrain && source != sourceRTC {
 		rec.PCSetAt = &now
@@ -222,6 +264,7 @@ func (ts *TimeService) Set(t time.Time, source string) (SetResult, error) {
 	ts.last = rec
 	onChange := ts.onChange
 	write := ts.rtcMode == rtcWrite && source != sourceRTC
+	res.RTCWrite = write
 	ts.mu.Unlock()
 	if write {
 		go ts.writeBack()
@@ -306,8 +349,17 @@ func (ts *TimeService) writeBack() {
 		ts.rtcWrite = "failed: " + err.Error()
 	} else {
 		ts.rtcWrite = "ok"
+		if ts.last != nil {
+			r := *ts.last
+			u := now.UTC()
+			r.RTCWrittenAt = &u
+			ts.last = &r
+		}
 	}
 	ts.mu.Unlock()
+	if err == nil {
+		ts.save()
+	}
 	if err != nil {
 		log.Printf("time: rtc: write: %v", err)
 	} else {
@@ -328,12 +380,20 @@ type RTCInfo struct {
 	Boot      string     `json:"boot,omitempty"`        // 起動したときにどうしたか
 	LastWrite string     `json:"last_write,omitempty"`  // 最後に書いた結果
 	WrittenAt *time.Time `json:"written_at,omitempty"`
+	// Log は、PC から時刻を合わせたときの、書き戻す前の RTC と PC の差の記録（新しいものが後）
+	Log []RTCSample `json:"log,omitempty"`
 }
 
 // RTCInfo は、RTC を読み、今の状態を返す。
 func (ts *TimeService) RTCInfo() RTCInfo {
 	ts.mu.Lock()
 	in := RTCInfo{Mode: ts.rtcMode, Boot: ts.rtcBoot, LastWrite: ts.rtcWrite, WrittenAt: ts.rtcWAt}
+	if ts.last != nil {
+		in.Log = append([]RTCSample(nil), ts.last.RTCLog...)
+		if in.WrittenAt == nil {
+			in.WrittenAt = ts.last.RTCWrittenAt
+		}
+	}
 	ts.mu.Unlock()
 	if in.Mode == "" {
 		in.Mode = rtcRead

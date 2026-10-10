@@ -114,6 +114,8 @@ type WidgetEnv struct {
 	LastSync     *time.Time             // 状態の帯：最後に PC から時刻を合わせた時刻。nil なら一度もない
 	Memo         *MemoView              // memo：今のページ（写し）。nil ならメモがない
 	Reader       *ReaderView            // reader：読み物のアプリの状態（写し）
+	Syncing      bool                   // 状態の帯：PC の brain-deck sync が同期している
+	SyncFailed   bool                   // 状態の帯：最後の同期に失敗したものがあった
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
