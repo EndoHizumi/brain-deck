@@ -11,7 +11,7 @@ import {
   CLOCK_FIELDS, GRAPH_FIELDS, GRAPH_NUM_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MEDIA_LABELS, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
   PAD_NUM_FIELDS, TERM_LABELS, USB_LABELS, WIDGET_FIELDS, ACTION_FIELDS, WIDGET_LABELS, ownsTouch, hasStateId,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
-  isIncomplete, gridSize, layerGrid, layerTitle, normalizeConfig, barShown, ROTATE_LABELS, ROTATE_VALUES, type Orient, parsePath, references, renameLayer, resolveCell, resolveGrid,
+  isIncomplete, gridSize, layerGrid, layerTitle, normalizeConfig, barShown, ROTATE_LABELS, ROTATE_VALUES, INPUT_LABELS, type Orient, parsePath, references, renameLayer, resolveCell, resolveGrid,
   resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
   type Location, type ResolvedAction,
 } from './model'
@@ -40,7 +40,7 @@ import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './por
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode,
+  BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode, InputKind,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -176,7 +176,8 @@ export class App {
   widgetsState: WidgetsState = {}
   calcState: Record<string, CalcState> = {} // 電卓の状態（Brain の get_widgets。接続したときに読む）
   brainBattery: BatteryInfo | null = null
-  brainUSB: string | null = null // Brain の UDC の state（get_status の hid.usb_state）。状態の帯のプレビューに出す
+  brainUSB: string | null = null // Brain の PC とのつながり（get_status の link.state か hid.usb_state）。状態の帯のプレビューに出す
+  previewOffline = false // プレビューを、PC から外したときの画面にする
   brainLastSync: Date | null = null // Brain で最後に時刻を合わせた時刻（get_status の time.last_set）
   // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
   section: 'config' | 'todo' | 'console' = 'config'
@@ -475,10 +476,12 @@ export class App {
       this.sel = null
     }
     const st = await c.request<{ status: EngineStatus; hid?: { mouse: boolean; usb_state?: string }; terminal?: TermInfo; battery?: BatteryInfo | null;
-      time?: { last_set?: string } }>('get_status')
+      time?: { last_set?: string; last_pc_set?: string }; link?: { state: string } }>('get_status')
     this.brainStatus = st.status
-    this.brainUSB = st.hid?.usb_state ?? null
-    this.brainLastSync = st.time?.last_set ? new Date(st.time.last_set) : null
+    this.brainUSB = st.link?.state ?? st.hid?.usb_state ?? null
+    // 状態の帯の「同期」は、PC から合わせた時刻（新しいデーモンは last_pc_set。RTC や Brain のキーボードで合わせたときは変わらない）
+    const synced = st.link ? st.time?.last_pc_set : st.time?.last_set
+    this.brainLastSync = synced ? new Date(synced) : null
     if (typeof st.status?.portrait === 'boolean') this.orient = st.status.portrait ? 'portrait' : 'landscape' // Brain の今の向きで始める
     this.brainMouse = st.hid ? st.hid.mouse : null
     this.brainTerm = st.terminal ?? null
@@ -1086,6 +1089,18 @@ export class App {
     this.changed()
   }
 
+  // setOfflineHome は offline.home を変える（書かなければ false。offline に何もなければ offline ごと消す）。
+  setOfflineHome(on: boolean): void {
+    const c = this.cfg
+    if (!c) return
+    if (on) c.offline = { ...c.offline, home: true }
+    else if (c.offline) {
+      delete c.offline.home
+      if (Object.keys(c.offline).length === 0) delete c.offline
+    }
+    this.changed()
+  }
+
   patchApp(i: number, p: Partial<HomeApp>): void {
     const a = this.cfg?.home?.apps[i]
     if (!a) return
@@ -1240,6 +1255,9 @@ export class App {
       case 'rotate':
         a = { rotate: cur?.rotate ?? 'next' }
         break
+      case 'input':
+        a = { input: cur?.input ?? 'todo' }
+        break
       case 'key':
         a = { key: cur && actionKind(cur) === 'key' ? cur.key : '' }
         break
@@ -1267,6 +1285,7 @@ export class App {
     else if (kind === 'usb_mode') a.usb_mode = cur.usb_mode ?? 'toggle'
     else if (kind === 'terminal') a.terminal = cur.terminal ?? 'toggle'
     else if (kind === 'rotate') a.rotate = cur.rotate ?? 'next'
+    else if (kind === 'input') a.input = cur.input ?? 'todo'
     else if (LAYER_KINDS.includes(kind as LayerKind)) {
       const others = this.cfg!.layers.filter((_, i) => i !== this.layer && !(kind === 'layer_toggle' && i === 0))
       a[kind as LayerKind] = actionTarget(cur) || others[0]?.name || ''
@@ -2289,7 +2308,10 @@ export class App {
       canRotate && typeof brainPortrait === 'boolean' && brainPortrait !== (this.orient === 'portrait')
         ? h('button', { class: 'small', id: 'rotate-brain', onclick: () => void this.rotateBrain(this.orient === 'portrait' ? '90' : '0'),
           title: '保存した設定のまま、Brain の画面の向きだけを変えます（rotate の割り当てと同じ）' }, 'Brain もこの向きにする')
-        : null)
+        : null,
+      h('button', { class: ['small', this.previewOffline && 'active'], id: 'preview-offline', 'aria-pressed': this.previewOffline ? 'true' : 'false',
+        title: 'PC から外したときの画面（PC に送るセルは「PCなし」と薄く出て、押しても送りません）をプレビューします',
+        onclick: () => { this.previewOffline = !this.previewOffline; this.render() } }, '外したとき'))
   }
 
   // rotateBrain は、Brain の画面の向きを変える（set_rotate）。
@@ -2434,6 +2456,10 @@ export class App {
       errs('soft_key'),
       h('label', { class: 'row' }, h('input', { type: 'checkbox', id: 'home-bar', checked: hc.status_bar !== false,
         onchange: (e: Event) => this.patchHome({ status_bar: (e.target as HTMLInputElement).checked ? undefined : false }) }), ' 状態の帯を出す'),
+      h('label', { class: 'row', title: 'USB を抜いた、PC の電源が切れたなど、PC とつながらなくなったら、ホーム画面に切り替えます（offline.home）。' +
+        'つなぎ直したら、ホーム画面のまま触っていなければ、前の画面に戻ります' },
+        h('input', { type: 'checkbox', id: 'offline-home', checked: !!this.cfg?.offline?.home,
+          onchange: (e: Event) => this.setOfflineHome((e.target as HTMLInputElement).checked) }), ' PC から外れたらホーム画面に切り替える'),
       this.viewBgEditor({ kind: 'homewall' }),
       h('h3', null, `アプリ（${hc.apps.length} 個）`),
       h('ol', { class: 'apps' }, hc.apps.map((a, i) => h('li', { class: [this.homeSel === i && 'selected'], dataset: { app: String(i) } },
@@ -2627,7 +2653,7 @@ export class App {
     const now = new Date()
     const home = this.homeView && this.cfg.home ? this.homePage : undefined
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now, home,
-      link: this.connected ? this.brainUSB ?? 'configured' : 'configured', lastSync: this.brainLastSync,
+      link: this.previewOffline ? 'not attached' : this.connected ? this.brainUSB ?? 'configured' : 'configured', lastSync: this.brainLastSync,
       texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img,
       mouseOff: this.brainMouse === false, widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery,
       weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph, calc: this.calcState })
@@ -2731,6 +2757,7 @@ export class App {
     if (own && act === 'usb_mode') body.push(...this.viewUsbModeEditor(own))
     if (own && act === 'terminal') body.push(...this.viewTermEditor(own))
     if (own && act === 'rotate') body.push(...this.viewRotateEditor(own))
+    if (own && act === 'input') body.push(...this.viewInputEditor(own))
     if (own && LAYER_KINDS.includes(act as LayerKind)) {
       const lk = act as LayerKind
       body.push(h('label', { class: 'row' }, '行き先 ', h('select', { 'data-focus': 'target', id: 'target',
@@ -3232,6 +3259,19 @@ export class App {
         ROTATE_VALUES.map((v) => h('option', { value: v, selected: own.rotate === v }, `${desc[v]}：${ROTATE_LABELS[v]}`)))),
       h('p', { class: 'hint' }, 'Brain の画面の向きを変えます。変えた向きは Brain に残り、再起動しても続きます。縦向きでは、レイヤーの縦向きの格子を使います' +
         '（プレビューの「縦向き」で確かめられます）。画面右の帯のソフトキーは、ベゼルに印刷されているので、向きによらず同じ区画です。'),
+    ]
+  }
+
+  // viewInputEditor は、Brain のキーボードで文字を入れる欄を開く割り当ての欄。
+  private viewInputEditor(own: ActionSpec): HTMLElement[] {
+    return [
+      h('label', { class: 'row' }, '入れるもの ', h('select', { 'data-focus': 'input', id: 'input',
+        onchange: (e: Event) => this.patchAction({ input: (e.target as HTMLSelectElement).value as InputKind }) },
+        ([['todo', 'Todo を足す（todo）'], ['clock', '時刻を合わせる（clock）']] as const)
+          .map(([v, t]) => h('option', { value: v, selected: own.input === v }, `${t}：${INPUT_LABELS[v]}`)))),
+      h('p', { class: 'hint' }, '押すと画面の下に入力欄が開き、Brain のキーボードで打ちます（英数字と記号。日本語は入れられません）。' +
+        '決定で確かめ、戻るでやめます。開いているあいだ、本体キーは PC に送りません。PC から外しているときにも使えます。' +
+        '時刻は「2026-10-10 09:41」の形で打ちます。'),
     ]
   }
 

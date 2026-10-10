@@ -39,7 +39,7 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
 
   // fixtures は README の「開発」の -render-png（-render-rotate、-render-home-page、-render-link、-render-last-sync）で書き出したもの
   const cases: { file: string; c?: typeof cfg; layer?: string; home?: number; portrait?: boolean; battery?: any; link?: string; lastSync?: string;
-    mouseOff?: boolean; widgets?: string; calendar?: string; pressed?: string[]; pressStyle?: PressStyle; images?: boolean }[] = [
+    mouseOff?: boolean; widgets?: string; calendar?: string; pressed?: string[]; pressStyle?: PressStyle; images?: boolean; texts?: string; todo?: string }[] = [
     { file: 'pda-home.png', home: 0, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'pda-home-p2-portrait.png', home: 1, portrait: true, battery: { percent: 12, plugged: false, charging: false }, link: 'suspended', mouseOff: true },
     { file: 'pda-tools.png', layer: 'tools', battery: { percent: 50, plugged: true, charging: true }, link: 'not attached', widgets: 'widgets-state.json' },
@@ -50,6 +50,10 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
     { file: 'home-images.png', c: hcfg, home: 0, images: true },
     { file: 'home-images-portrait.png', c: hcfg, home: 0, portrait: true, images: true },
     { file: 'home-images-stretch.png', c: hcfg, layer: 'info', portrait: true, images: true },
+    // フェーズ P2：PC から外したとき（-render-link が configured と suspended のほか）。PC に送るセルは「PCなし」と薄く、タイルの隅に札
+    { file: 'pda-base-offline.png', layer: 'base', link: 'not attached' },
+    { file: 'pda-todo-offline.png', layer: 'todo', link: 'power', battery: { percent: 64, plugged: false, charging: false }, texts: 'texts.json', todo: 'todo.json' },
+    { file: 'pda-mouse-offline-portrait.png', layer: 'mouse', portrait: true, link: 'not attached', pressed: ['3,0'] },
   ]
   for (const t of cases) {
     it(`lefthand -render-png と画素単位で同じ（${t.file}）`, () => {
@@ -62,6 +66,7 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
       const { pixels } = renderPreview(font, { cfg: c, stack, mode, w, h, now, home: t.home, battery: t.battery ?? null, link: t.link,
         lastSync: t.lastSync ? new Date(t.lastSync) : null, mouseOff: t.mouseOff, widgets: t.widgets ? fx(t.widgets) : undefined,
         calendar: t.calendar ? fx(t.calendar) : null, pressed: new Set(t.pressed), pressStyle: t.pressStyle,
+        texts: t.texts ? fx(t.texts).texts : undefined, todo: t.todo ? fx(t.todo) : undefined,
         images: t.images ? (id) => images.get(id) : undefined })
       expect(want.w).toBe(w)
       const got = to565(pixels)
@@ -91,6 +96,7 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
     c.layers.push({ name: 'hold', keys: { KEY_A: { key: 'B' } } })
     expect(barShown(c, [0, c.layers.length - 1])).toBe(false) // 格子のないレイヤーは下のとおり
     expect(barItems(['pc', 'mouse', 'time'], { now, synced: false, battery: null, link: 'suspended', mouseOff: true, lastSync: null }).map((i) => i.text)).toEqual(['PC休止', '09:41'])
+    expect(barItems(['pc'], { now, synced: true, battery: null, link: 'power', mouseOff: true, lastSync: null }).map((i) => i.text)).toEqual(['給電のみ'])
   })
 
   it('ホーム画面の配置とページ（home.go と同じ）', () => {

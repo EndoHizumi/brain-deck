@@ -5,7 +5,7 @@ import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
 import { BAR_BATT_H, BAR_BATT_TO, BAR_BATT_W, BAR_GAP, BAR_H, BAR_ITEMS_DEFAULT, BAR_PAD, BAR_SCALE, BAR_TEXT_Y, barItems, colBar, colBarRule, type BarEnv, type BarItemView } from './statusbar'
 import { HOME_ARROW, HOME_ICON_BASE, HOME_IMAGE_ICON, HOME_LABEL, HOME_NAME_GAP, HOME_SLOT_PAD, ICON_PALETTE, ICON_ROWS, homeGeometry, homeIconFit, homeName } from './home'
-import { LAYER_VERB, ROTATE_LABELS, barShown, MEDIA_LABELS, MEDIA_OFF_LABEL, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
+import { LAYER_VERB, ROTATE_LABELS, INPUT_LABELS, OFFLINE_LABEL, linkOnline, needsPC, barShown, MEDIA_LABELS, MEDIA_OFF_LABEL, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calCaption, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
@@ -106,6 +106,7 @@ export interface CellView {
   background?: string // セルの背景画像の id
   gadget?: Gadget // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ
   media?: boolean // メディアキーのセル。USB にマウスがない（ブートキーボードの形）ときは、無効と描く
+  needsPC?: boolean // PC に送るセルか、PC から受け取るタイル。PC から外れているあいだは、休みと描く（offline.go）
 }
 
 // Gadget は、新しいウィジェットの描き方に要る設定（gadgetwidget.go）。
@@ -141,7 +142,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
   const k = actionKind(a)
   let label = a.label ?? ''
   if (a.widget) {
-    const v: CellView = { mapped: true, layer: isLayerAction(a), label, sub: '', widget: a.widget }
+    const v: CellView = { mapped: true, layer: isLayerAction(a), label, sub: '', widget: a.widget, needsPC: needsPC(a) }
     if (a.widget === 'clock') v.clock = clockDef(a)
     if (a.widget === 'text') v.textId = a.id ?? ''
     if (a.widget === 'todo') v.todoRows = typeof a.rows === 'number' ? a.rows : 0
@@ -157,7 +158,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     }
     return v
   }
-  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'media' && k !== 'usb_mode' && k !== 'terminal' && k !== 'rotate') {
+  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'media' && k !== 'usb_mode' && k !== 'terminal' && k !== 'rotate' && k !== 'input') {
     const t = actionTarget(a)
     const dest = cfg.layers.find((l) => l.name === t)
     const destTitle = dest ? layerTitle(dest) : (t ?? '')
@@ -168,9 +169,10 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
   }
   const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : k === 'media' ? (MEDIA_LABELS[a.media!] ?? '')
     : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '') : k === 'terminal' ? (TERM_LABELS[a.terminal!] ?? '')
-    : k === 'rotate' ? (ROTATE_LABELS[a.rotate!] ?? '') : prettyCombo(a.key ?? '')
+    : k === 'rotate' ? (ROTATE_LABELS[a.rotate!] ?? '') : k === 'input' ? (INPUT_LABELS[a.input!] ?? '') : prettyCombo(a.key ?? '')
   const v: CellView = label === '' || label === keys ? { mapped: true, layer: false, label: keys, sub: '' } : { mapped: true, layer: false, label, sub: keys }
   if (k === 'media') v.media = true
+  if (k !== 'none' && needsPC(a)) v.needsPC = true
   return v
 }
 
@@ -339,7 +341,7 @@ export interface PreviewParams {
   calc?: Record<string, CalcState> // 電卓の状態（Brain の get_widgets の calculator）
   calcPressed?: number // 電卓で押しているボタン（行 × 6 + 列。-render-calc-pressed）
   home?: number // ホーム画面を、このページ（0 から）で描く（stack は使わない）
-  link?: string // 状態の帯の PC とのつながり（UDC の state。-render-link）。省略すると configured
+  link?: string // PC とのつながり（UDC の state か power。-render-link）。省略すると configured。configured と suspended のほかでは、PC に送るセルを休みと描く
   lastSync?: Date | null // 状態の帯の、最後に同期した時刻（-render-last-sync）
 }
 
@@ -361,6 +363,7 @@ export interface WidgetEnv {
   graph: Record<string, GraphSeries>
   calc: Record<string, CalcState>
   calcPressed: number
+  offline: boolean // PC から外れている（needsPC のセルを休みと描く）
 }
 
 export interface PreviewLayout {
@@ -393,7 +396,8 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
     todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage,
     month: { offset: Math.max(Math.min(p.monthOffset ?? 0, MONTH_MAX_OFFSET), -MONTH_MAX_OFFSET), sel: p.monthSelect ?? '' }, mouseOff: p.mouseOff ?? false,
     widgets: p.widgets ?? {}, qr: p.qr ?? {}, battery: p.battery ?? null, weather: p.weather ?? null,
-    weatherIcons: p.weatherIcons ?? (() => undefined), graph: p.graph ?? {}, calc: p.calc ?? {}, calcPressed: p.calcPressed ?? -1 }
+    weatherIcons: p.weatherIcons ?? (() => undefined), graph: p.graph ?? {}, calc: p.calc ?? {}, calcPressed: p.calcPressed ?? -1,
+    offline: !linkOnline(p.link ?? 'configured') }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -468,7 +472,11 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
     px.frame(box, pressEdgeW, colPressEdge)
     px.frame(inset(box, pressEdgeW), pressGlowW, colPressed)
   }
-  if (v.media && env.mouseOff) {
+  if (!v.widget && v.needsPC && env.offline) {
+    // PC から外れている：押しても送らないことを、下の小さな文字と薄い文字で知らせる（display.go の drawCell と同じ）
+    v = { ...v, sub: OFFLINE_LABEL }
+    if (!(pressed && pressFill)) textC = subC
+  } else if (v.media && env.mouseOff) {
     // メディアキーを送れない形（ブートキーボード）。display.go の drawCell と同じ
     v = { ...v, sub: MEDIA_OFF_LABEL }
     if (!(pressed && pressFill)) textC = subC
@@ -478,9 +486,19 @@ function drawCell(font: BitmapFont, px: Pixels, cell: Rect, v: CellView, mode: M
   try {
     if (v.widget === 'trackpad') drawPad(font, px, cell, box, inner, v, env, subC)
     else drawCellContent(font, px, inner, v, env, textC, subC)
+    if (v.widget && v.needsPC && env.offline) drawOfflineTag(font, px, inner)
   } finally {
     px.halo = false
   }
+}
+
+// drawOfflineTag は、タイルの右下の隅に「PCなし」の札を描く（offline.go の drawOfflineTag と同じ）。
+function drawOfflineTag(font: BitmapFont, px: Pixels, inner: Rect): void {
+  const w = font.textWidth(OFFLINE_LABEL) + 4
+  const h = FONT_H + 2
+  const r = { x0: Math.max(inner.x1 - w, inner.x0), y0: Math.max(inner.y1 - h, inner.y0), x1: inner.x1, y1: inner.y1 }
+  px.fill(r, colBG)
+  px.text(font, r.x0 + 2, r.y0 + 1, OFFLINE_LABEL, 1, colUnsynced, r)
 }
 
 // drawPad は trackpad.go の drawPad と同じ。見出しと、右端のスクロールの帯（タッチの判定と同じく、セルの右端から scroll_width ドット）。

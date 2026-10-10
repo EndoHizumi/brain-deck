@@ -522,7 +522,9 @@ export function validate(cfg: Config): Problem[] {
       }
     } else if (k === 'rotate') {
       if (!['next', '0', '90', '180', '270'].includes(a.rotate!)) out.push({ path, message: `${where}: rotate must be next, 0, 90, 180 or 270` })
-    } else if (k !== 'none' && k !== 'widget' && k !== 'mouse' && k !== 'usb_mode' && k !== 'terminal') {
+    } else if (k === 'input') {
+      if (!['todo', 'clock'].includes(a.input!)) out.push({ path, message: `${where}: input must be todo or clock` })
+    } else if (k !== 'none' && k !== 'widget' && k !== 'mouse' && k !== 'usb_mode' && k !== 'terminal' && k !== 'media') {
       const t = actionTarget(a)!
       if (!names.has(t)) out.push({ path, message: `${where}: ${k} refers to unknown layer "${t}"` })
       else if (k === 'layer_toggle' && t === cfg.layers[0].name)

@@ -1084,4 +1084,37 @@ describe('ホーム画面、状態の帯、縦向きの格子、画面の向き'
     t.click('#portrait-remove')
     expect(t.app.cfg!.layers[0].touch_portrait).toBeUndefined()
   })
+
+  it('input（Brain のキーボードで入れる）を割り当てられる。PC から外れたらホーム画面に切り替える設定と、外したときのプレビュー', async () => {
+    const t = await connected()
+    t.click('[data-cell="0,0"]')
+    t.change('#kind', 'input')
+    expect(t.app.ownAction()).toMatchObject({ input: 'todo' })
+    t.change('#input', 'clock')
+    expect(t.app.ownAction()!.input).toBe('clock')
+    // プレビューを、外したときの画面にする（設定は変えない）
+    expect(t.$('#preview-offline').getAttribute('aria-pressed')).toBe('false')
+    t.click('#preview-offline')
+    expect(t.app.previewOffline).toBe(true)
+    expect(t.$('#preview-offline').getAttribute('aria-pressed')).toBe('true')
+    t.click('#preview-offline')
+    expect(t.app.previewOffline).toBe(false)
+    // offline.home はホームのタブで
+    t.click('#home-add')
+    const cb = t.$<HTMLInputElement>('#offline-home')
+    expect(cb.checked).toBe(false)
+    cb.checked = true
+    cb.dispatchEvent(new Event('change'))
+    expect(t.app.cfg!.offline).toEqual({ home: true })
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.click('#save')
+    t.click('#confirm-save')
+    await vi.waitFor(() => expect(t.app.dirty).toBe(false))
+    expect(t.daemon.config.offline).toEqual({ home: true })
+    expect(t.daemon.config.layers[0].touch!.cells!['0,0']).toMatchObject({ input: 'clock' })
+    const cb2 = t.$<HTMLInputElement>('#offline-home')
+    cb2.checked = false
+    cb2.dispatchEvent(new Event('change'))
+    expect(t.app.cfg!.offline).toBeUndefined()
+  })
 })

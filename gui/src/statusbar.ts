@@ -27,7 +27,7 @@ export interface BarEnv {
   now: Date
   synced: boolean
   battery: BatteryInfo | null
-  link: string // UDC の state（configured、suspended など）。空なら出さない
+  link: string // UDC の state（configured、suspended など）か power（電源だけ。link.go）。空なら出さない
   mouseOff: boolean
   lastSync: Date | null
 }
@@ -46,6 +46,7 @@ export function linkText(state: string): [string, RGB] {
   if (state === '') return ['', colText]
   if (state === 'configured') return ['PC', colOK]
   if (state === 'suspended') return ['PC休止', colBarDim]
+  if (state === 'power') return ['給電のみ', colUnsynced]
   return ['PCなし', colUnsynced]
 }
 

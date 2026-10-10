@@ -12,6 +12,7 @@ export interface ActionSpec {
   usb_mode?: UsbMode // USB の形の切り替え（USB を付け直すので 2〜3 秒切れる）
   terminal?: TermMode // 端末モード（Brain の画面とキーボードで PC にログインする）の切り替え
   rotate?: string // 画面の向き（next で 90 度ずつ、0、90、180、270。rotate.go）
+  input?: InputKind // Brain のキーボードで文字を入れる欄を開く（todo で Todo を足す、clock で時刻を合わせる。prompt.go）
   label?: string
   span?: [number, number] // セルの大きさ [列数, 行数]。タッチのセルだけ
   background?: string // セルの背景画像の id（Brain の /var/lib/lefthand/images/<id>.565）。タッチのセルだけ
@@ -185,6 +186,21 @@ export interface Config {
   backlight?: BacklightConfig
   home?: HomeConfig // ホーム画面（home.go）
   status_bar?: StatusBarConfig // 状態の帯（statusbar.go）
+  offline?: { home?: boolean } // PC から外したときの動き（offline.go）
+  battery?: BatteryConfig // 電池が少ないときの知らせと電源断、記録（batteryguard.go）
+  clock?: { rtc?: 'read' | 'write' | 'off' } // 内蔵 RTC の使い方（rtc.go）
+}
+
+// InputKind は input の欄の種類。
+export type InputKind = 'todo' | 'clock'
+
+// BatteryConfig は設定の battery。
+export interface BatteryConfig {
+  warn?: number
+  critical?: number
+  poweroff?: number
+  log?: boolean
+  curve?: [number, number][]
 }
 
 // HomeApp はホーム画面のアプリ 1 つ。
@@ -224,6 +240,7 @@ export interface BacklightConfig {
   dim_level?: number
   wake_on_key?: boolean
   in_terminal?: boolean
+  offline?: { dim_after?: string; off_after?: string; level?: number; dim_level?: number } // PC から外しているあいだ
 }
 
 // ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（get_widgets、widgets の通知。gadgets.go）
