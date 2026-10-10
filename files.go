@@ -442,7 +442,14 @@ func (s *FilesService) UploadKind(dir string) UploadKind {
 			if err != nil {
 				return err
 			}
-			free, size, _ := imageFreeSpace(dir)
+			// 一時ファイルの置き場所は、初めて足すときにはまだない。空きは置き先の SD カードで数える
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+			free, size, err := imageFreeSpace(dir)
+			if err != nil {
+				return err
+			}
 			if free-b.Bytes < reserveFor(size) {
 				return imageErr(errImageNoSpace, "the SD card has %s free; saving %s would leave less than %s", kib(free), kib(b.Bytes), kib(reserveFor(size)))
 			}

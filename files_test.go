@@ -287,3 +287,20 @@ func TestFilesAddTo(t *testing.T) {
 		t.Errorf("reads %+v added %d", l, added)
 	}
 }
+
+// 一時ファイルの置き場所がまだなくても、空きを正しく数える（実機で 0 と読んでいた）
+func TestFilesPutNewTmpDir(t *testing.T) {
+	s, home, _ := filesTestService(t)
+	u := NewUploads()
+	u.Register("file", s.UploadKind(filepath.Join(t.TempDir(), "not-yet", "tmp")))
+	b := []byte("x")
+	h := sha256.Sum256(b)
+	st, err := u.Begin(UploadBegin{Kind: "file", SHA256: hex.EncodeToString(h[:]), Bytes: 1, Name: "x.txt", Path: home, Source: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Chunk(st.Upload, 0, b)
+	if _, err := u.End(st.Upload); err != nil {
+		t.Fatal(err)
+	}
+}
