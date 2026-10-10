@@ -1183,6 +1183,10 @@ func (c *Controller) updateErr(id json.RawMessage, err error) response {
 		code = errNoSpace
 	case errors.Is(err, errImageQuota):
 		code = errQuota
+	case errors.Is(err, errFilesDenied), errors.Is(err, errFilesOutside):
+		code = errDenied
+	case errors.Is(err, errFilesMissing):
+		code = errNotFound
 	}
 	msg := err.Error()
 	for _, e := range []error{errUpdateCheck, errUpdateBusy, errUpdateGone, errUpdateBad, errNoService} {
