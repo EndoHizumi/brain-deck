@@ -1,0 +1,14 @@
+# ~/.config/systemd/user/brain-deck-graph.timer
+# 有効にする：systemctl --user enable --now brain-deck-graph.timer
+[Unit]
+Description=30 秒ごとに Brain のグラフに値を送る
+
+[Timer]
+# 起動して 30 秒後から、前の回が終わってから 30 秒ごと。AccuracySec を短くしないと、systemd は 1 分の幅でまとめて起動する。
+# Brain は id ごとに新しい 120 個を覚えるので、30 秒ごとなら 1 時間ぶん。SD カードには 5 分に 1 回だけ書く
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

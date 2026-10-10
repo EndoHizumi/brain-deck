@@ -14,6 +14,8 @@ if (new URLSearchParams(location.search).has('demo')) {
     for (const text of ['牛乳を買う', 'PR #42 のレビュー', '歯医者の予約']) daemon.todoCmd({ cmd: 'todo_add', text, source: 'brain-deck' })
     // カレンダーを試すための予定（brain-deck calendar sync で送るものと同じ形）
     daemon.calendar = demo.demoCalendar()
+    // グラフを試すための値（brain-deck graph cpu 12.5 などで足すもの）
+    daemon.graph = demo.demoGraph()
     // ポートの一覧では、開いているタブに合わせて、設定用かコンソール用を選んだことにする
     const { serial, consolePort } = demo.fakeSerial(() => (app.section === 'console' ? 'console' : 'settings'))
     const app: App = new App(root, {

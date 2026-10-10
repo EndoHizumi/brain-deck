@@ -198,6 +198,29 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // グラフのウィジェット。config/graph-example.yaml の「グラフ」レイヤー、値は fixtures/graph*.json（-render-graph）
+  // TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/graph.png -render-layer graph -render-time 2026-10-06T09:41:27+09:00 -render-graph gui/test/fixtures/graph.json config/graph-example.yaml
+  // （graph-few は graph-few.json、graph-pressed-fill は -render-pressed 3,1 -render-press-style fill）
+  const graphCfg = parseConfigText(repoFile('config/graph-example.yaml').toString('utf8'))
+  const graphLayer = graphCfg.layers.findIndex((l) => l.name === 'graph')
+  const graphCases: { file: string; data: string; pressed?: string[]; pressStyle?: PressStyle }[] = [
+    { file: 'graph.png', data: 'graph.json' },
+    { file: 'graph-few.png', data: 'graph-few.json' },
+    { file: 'graph-pressed-fill.png', data: 'graph.json', pressed: ['3,1'], pressStyle: 'fill' },
+  ]
+  for (const c of graphCases) {
+    it(`グラフも lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const graph = JSON.parse(repoFile(`gui/test/fixtures/${c.data}`).toString('utf8')).series
+      const { pixels } = renderPreview(font, { cfg: graphCfg, stack: [0, graphLayer], mode: 'latched', now, graph,
+        pressed: new Set(c.pressed), pressStyle: c.pressStyle })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   // 天気のウィジェット。config/weather-example.yaml の「天気」「天気(小)」レイヤー、予報は fixtures/weather*.json（-render-weather）、
   // アイコンは fixtures/weather-icons（-render-weather-icons。テスト用に描いた円と帯で、気象庁のアイコンではない）
   const wcfg2 = parseConfigText(repoFile('config/weather-example.yaml').toString('utf8'))

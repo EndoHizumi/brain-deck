@@ -1,0 +1,11 @@
+# ~/.config/systemd/user/brain-deck-graph.service
+# brain-deck-graph.timer から 30 秒ごとに起動され、PC の CPU、メモリ、温度、負荷を Brain のグラフのセルに送る。
+# linux-stats.sh は ~/.local/bin に写しておく（cp contrib/graph/linux-stats.sh ~/.local/bin/brain-deck-linux-stats）
+[Unit]
+Description=Brain のグラフに PC の CPU、メモリ、温度を送る
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/brain-deck-linux-stats
+# 送る値はどれも小さいので、ほかの処理を邪魔しないよう優先度を下げる
+Nice=10

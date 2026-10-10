@@ -8,7 +8,7 @@ import {
 } from './keys'
 import defaultKeymap from './keymap-pwsh2.json'
 import {
-  CLOCK_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MEDIA_LABELS, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
+  CLOCK_FIELDS, GRAPH_FIELDS, GRAPH_NUM_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MEDIA_LABELS, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
   PAD_NUM_FIELDS, TERM_LABELS, USB_LABELS, WIDGET_FIELDS, ACTION_FIELDS, WIDGET_LABELS, ownsTouch, hasStateId,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
   isIncomplete, gridSize, layerTitle, normalizeConfig, parsePath, references, renameLayer, resolveCell, resolveGrid,
@@ -26,6 +26,7 @@ import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
 import { DEFAULT_MONTH_ID, MONTH_MIN_SPAN } from './monthwidget'
 import { parseIcon, type Icon } from './weatherwidget'
+import { DEFAULT_GRAPH_POINTS, GRAPH_MAX_POINTS, formatGraph, graphDecimals } from './graphwidget'
 import {
   DEFAULT_PRESENCE, QR_MAX_BYTES, parseColor, pomoDurations, pomoText, pomodoroView, presenceStates, stateId, stopwatchElapsed, stopwatchText,
 } from './gadgetwidget'
@@ -34,7 +35,7 @@ import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './ports'
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
-  ActionSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetTextResult, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
+  ActionSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
@@ -168,6 +169,8 @@ export class App {
   // 天気予報とアイコン（Brain のデータ。接続したときに読む。brain-deck weather sync が送る）
   weather: WeatherData | null = null
   weatherIcons = new Map<string, Icon>()
+  // グラフの値（Brain のデータ。接続したときに読む。brain-deck graph が足す）
+  graph: Record<string, GraphSeries> = {}
   todoBusy = false
   todoNew = '' // 追加の欄に書きかけの文
   private todoDrafts: Record<string, string> = {} // 書き換えている途中の項目の文（通知で描き直しても消えない）
@@ -383,6 +386,7 @@ export class App {
       this.calendar = null
       this.weather = null
       this.weatherIcons.clear()
+      this.graph = {}
       this.brainImages = null
       if (reason !== 'closed by user') this.say(`Brain との接続が切れました（${reason}）。編集中の内容は残っています`, 'error')
       this.validation = 'offline'
@@ -427,6 +431,7 @@ export class App {
     this.calendar = null
     this.weather = null
     this.weatherIcons.clear()
+    this.graph = {}
     this.brainImages = null
     await c?.close()
     this.validation = 'offline'
@@ -459,6 +464,7 @@ export class App {
     await this.loadTodo()
     this.calendar = this.hello?.commands?.includes('get_calendar') ? await c.request<CalendarData>('get_calendar') : null
     this.weather = this.hello?.commands?.includes('get_weather') ? await c.request<WeatherData>('get_weather') : null
+    this.graph = this.hello?.commands?.includes('get_graph') ? (await c.request<GetGraphResult>('get_graph')).series ?? {} : {}
     this.render()
     this.scheduleValidate(0)
     void this.loadImages()
@@ -1075,7 +1081,9 @@ export class App {
     if (!cur) return
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
-    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale', 'work', 'break', 'follow'] as const) if (a[f] === '') delete a[f]
+    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale', 'work', 'break', 'follow', 'unit'] as const) if (a[f] === '') delete a[f]
+    for (const f of GRAPH_NUM_FIELDS) if (a[f] === undefined || !Number.isFinite(a[f])) delete a[f]
+    if (!a.chart) delete a.chart
     if (!a.week_start) delete a.week_start
     if (a.states && !a.states.length) delete a.states
     for (const f of PAD_NUM_FIELDS) if (a[f] === undefined || !Number.isFinite(a[f])) delete a[f]
@@ -1095,6 +1103,8 @@ export class App {
     if (!hasStateId(w) || (hasStateId(cur.widget) && (cur.widget === 'text') !== (w === 'text')) || (cur.widget === 'month') !== (w === 'month')) delete a.id
     if (w === 'text') a.id = cur.id || this.suggestTextId()
     if (w === 'qr') a.id = a.id || this.suggestQRId()
+    if (w === 'graph') a.id = a.id || this.suggestGraphId()
+    if (w !== 'graph') for (const f of GRAPH_FIELDS) delete a[f]
     if (w !== 'pomodoro') {
       delete a.work
       delete a.break
@@ -1103,7 +1113,7 @@ export class App {
     const paged = w === 'todo' || w === 'calendar'
     if (!paged) delete a.rows
     if (!paged && w !== 'month') delete a.page_reset
-    if (w !== 'calendar' && w !== 'weather') delete a.stale
+    if (w !== 'calendar' && w !== 'weather' && w !== 'graph') delete a.stale
     if (w !== 'calendar') delete a.follow
     if (w !== 'calendar' && w !== 'month') delete a.calendars
     if (w !== 'month') delete a.week_start
@@ -1119,6 +1129,13 @@ export class App {
     const used = new Set(this.textIdsInConfig())
     for (const id of Object.keys(this.texts).sort()) if (!used.has(id)) return id
     for (let i = 1; ; i++) if (!used.has(`text${i}`)) return `text${i}`
+  }
+
+  // suggestGraphId は、まだ使っていないグラフの id を作る（Brain に値があるものを先に）。
+  suggestGraphId(): string {
+    const used = new Set(this.widgetIdsInConfig('graph'))
+    for (const id of Object.keys(this.graph).sort()) if (!used.has(id)) return id
+    for (let i = 1; ; i++) if (!used.has(`graph${i}`)) return `graph${i}`
   }
 
   // suggestQRId は、まだ使っていない QR コードの id を作る。
@@ -1807,7 +1824,7 @@ export class App {
         const pressed = new Set(t.kind === 'cell' && e.showPressed ? [cellKey(t.col, t.row)] : [])
         const { pixels } = renderPreview(this.font, { cfg, stack: editStack(t.layer), mode: this.previewMode(t.layer), pressed,
           w: pv.width, h: pv.height, now: new Date(), texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar,
-          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery, weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n),
+          widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery, weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph,
           images: (id) => (id === '__edit__' ? img : this.images.get(id)?.img) })
         pctx.putImageData(new ImageData(pixels as any, pv.width, pv.height), 0, 0)
       }
@@ -2139,7 +2156,7 @@ export class App {
     const { pixels } = renderPreview(this.font, { cfg: this.cfg, stack: editStack(li), mode, pressed, w: canvas.width, h: canvas.height, now,
       texts: this.texts, todo: this.todo ?? undefined, calendar: this.calendar, images: (id) => this.images.get(id)?.img,
       mouseOff: this.brainMouse === false, widgets: this.widgetsState, qr: this.qr, battery: this.brainBattery,
-      weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n) })
+      weather: this.weather, weatherIcons: (n) => this.weatherIcons.get(n), graph: this.graph })
     ctx.putImageData(new ImageData(pixels as any, canvas.width, canvas.height), 0, 0)
     this.schedulePreviewTick(now)
   }
@@ -2163,7 +2180,7 @@ export class App {
       wait = unit - (now.getTime() % unit) + 5
     }
     // カレンダーは、予定の始まりと終わりで描き直す（1 分ごとに見直せば十分）
-    if (g.cells.some((c) => c?.action.widget === 'calendar' || c?.action.widget === 'month' || c?.action.widget === 'weather')) wait = Math.min(wait, 60000 - (now.getTime() % 60000) + 5)
+    if (g.cells.some((c) => c?.action.widget === 'calendar' || c?.action.widget === 'month' || c?.action.widget === 'weather' || c?.action.widget === 'graph')) wait = Math.min(wait, 60000 - (now.getTime() % 60000) + 5)
     // テキストと QR コードの有効期限が切れたら、薄く描き直す
     for (const c of g.cells) {
       const a = c?.action
@@ -2277,6 +2294,7 @@ export class App {
       own.widget === 'text' ? this.viewTextEditor(own) : own.widget === 'todo' ? this.viewTodoEditor(own)
         : own.widget === 'calendar' ? this.viewCalendarEditor(own) : own.widget === 'month' ? this.viewMonthEditor(own)
         : own.widget === 'weather' ? this.viewWeatherEditor(own)
+        : own.widget === 'graph' ? this.viewGraphEditor(own)
         : own.widget === 'trackpad' ? this.viewPadEditor(own)
         : own.widget === 'clock' ? this.viewClockEditor(text, missing) : this.viewGadgetEditor(own),
     )
@@ -2559,6 +2577,63 @@ export class App {
         '幅があれば今日と明日を並べ、大きさに応じて天気のアイコン、最高と最低の気温、6 時間ごとの降水確率を出します。' +
         'アイコンはセルの大きさに合わせて PC が作るので、セルの大きさを変えたら、保存してから brain-deck weather sync を実行してください（プレビューでは、それまでアイコンが出ません）。' +
         '出典：気象庁ホームページ（天気予報、天気アイコンを加工して作成）。'))
+    return out
+  }
+
+  // viewGraphEditor は、グラフのセルの欄。値は設定ではなく Brain のデータで、PC の brain-deck graph が足す。
+  private viewGraphEditor(own: ActionSpec): HTMLElement[] {
+    const id = own.id ?? ''
+    const known = [...new Set([...Object.keys(this.graph), ...this.widgetIdsInConfig('graph')])].sort()
+    const num = (f: 'min' | 'max' | 'points' | 'decimals', label: string, placeholder: string, title: string) =>
+      h('label', { class: 'row', title }, label, h('input', { value: own[f] ?? '', placeholder, 'data-focus': f, id: `graph-${f}`, class: 'num',
+        onchange: (e: Event) => {
+          const v = (e.target as HTMLInputElement).value.trim()
+          this.patchAction({ [f]: v === '' ? undefined : Number(v) })
+        } }))
+    const stale = own.stale ?? ''
+    const sms = stale === '' ? null : parseDuration(stale)
+    const out: HTMLElement[] = [
+      h('label', { class: 'row', title: '英数字と _ . -（32 文字まで）。brain-deck graph <id> <値> で値を足します。同じ id のセルは同じ値を出します' }, 'id ',
+        h('input', { value: id, 'data-focus': 'id', id: 'graph-id', list: 'graph-ids', placeholder: '例：cpu',
+          onchange: (ev: Event) => this.patchAction({ id: (ev.target as HTMLInputElement).value.trim() }) }),
+        h('datalist', { id: 'graph-ids' }, known.map((k) => h('option', { value: k })))),
+      h('label', { class: 'row', title: '値のあとに付けます（%、℃、MB など。8 文字まで）' }, '単位 ',
+        h('input', { value: own.unit ?? '', 'data-focus': 'unit', id: 'graph-unit', class: 'num', placeholder: 'なし',
+          onchange: (e: Event) => this.patchAction({ unit: (e.target as HTMLInputElement).value }) })),
+      h('label', { class: 'row' }, '描き方 ', h('select', { 'data-focus': 'chart', id: 'graph-chart',
+        onchange: (e: Event) => this.patchAction({ chart: (e.target as HTMLSelectElement).value as ActionSpec['chart'] }) },
+        h('option', { value: '', selected: !own.chart }, '折れ線（既定）'), h('option', { value: 'bar', selected: own.chart === 'bar' }, '棒'))),
+      num('min', '下の値 ', '値から決める', '縦の範囲の下。省略すると、出している値の最小（棒では 0 も含める）'),
+      num('max', '上の値 ', '値から決める', '縦の範囲の上。省略すると、出している値の最大'),
+      num('points', '描く値の数 ', String(DEFAULT_GRAPH_POINTS), `新しいものから何個を描くか（2〜${GRAPH_MAX_POINTS}）。Brain は id ごとに ${GRAPH_MAX_POINTS} 個を覚えます`),
+      num('decimals', '小数点以下 ', '自動', '値の小数点以下の桁数（0〜6）。省略すると、100 以上は 0 桁、10 以上は 1 桁、それより小さければ 2 桁（末尾の 0 は省く）'),
+      h('label', { class: 'row', title: 'いちばん新しい値がこれより古いと、値と線を薄くし「古い」と時刻を出します（1m〜720h。既定 5m）' }, '古いとみなすまで ',
+        h('input', { value: stale, placeholder: '5m', 'data-focus': 'stale', id: 'graph-stale', class: 'num',
+          onchange: (e: Event) => this.patchAction({ stale: (e.target as HTMLInputElement).value.trim() }) })),
+    ]
+    const errs: string[] = []
+    if (!id || !TEXT_ID_PATTERN.test(id)) errs.push('id は、英数字と _ . - の 32 文字までです（必須）')
+    if ([...(own.unit ?? '')].length > 8) errs.push('単位は 8 文字までです')
+    if (own.min !== undefined && own.max !== undefined && own.min >= own.max) errs.push('下の値は、上の値より小さくします')
+    if (own.points !== undefined && !(Number.isInteger(own.points) && own.points >= 2 && own.points <= GRAPH_MAX_POINTS)) errs.push(`描く値の数は 2〜${GRAPH_MAX_POINTS} の整数です`)
+    if (own.decimals !== undefined && !(Number.isInteger(own.decimals) && own.decimals >= 0 && own.decimals <= 6)) errs.push('小数点以下は 0〜6 の整数です')
+    if (stale !== '' && !(sms !== null && sms >= 60_000 && sms <= 720 * 3600_000)) errs.push('「古いとみなすまで」は、5m、2h のような 1 分から 720 時間の時間です')
+    for (const e of errs) out.push(h('div', { class: 'err' }, e))
+    if (this.connected && this.hello?.commands?.includes('get_graph')) {
+      const sr = id ? this.graph[id] : undefined
+      const last = sr?.points?.[sr.points.length - 1]
+      if (last) {
+        const [d, trim] = graphDecimals(last.v, typeof own.decimals === 'number' ? own.decimals : -1)
+        out.push(h('p', { class: 'hint graph-now' }, `今の値：${formatGraph(last.v, d, trim)}${own.unit ?? ''}（${new Date(last.t).toLocaleString()}。Brain にある値 ${sr!.points.length} 個）`))
+      } else out.push(h('p', { class: 'hint graph-now' }, '今の値：まだありません（Brain では「未受信」と出ます）'))
+    } else if (this.connected) {
+      out.push(h('div', { class: 'warn' }, 'Brain の lefthand がグラフに対応していません。lefthand を新しくしてください'))
+    }
+    out.push(h('p', { class: 'hint' },
+      `値は設定ファイルには入らず、Brain に別に保存します（設定を保存しても消えません）。PC で「brain-deck graph ${id || '<id>'} 12.5」のように 1 つずつ足します` +
+        '（「brain-deck graph cpu 12 mem 48」で、いくつかの id に一度に足せます）。いちばん新しい値を大きく出し、下（横長のセルでは右）に、届いた順に等しい間隔で線を描きます。' +
+        'SD カードには数分に 1 回だけ書くので、Brain の電源が急に切れると、最後の数分の値はなくなります。CPU、メモリ、温度を送る例は contrib/graph/linux-stats.sh です。' +
+        '設定 GUI が接続しているあいだは、brain-deck から送れません。'))
     return out
   }
 

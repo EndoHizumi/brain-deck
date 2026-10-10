@@ -4,11 +4,11 @@
 
 import { ALL_KEYS, MODIFIERS } from './keys'
 import keymapJSON from './keymap-pwsh2.json'
-import { ACTION_FIELDS, MOUSE_LABELS, PAD_FIELDS, actionKind, actionTarget, hasStateId, isTapWidget, parseCellKey, spanOf } from './model'
+import { ACTION_FIELDS, GRAPH_FIELDS, MOUSE_LABELS, PAD_FIELDS, actionKind, actionTarget, hasStateId, isTapWidget, parseCellKey, spanOf } from './model'
 import type { Transport } from './protocol'
 import { TEXT_ID_PATTERN } from './textwidget'
 import { parseDurationMs, presenceStates } from './gadgetwidget'
-import type { ActionSpec, BatteryInfo, CalendarData, Config, KeymapInfo, PresenceSpec, Problem, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
+import type { ActionSpec, BatteryInfo, CalendarData, Config, GraphSeries, KeymapInfo, PresenceSpec, Problem, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
 
 const keymap = keymapJSON as KeymapInfo
 const SOURCE_KEYS = new Set(keymap.keys.flatMap((k) => [k.code, k.symbol]).filter(Boolean) as string[])
@@ -32,6 +32,7 @@ export class FakeDaemon {
   todo: TodoList = { rev: 0, items: [] } // Todo の一覧
   calendar: CalendarData = { rev: 0, calendars: [] } // カレンダーの予定（brain-deck calendar sync が送るもの）
   weather: WeatherData = { rev: 0, days: [] } // 天気予報（brain-deck weather sync が送るもの。デモにアイコンはない）
+  graph: Record<string, GraphSeries> = {} // グラフの値（brain-deck graph が足すもの）
   // 背景画像（id → 名前と中身）。image_begin〜image_end で受け取る
   images = new Map<string, { name: string; w: number; h: number; data: Uint8Array; added: string }>()
   private upload: { token: string; id: string; name: string; w: number; h: number; bytes: number; parts: Uint8Array[]; got: number } | null = null
@@ -78,7 +79,7 @@ export class FakeDaemon {
           commands: ['hello', 'get_config', 'validate', 'set_config', 'get_keymap', 'get_status', 'subscribe_input', 'set_time', 'set_text', 'get_text',
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
             'set_calendar', 'get_calendar', 'set_weather', 'get_weather', 'get_weather_icon', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal',
-            'set_qr', 'get_qr', 'get_widgets', 'set_presence'] })
+            'set_qr', 'get_qr', 'get_widgets', 'set_presence', 'add_graph', 'clear_graph', 'get_graph'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path })
       case 'get_keymap':
@@ -177,6 +178,26 @@ export class FakeDaemon {
         this.weather = { rev: this.weather.rev + 1, received_at: new Date().toISOString(), area: w.area, office: w.office, public_time: w.public_time,
           fetched_at: w.fetched_at ?? new Date().toISOString(), days: w.days }
         return ok({ rev: this.weather.rev, kept: false, icons_missing: [] })
+      }
+      case 'get_graph': {
+        const ids = [...new Set(this.config.layers.flatMap((l) => Object.values(l.touch?.cells ?? {}).filter((a) => a.widget === 'graph').map((a) => a.id ?? '')))].sort()
+        return ok({ series: this.graph, ids, now: new Date().toISOString() })
+      }
+      case 'add_graph': {
+        if (!Array.isArray(req.points) || !req.points.length) return err('bad_request', '"points" (an array of {"name": <id>, "value": <number>}) is required')
+        for (const p of req.points) {
+          if (!TEXT_ID_PATTERN.test(p?.name ?? '') || typeof p.value !== 'number' || !Number.isFinite(p.value)) return err('bad_request', 'bad graph value')
+        }
+        for (const p of req.points) {
+          const pts = [...(this.graph[p.name]?.points ?? []), { t: new Date().toISOString(), v: p.value }].slice(-120)
+          this.graph[p.name] = { points: pts, count: pts.length, last: pts[pts.length - 1], source: req.source }
+        }
+        return ok({ added: req.points.length, unknown: [] })
+      }
+      case 'clear_graph': {
+        const had = Object.hasOwn(this.graph, req.name)
+        delete this.graph[req.name]
+        return ok({ name: req.name, cleared: had })
       }
       case 'get_weather_icon':
         return err('not_found', `weather icon ${req.name} is not on this Brain`)
@@ -432,7 +453,7 @@ export function validate(cfg: Config): Problem[] {
     if (!cell && (a.widget || a.span || a.background)) return out.push({ path, message: `${where}: widget, span and background can be used only in touch cells` })
     if (a.background !== undefined && !/^[0-9a-f]{16}$/.test(a.background))
       out.push({ path, message: `${where}: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got "${a.background}"` })
-    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month', 'weather'].includes(a.widget))
+    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month', 'weather', 'graph'].includes(a.widget))
       out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad, battery, stopwatch, pomodoro, counter, qr, presence, month)` })
     if (isTapWidget(a.widget) && n > 0)
       out.push({ path, message: `${where}: widget: ${a.widget} handles taps itself; remove key, layer_*, mouse, usb_mode and terminal` })
@@ -448,15 +469,22 @@ export function validate(cfg: Config): Problem[] {
     const paged = a.widget === 'todo' || a.widget === 'calendar'
     if (a.rows !== undefined && !paged) out.push({ path, message: `${where}: rows is for widget: todo and calendar` })
     if (a.page_reset !== undefined && !paged && a.widget !== 'month') out.push({ path, message: `${where}: page_reset is for widget: todo, calendar and month` })
-    if (a.stale !== undefined && a.widget !== 'calendar' && a.widget !== 'weather') out.push({ path, message: `${where}: stale is for widget: calendar and weather` })
+    if (a.stale !== undefined && a.widget !== 'calendar' && a.widget !== 'weather' && a.widget !== 'graph') out.push({ path, message: `${where}: stale is for widget: calendar, weather and graph` })
+    if (a.widget !== 'graph' && GRAPH_FIELDS.some((f) => a[f] !== undefined)) out.push({ path, message: `${where}: unit, min, max, chart, points and decimals are for widget: graph` })
+    if (a.widget === 'graph') {
+      if (a.min !== undefined && a.max !== undefined && a.min >= a.max) out.push({ path, message: `${where}: min (${a.min}) must be less than max (${a.max})` })
+      if (a.points !== undefined && !(Number.isInteger(a.points) && a.points >= 2 && a.points <= 120)) out.push({ path, message: `${where}: points must be 2..120 (the number of values to draw), got ${a.points}` })
+      if (a.decimals !== undefined && !(Number.isInteger(a.decimals) && a.decimals >= 0 && a.decimals <= 6)) out.push({ path, message: `${where}: decimals must be 0..6 (omit it to choose by the size of the value), got ${a.decimals}` })
+      if (a.chart !== undefined && a.chart !== 'line' && a.chart !== 'bar') out.push({ path, message: `${where}: chart must be line or bar, got "${a.chart}"` })
+    }
     if (a.calendars !== undefined && a.widget !== 'calendar' && a.widget !== 'month') out.push({ path, message: `${where}: calendars is for widget: calendar and month` })
     if (a.follow !== undefined && a.widget !== 'calendar') out.push({ path, message: `${where}: follow is for widget: calendar (the id of a widget: month cell in the same layer)` })
     if (a.week_start !== undefined && a.widget !== 'month') out.push({ path, message: `${where}: week_start is for widget: month` })
     if (a.week_start !== undefined && a.week_start !== 'sunday' && a.week_start !== 'monday') out.push({ path, message: `${where}: week_start must be sunday or monday, got "${a.week_start}"` })
     if (a.rows !== undefined && !(Number.isInteger(a.rows) && a.rows >= 1 && a.rows <= 20)) out.push({ path, message: `${where}: rows must be 1..20 (omit it to fit the cell height)` })
-    if ((a.widget === 'text' || a.widget === 'qr') && !TEXT_ID_PATTERN.test(a.id ?? ''))
+    if ((a.widget === 'text' || a.widget === 'qr' || a.widget === 'graph') && !TEXT_ID_PATTERN.test(a.id ?? ''))
       out.push({ path, message: `${where}: widget: ${a.widget} needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
-    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, stopwatch, pomodoro, counter, presence and month` })
+    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence and month` })
     if (!a.widget && (a.format || a.date_format || a.tz)) out.push({ path, message: `${where}: format, date_format and tz need widget: clock` })
     if (a.tz) {
       try {
@@ -684,4 +712,13 @@ export function demoCalendar(now = new Date()): CalendarData {
     { name: '家', color: '#50d880', fetched_at: new Date(now.getTime() - 5 * 60000).toISOString(), events: [
       { title: '燃えないごみ', day: day(1) }, ev('ジム', 0, Math.min(hr + 4, 23), 0, Math.min(hr + 5, 23), 30)] },
   ] }
+}
+
+// demoGraph は、デモで見せるグラフの値（10 秒ごとに 60 個）。brain-deck graph が足すものと同じ形。
+export function demoGraph(now = new Date()): Record<string, GraphSeries> {
+  const series = (f: (i: number) => number) => {
+    const points = Array.from({ length: 60 }, (_, i) => ({ t: new Date(now.getTime() - (59 - i) * 10_000).toISOString(), v: Math.round(f(i) * 10) / 10 }))
+    return { points, count: points.length, last: points[points.length - 1], source: 'brain-deck' }
+  }
+  return { cpu: series((i) => 30 + 25 * Math.sin(i / 6) + (i % 7) * 2.5), mem: series((i) => 55 + i * 0.4 + (i % 5)), temp: series((i) => 48 + 6 * Math.sin(i / 15)) }
 }

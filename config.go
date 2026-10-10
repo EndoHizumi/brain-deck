@@ -115,6 +115,13 @@ type ActionSpec struct {
 	Break      string   `yaml:"break,omitempty" json:"break,omitempty"`             // pomodoro：休憩の時間（5m など）
 	// States は presence：タップで順に切り替える状態（名前と色）。省略すると在席、集中、会議中、休憩
 	States []PresenceSpec `yaml:"states,omitempty" json:"states,omitempty"`
+	// graph：グラフ（graphwidget.go）
+	Unit     string   `yaml:"unit,omitempty" json:"unit,omitempty"`         // 値のあとに付ける単位（%、°C など）
+	Min      *float64 `yaml:"min,omitempty" json:"min,omitempty"`           // 縦の範囲の下。省略すると値から決める
+	Max      *float64 `yaml:"max,omitempty" json:"max,omitempty"`           // 縦の範囲の上。省略すると値から決める
+	Chart    string   `yaml:"chart,omitempty" json:"chart,omitempty"`       // line（折れ線、既定）か bar（棒）
+	Points   *int     `yaml:"points,omitempty" json:"points,omitempty"`     // 描く値の数（2〜120、既定 60）
+	Decimals *int     `yaml:"decimals,omitempty" json:"decimals,omitempty"` // 小数点以下の桁数。省略すると値の大きさで決める
 
 	// trackpad：トラックパッド（trackpad.go）。省略すると既定値
 	Speed           *float64 `yaml:"speed,omitempty" json:"speed,omitempty"`                       // 感度（画面の 1 ドットを、PC のマウスの何カウントにするか）
@@ -152,6 +159,7 @@ var actionFields = map[string]bool{
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 	"page_reset": true, "stale": true, "calendars": true, "follow": true, "week_start": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
 	"terminal": true, "work": true, "break": true, "states": true,
+	"unit": true, "min": true, "max": true, "chart": true, "points": true, "decimals": true,
 	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
 }
@@ -167,7 +175,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, background, and the trackpad fields)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -205,6 +213,11 @@ func (a SoftArea) MarshalYAML() (any, error) {
 	}
 	n.Style = yaml.FlowStyle
 	return &n, nil
+}
+
+// hasGraphFields は、グラフの項目を書いたか。
+func (a ActionSpec) hasGraphFields() bool {
+	return a.Unit != "" || a.Min != nil || a.Max != nil || a.Chart != "" || a.Points != nil || a.Decimals != nil
 }
 
 func (a ActionSpec) count() int {

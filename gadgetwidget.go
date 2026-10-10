@@ -137,7 +137,7 @@ func isTapWidget(kind string) bool {
 
 // hasStateID は、id を書けるウィジェットか。
 func hasStateID(kind string) bool {
-	return kind == widgetText || kind == widgetQR || isTapWidget(kind)
+	return kind == widgetText || kind == widgetQR || kind == widgetGraph || isTapWidget(kind)
 }
 
 var tapHelp = map[string]string{

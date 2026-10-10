@@ -812,6 +812,7 @@ func main() {
 	pngMouseOff := flag.Bool("render-mouse-off", false, "-render-png で、USB にマウスがないとき（キーボードだけの形）のトラックパッドを描く")
 	pngBattery := flag.String("render-battery", "", "-render-png で、電池のウィジェットに出す状態（87、87,charging、87,plugged。省略すると読めないとき）")
 	pngGadgets := flag.String("render-widgets", "", "-render-png で、ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（widgets.json の形のファイル）")
+	pngGraph := flag.String("render-graph", "", "-render-png で、グラフのセルに出す値（graph.json の形のファイル）")
 	pngQR := flag.String("render-qr", "", "-render-png で、QR コードのウィジェットに出す中身（qr.json の形のファイル）")
 	recOut := flag.String("record-touch", "", "タッチパネルの生のイベントをこのファイルに記録して終わる（lefthand.service を止めてから使う）")
 	recGesture := flag.String("record-gesture", "", "-record-touch で、見出しに書く動きの名前（slow、tap など）")
@@ -992,6 +993,17 @@ func main() {
 			}
 			env.QR = f.Texts
 		}
+		if *pngGraph != "" {
+			b, err := os.ReadFile(*pngGraph)
+			if err != nil {
+				log.Fatal(err)
+			}
+			var f graphFile
+			if err := json.Unmarshal(b, &f); err != nil {
+				log.Fatalf("%s: %v", *pngGraph, err)
+			}
+			env.Graph = f.Series
+		}
 		if *pngCal != "" {
 			b, err := os.ReadFile(*pngCal)
 			if err != nil {
@@ -1098,6 +1110,8 @@ func main() {
 	todos := NewTodoService(store)
 	cals := NewCalendarService(store)
 	weather := NewWeatherService(store)
+	graphs := NewGraphService(store)
+	addAtExit(graphs.Flush) // 間引いて、まだ書いていない値を書く
 	icons := OpenIconStore(iconsDir)
 	gadgets := NewGadgetService(store)
 	addAtExit(gadgets.Shutdown)
@@ -1123,6 +1137,7 @@ func main() {
 		env.Calendar = cals.Snapshot()
 		env.Weather = weather.Snapshot()
 		env.WeatherIcons = icons
+		env.Graph = graphs.Snapshot()
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1173,6 +1188,7 @@ func main() {
 				todos.SetOnChange(d.Poke)
 				cals.SetOnChange(d.Poke)
 				weather.SetOnChange(d.Poke)
+				graphs.SetOnChange(d.Poke)
 				icons.SetOnChange(d.Poke)
 				images.SetOnChange(d.Invalidate)
 				usb.OnChange(d.Invalidate) // トラックパッドの「マウスはオフ」と、メディアキーのセルを描き直す
@@ -1214,6 +1230,7 @@ func main() {
 			todos:   todos,
 			cals:    cals,
 			weather: weather,
+			graphs:  graphs,
 			icons:   icons,
 			images:  images,
 			usb:     usb,

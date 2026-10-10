@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -145,6 +146,8 @@ type request struct {
 	Days      int             `json:"days,omitempty"`
 	// set_weather：予報（weather.go の WeatherRequest）
 	Weather json.RawMessage `json:"weather,omitempty"`
+	// add_graph：足す値（graph.go の GraphValue の配列）
+	Points []GraphValue `json:"points,omitempty"`
 	// 背景画像（image_*、get_image、prune_images）
 	SHA256 string   `json:"sha256,omitempty"` // image_begin：ファイル全体の SHA-256（16 進）
 	Bytes  int64    `json:"bytes,omitempty"`  // image_begin：ファイルの大きさ
@@ -424,6 +427,7 @@ type Controller struct {
 	todos   *TodoService
 	cals    *CalendarService
 	weather *WeatherService
+	graphs  *GraphService
 	icons   *IconStore // 天気アイコン
 	images  *ImageStore
 	usb     *USBMode
@@ -460,7 +464,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
 				"set_calendar", "get_calendar", "set_weather", "get_weather", "get_weather_icon",
 				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_terminal",
-				"set_qr", "get_qr", "get_widgets", "set_presence",
+				"set_qr", "get_qr", "get_widgets", "set_presence", "add_graph", "clear_graph", "get_graph",
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
 				"restart", "power", "get_logs", "get_config_text", "put_config_text"},
@@ -549,9 +553,11 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			c.texts.ClockStepped(off)
 			c.qrs.ClockStepped(off)
 			c.gadgets.ClockStepped(off)
+			c.graphs.ClockStepped(off)
 		} else {
 			c.texts.ClockSynced()
 			c.qrs.ClockSynced()
+			c.graphs.ClockSynced()
 		}
 		return ok(res)
 	case "set_text":
@@ -564,6 +570,15 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(map[string]any{"texts": c.qrs.List(time.Now()), "ids": gadgetIDs(c.store.Current(), widgetQR)})
 	case "get_widgets":
 		return ok(c.widgets())
+	case "add_graph":
+		return c.addGraph(id, req)
+	case "clear_graph":
+		if !validTextID(req.Name) {
+			return errResp(id, errBadRequest, `"name" (the id of the graph cell) is required`, nil)
+		}
+		return ok(map[string]any{"name": req.Name, "cleared": c.graphs.Clear(req.Name)})
+	case "get_graph":
+		return ok(map[string]any{"series": c.graphs.List(), "ids": graphIDs(c.store.Current()), "now": time.Now()})
 	case "set_presence":
 		return c.setPresence(id, req)
 	case "get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done":
@@ -643,6 +658,29 @@ func (c *Controller) setText(id json.RawMessage, req request, ts *TextService, k
 		vlogf("control: set_%s %s (%s, %d chars) by %s", kind, req.Name, e.Style, len([]rune(e.Text)), req.Source)
 	}
 	return response{ID: id, OK: true, Result: res}
+}
+
+// addGraph は add_graph を処理する。保存（SD カードへの書き込み）は待たず、間引く（graph.go）。
+// 返事の unknown は、今の設定にセルがない id（値は覚える）。
+func (c *Controller) addGraph(id json.RawMessage, req request) response {
+	if len(req.Points) == 0 {
+		return errResp(id, errBadRequest, `"points" (an array of {"name": <id>, "value": <number>}) is required`, nil)
+	}
+	if err := c.graphs.Add(req.Points, time.Now(), c.clock.Synced(), req.Source); err != nil {
+		return errResp(id, errBadRequest, err.Error(), nil)
+	}
+	inCfg := map[string]bool{}
+	for _, x := range graphIDs(c.store.Current()) {
+		inCfg[x] = true
+	}
+	unknown := []string{}
+	for _, p := range req.Points {
+		if !inCfg[p.Name] && !slices.Contains(unknown, p.Name) {
+			unknown = append(unknown, p.Name)
+		}
+	}
+	vlogf("control: add_graph %d values by %s", len(req.Points), req.Source)
+	return response{ID: id, OK: true, Result: map[string]any{"added": len(req.Points), "unknown": unknown}}
 }
 
 // widgets は get_widgets の結果。状態と、今の設定で使っている id、在席ランプの状態の並び。

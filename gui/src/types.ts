@@ -29,6 +29,13 @@ export interface ActionSpec {
   work?: string // pomodoro：作業の時間（25m など）
   break?: string // pomodoro：休憩の時間（5m など）
   states?: PresenceSpec[] // presence：タップで順に切り替える状態。省略すると在席、集中、会議中、休憩
+  // graph：グラフ（graphwidget.go）
+  unit?: string // 値のあとに付ける単位
+  min?: number // 縦の範囲の下。省略すると値から決める
+  max?: number // 縦の範囲の上。省略すると値から決める
+  chart?: 'line' | 'bar' // 折れ線（既定）か棒
+  points?: number // 描く値の数（2〜120、既定 60）
+  decimals?: number // 小数点以下の桁数。省略すると値の大きさで決める
   // trackpad：トラックパッド（trackpad.go）。省略すると既定値
   speed?: number // 感度（画面の 1 ドットを、PC のマウスの何カウントにするか）
   accel?: number // 加速（0 で加速しない）
@@ -45,7 +52,7 @@ export interface ActionSpec {
   long_press?: 'none' | 'right' // 長押しで右クリック
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph'
 
 // 在席ランプの状態 1 つ（gadgetwidget.go の PresenceSpec）
 export interface PresenceSpec {
@@ -210,6 +217,25 @@ export interface WidgetsState {
   pomodoro?: Record<string, PomodoroState>
   counter?: Record<string, CounterState>
   presence?: Record<string, PresenceState>
+}
+
+// グラフの値（get_graph。graph.go の GraphPoint、GraphSeries）
+export interface GraphPoint {
+  t: string
+  v: number
+}
+
+export interface GraphSeries {
+  points: GraphPoint[]
+  count?: number
+  last?: GraphPoint
+  source?: string
+}
+
+export interface GetGraphResult {
+  series: Record<string, GraphSeries>
+  ids: string[]
+  now?: string
 }
 
 // 電池の状態（get_status の battery。battery.go の BatteryInfo）

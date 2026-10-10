@@ -28,6 +28,7 @@ const (
 	widgetPresence  = "presence"
 	widgetMonth     = "month"
 	widgetWeather   = "weather"
+	widgetGraph     = "graph"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -43,7 +44,7 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph}
 
 // ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
@@ -80,6 +81,7 @@ type WidgetDef struct {
 	Break      time.Duration  // pomodoro：休憩の時間
 	States     []PresenceDef  // presence：状態（タップで順に切り替える）
 	tap        *tapState      // stopwatch、pomodoro、counter、presence：タップと長押し
+	Graph      *GraphDef      // graph：単位、範囲、描き方
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -96,6 +98,7 @@ type WidgetEnv struct {
 	Weather    *WeatherData         // weather：予報（写し。書き換えない）。nil なら一度も受け取っていない
 	// WeatherIcons は、天気アイコンの読み込み先。nil ならアイコンを描かない
 	WeatherIcons *IconStore
+	Graph        map[string]GraphSeries // graph：id ごとの値（写し。書き換えない）
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
@@ -116,8 +119,11 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	if s.PageReset != "" && !paged && s.Widget != widgetMonth {
 		return nil, fmt.Errorf("page_reset is for widget: todo, calendar and month")
 	}
-	if s.Stale != "" && s.Widget != widgetCal && s.Widget != widgetWeather {
-		return nil, fmt.Errorf("stale is for widget: calendar and weather")
+	if s.Stale != "" && s.Widget != widgetCal && s.Widget != widgetWeather && s.Widget != widgetGraph {
+		return nil, fmt.Errorf("stale is for widget: calendar, weather and graph")
+	}
+	if s.hasGraphFields() && s.Widget != widgetGraph {
+		return nil, fmt.Errorf("unit, min, max, chart, points and decimals are for widget: graph")
 	}
 	if s.Calendars != nil && s.Widget != widgetCal && s.Widget != widgetMonth {
 		return nil, fmt.Errorf("calendars is for widget: calendar and month")
@@ -148,9 +154,9 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		case paged:
 			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: %s", s.Widget)
 		case s.Widget == "":
-			return nil, fmt.Errorf("id needs widget: text, qr, stopwatch, pomodoro, counter, presence or month")
+			return nil, fmt.Errorf("id needs widget: text, qr, graph, stopwatch, pomodoro, counter, presence or month")
 		}
-		return nil, fmt.Errorf("id is for widget: text, qr, stopwatch, pomodoro, counter, presence and month")
+		return nil, fmt.Errorf("id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence and month")
 	}
 	switch s.Widget {
 	case widgetClock:
@@ -197,6 +203,8 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		return &WidgetDef{Kind: s.Widget, ID: s.ID}, nil
 	case widgetBattery:
 		return &WidgetDef{Kind: s.Widget}, nil
+	case widgetGraph:
+		return compileGraph(s)
 	case widgetWeather:
 		w := &WidgetDef{Kind: s.Widget, Stale: defaultWthStale}
 		if s.Stale != "" {
@@ -357,6 +365,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return monthKey(w, env)
 	case widgetWeather:
 		return wthKey(w, env)
+	case widgetGraph:
+		return graphKey(w, env)
 	case widgetPad:
 		return fmt.Sprintf("trackpad\x00%v", env.MouseOff) // マウスのオンとオフで描き直す
 	}
@@ -385,6 +395,8 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		return monthNext(v.Widget, env)
 	case widgetWeather:
 		return wthNext(v.Widget, env)
+	case widgetGraph:
+		return graphNext(v.Widget, env)
 	}
 	return gadgetNext(v, env)
 }
@@ -405,6 +417,8 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		drawMonth(cv, area, v.Widget, env)
 	case widgetWeather:
 		drawWeather(cv, area, v.Widget, env)
+	case widgetGraph:
+		drawGraph(cv, area, v.Widget, env, ink, subInk)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {

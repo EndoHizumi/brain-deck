@@ -288,6 +288,8 @@ cells:
 - **月の表示**：年と月、曜日、7 列の日付を並べる卓上カレンダー（2×2 のセル以上）。前後の月の日付は薄く、**今日は反転**、土曜は青、**日曜と祝日は赤**。予定のある日には、数字の下にカレンダーの色の点を出す（1 日 3 つまで。4 つ以上は 2 色と灰色の点）。下の帯の **▲▼ で前後の月**に送り、**日付をタップするとその日を選ぶ**（帯に日付、祝日の名前、予定の数が出る。帯の中央で今月に戻る。1 分触らなければ今月と今日に戻る）。同じレイヤーのカレンダーのセルに `follow: <月の表示の id>` を書くと、選んだ日の予定を出す。週の始まりは `week_start: monday` で月曜に。祝日は、calendars.yaml のカレンダーに `holiday: true` を書いて送る（[カレンダー](#カレンダー)）。例は [config/month-example.yaml](config/month-example.yaml)、書き方は [docs/config.md](docs/config.md) の「月の表示（month）」。
 - **例**：[config/widgets-example.yaml](config/widgets-example.yaml) は、今の本番の設定（[config/current.yaml](config/current.yaml)）に、メニューから入る「情報」と「Todo」のレイヤーを足したもの。
 
+PC から送った値を描くグラフ（`graph`）もある。値は [brain-deck graph](#グラフ) で 1 つずつ足す（CPU、メモリ、温度を送る例は [contrib/graph/linux-stats.sh](contrib/graph/linux-stats.sh)）。例は [config/graph-example.yaml](config/graph-example.yaml)、書き方は [docs/config.md](docs/config.md) の「グラフ（graph）」。
+
 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプもある。
 
 ```yaml
@@ -365,6 +367,7 @@ layers:
 | todo.json | Todo の項目（ID、文、完了、更新番号、時刻、変えた側）。数の上限はない |
 | calendar.json | カレンダーの予定（カレンダーごとに、名前、色、祝日か、取ってきた時刻、取得の失敗、予定）と、送られた範囲。展開したあとの予定で、1000 件まで（約 250 KB） |
 | qr.json | QR コードのウィジェットの中身（text.json と同じ形）。64 個まで |
+| graph.json | グラフの値（id ごとに新しい 120 個、32 個の id まで）。値を受け取るたびには書かず、5 分に 1 回まとめて書く（デーモンが終わるときにも書く） |
 | widgets.json | ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（種類と id ごと。種類ごとに 64 個まで）と、書いたときの起動の ID、終了した時刻 |
 | images/&lt;id&gt;.565 | 背景画像。8 バイトのヘッダ（`LHI1`、幅、高さ）と RGB565 の画素。id はファイルの SHA-256 の先頭 16 文字 |
 | images/index.json | 背景画像の名前（元のファイル名など）、大きさ、SHA-256、足した時刻、送った側 |
@@ -377,6 +380,8 @@ layers:
 - **予定を消すとき**：`brain-deck calendar clear`。
 
 - **QR コードを消すとき**：`brain-deck qr <id> --clear`。
+
+- **グラフの値を消すとき**：`brain-deck graph <id> --clear`。
 
 - **ストップウォッチなどの状態を消すとき**：Brain で長押しすれば 0（最初）に戻る。ファイルごと消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/widgets.json`。
 
@@ -809,6 +814,7 @@ printf "複数行も\n書ける" | brain-deck text note -          # 標準入�
 brain-deck text --list                                     # Brain にあるテキストの一覧
 brain-deck qr share "https://example.com/" --ttl 1h        # QR コードのセル（id: share）に出す
 brain-deck presence 会議中                                 # 在席ランプを「会議中」にする（next、prev でも）
+brain-deck graph cpu 12.5 mem 48                           # グラフのセル（id: cpu、mem）に値を足す
 brain-deck todo add "牛乳を買う"                           # Todo を足す
 brain-deck todo                                            # Todo の一覧（番号は Brain の画面と同じ順）
 brain-deck todo done 2                                     # 2 番を完了にする
@@ -1118,6 +1124,38 @@ journalctl --user -u brain-deck-weather                  # 結果を見る
 
 - タイマーは毎時 17 分に、さらに 0〜5 分ずらして動く（毎時 0 分にアクセスが集まらないように）。Brain がない（終了コード 3）、設定 GUI の接続中（4）は失敗にしない。予報を取れなかった（7）は失敗として残る（`systemctl --user status brain-deck-weather` で分かる）。
 - cron なら `17 * * * * $HOME/.local/bin/brain-deck -q weather sync`。macOS の launchd は、カレンダーの例の `calendar` を `weather` に、`StartInterval` を `3600` にする。
+
+### グラフ
+
+グラフのセル（`widget: graph`）に値を足す。Brain は id ごとに新しい 120 個を覚え、折れ線か棒で描く（[docs/config.md](docs/config.md) の「グラフ（graph）」）。
+
+```sh
+brain-deck graph cpu 12.5                  # id: cpu に 12.5 を足す
+brain-deck graph cpu 12.5 mem 48 temp -3   # いくつかの id に一度に足す（負の数もそのまま書ける）
+brain-deck graph cpu --clear               # cpu の値を消す
+brain-deck graph --list                    # Brain にある値の数、最新の値と時刻（--json でそのまま）
+```
+
+- **時刻**：送る前に、Brain の時刻がずれていれば PC に合わせる（`--no-time-sync` で合わせない）。値の時刻は Brain が受け取った時刻で、「古い」の判断に使う。
+- **セルがない id**：値は Brain に覚え、「今の設定には…ありません」と標準エラーに出す（終了コード 0）。
+- **SD カード**：Brain は値を受け取るたびには書かず、5 分に 1 回まとめて書く（[データの置き場所](#データの置き場所varliblefthand)）。数秒ごとに送ってもよい。
+- **設定 GUI と同時には使えない**：設定 GUI が接続しているあいだは、終了コード 4 で何もしない（[設定 GUI と同時に使えない仕組み](#設定-gui-と同時に使えない仕組み)）。
+
+**CPU、メモリ、温度を送る（Linux）**：[contrib/graph/linux-stats.sh](contrib/graph/linux-stats.sh) は、CPU の使用率（`/proc/stat` を 1 秒あけて 2 回読む）、メモリの使用率（`/proc/meminfo` の MemTotal と MemAvailable）、温度（`/sys/class/thermal/thermal_zone*/temp` のいちばん高いもの）、負荷（`/proc/loadavg`）を測り、`brain-deck graph cpu … mem … load … temp …` で送る。config/graph-example.yaml の「グラフ」のレイヤーと組で使う。
+
+```sh
+sh contrib/graph/linux-stats.sh --loop 10      # 端末で試す（10 秒ごと。Ctrl-C で終わる）
+
+# 30 秒ごとに送る（systemd のユーザータイマー）
+cp contrib/graph/linux-stats.sh ~/.local/bin/brain-deck-linux-stats
+cp contrib/systemd/brain-deck-graph.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now brain-deck-graph.timer
+systemctl --user list-timers brain-deck-graph.timer
+```
+
+- 30 秒ごとなら、Brain の 120 個で 1 時間ぶん（`points: 120` のセルで 1 時間、既定の 60 個で 30 分）。もっと細かく見るなら `--loop 10` を、ログインしているあいだ動かす（systemd のタイマーは、短くても 30 秒くらいにしておく）。
+- Brain がない（終了コード 3）、設定 GUI の接続中（4）は、スクリプトは何もせずに 0 で終わる。
 
 ### 終了コード
 
@@ -1778,7 +1816,11 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | tools/record-touch.sh | トラックパッドの調整のために、動きごとにタッチを記録する（Brain で実行） |
 | tools/fbshot.sh | Brain の画面のスクリーンショットを、PC に PNG で保存する（PC で実行） |
 | testdata/touch/ | Brain で記録したタッチ（テストで再生する） |
-| contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごと、`brain-deck weather sync` を 1 時間ごとに実行する、ユーザー単位の systemd のタイマー |
+| contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごと、`brain-deck weather sync` を 1 時間ごと、グラフの値（contrib/graph/linux-stats.sh）を 30 秒ごとに送る、ユーザー単位の systemd のタイマー |
+| contrib/graph/linux-stats.sh | PC（Linux）の CPU、メモリ、温度、負荷を、`brain-deck graph` で送る例 |
+| config/graph-example.yaml | グラフのウィジェットの例（widgets-example.yaml に「グラフ」のレイヤーを足したもの） |
+| graph.go、graphwidget.go | グラフの値（add_graph、clear_graph、get_graph、間引いた保存）と、グラフのセルの配置と描画 |
+| cmd/brain-deck/graph.go | PC の `brain-deck graph` |
 | config/weather-example.yaml | 天気のウィジェットの例（widgets-example.yaml に「天気」と「天気(小)」のレイヤーを足したもの） |
 | cmd/brain-deck/weather.go | PC の `brain-deck weather`：天気予報 API からの取得（User-Agent、間をあける）、天気アイコンの SVG の取得とキャッシュ、変換、送信 |
 | cmd/brain-deck/svg.go、svgfilter.go | PC の brain-deck の SVG の描画（天気アイコン用。道筋、線、グラデーション、埋め込みの PNG、フィルター） |
@@ -1852,6 +1894,11 @@ TZ=Asia/Tokyo go run . -render-png $F/weather-night.png -render-layer weather -r
 TZ=Asia/Tokyo go run . -render-png $F/weather-stale-fill.png -render-layer weather -render-time $T -render-weather $F/weather-stale.json -render-weather-icons $WI -render-press-style fill -render-pressed "2,0 2,1" $W
 TZ=Asia/Tokyo go run . -render-png $F/weather-none.png -render-layer weather -render-time $T -render-unsynced -render-weather-icons $WI $W
 TZ=Asia/Tokyo go run . -render-png $F/weather-failed.png -render-layer weather-small -render-time $T -render-weather $F/weather-failed.json -render-weather-icons $WI $W
+# グラフ。値は gui/test/fixtures/graph.json と graph-few.json（-render-graph）
+G=config/graph-example.yaml
+TZ=Asia/Tokyo go run . -render-png $F/graph.png -render-layer graph -render-time $T -render-graph $F/graph.json $G
+TZ=Asia/Tokyo go run . -render-png $F/graph-few.png -render-layer graph -render-time $T -render-graph $F/graph-few.json $G
+TZ=Asia/Tokyo go run . -render-png $F/graph-pressed-fill.png -render-layer graph -render-time $T -render-graph $F/graph.json -render-pressed 3,1 -render-press-style fill $G
 ```
 
 天気のウィジェットの配置（`gui/src/weatherwidget.ts`）は、Go の結果の表（`gui/test/fixtures/weatherlayout.json`。文字、色、アイコンの箱の位置）と比べる。配置を変えたら `LEFTHAND_UPDATE_WEATHER=1 go test -run TestWeatherFixtures` で書き直し、上の PNG も作り直す。

@@ -58,7 +58,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 
 - `protocol` はこの文書の版。互換性のない変更をしたら上げる。GUI は違えば使わない。
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
-- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱い、`get_qr`・`get_widgets` があるときだけ QR コードとストップウォッチなどの状態を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
+- `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱い、`get_qr`・`get_widgets` があるときだけ QR コードとストップウォッチなどの状態を読み、`get_graph` があるときだけグラフの値を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
 - `upload_kinds` は、`upload_begin` で受け取れる種類（`update`、`image`、`weather_icon`）。この項目がなければ、`upload_*` がない版。
 
@@ -520,6 +520,31 @@ QR コードのセル（`{ widget: qr, id: share }`）の中身を書き換え�
 ```
 
 - **誤り**：設定にその id の在席ランプがなければ `not_found`。`state` がその id の状態にない、`state` と `step` の両方か、どちらもないときは `bad_request`（message に選べる状態を書く）。
+- **画面**：すぐ描き直す。画面を明るくはしない。
+
+### add_graph、clear_graph、get_graph
+
+グラフのセル（`{ widget: graph, id: cpu }`）の値を足す、消す、読む。
+
+```json
+→ {"id":70,"cmd":"add_graph","points":[{"name":"cpu","value":12.5},{"name":"temp","value":51.3}],"source":"brain-deck"}
+← {"id":70,"ok":true,"result":{"added":2,"unknown":[]}}
+→ {"id":71,"cmd":"clear_graph","name":"cpu"}
+← {"id":71,"ok":true,"result":{"name":"cpu","cleared":true}}
+→ {"id":72,"cmd":"get_graph"}
+← {"id":72,"ok":true,"result":{"series":{"temp":{"points":[{"t":"2026-10-10T03:04:05Z","v":51.3}],"count":1,
+     "last":{"t":"2026-10-10T03:04:05Z","v":51.3},"source":"brain-deck"}},"ids":["cpu","temp"],"now":"..."}}
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `points` | `add_graph`：足す値。`name`（id。英数字と `_ . -` の 32 文字まで）と `value`（数。-1e12〜1e12）。1 回に 64 個まで。1 つでも誤りがあれば、どれも足さずに `bad_request` |
+| `unknown` | 今の設定にセルがない id（値は覚える） |
+| `series` | id ごとの値（古い順。`t` は受け取った時刻で、Brain の時計による）。`ids` は、今の設定のグラフのセルの id |
+
+- **覚える数**：id ごとに新しい 120 個。id は 32 個まで（超えたら、いちばん前に値を足した id を捨てる）。
+- **保存**：`/var/lib/lefthand/graph.json`。返事は書き込みを待たない。書き込みは間引く（前に書いてから 5 分たつまで書かない。しばらく来ていなかったときは 10 秒後。デーモンが終わるときにも書く）。
+- **時刻**：Brain の時刻を合わせる前に受け取った値は、あとで `set_time` で時刻が動いたら、同じだけ動かす（テキストと同じ）。
 - **画面**：すぐ描き直す。画面を明るくはしない。
 
 ### subscribe_data

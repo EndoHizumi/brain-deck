@@ -579,6 +579,41 @@ describe('Todo', () => {
     expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
   })
 
+  it('セルをグラフにし、id、単位、範囲、描き方、値の数、桁、古いとみなすまでを決められる。Brain の値を出す', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.graph = { cpu: { points: [{ t: '2026-10-06T00:41:20Z', v: 27.64 }] } }
+    const t = await connected(setup({ daemon }))
+    expect(t.cmds()).toContain('get_graph')
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    t.change('#widget', 'graph')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'graph', id: 'cpu', label: '消しゴム' })
+    expect(t.$('.inspector').textContent).toContain('今の値：27.6')
+    t.change('#graph-unit', '%')
+    t.change('#graph-chart', 'bar')
+    t.change('#graph-min', '0')
+    t.change('#graph-max', '100')
+    t.change('#graph-points', '30')
+    t.change('#graph-decimals', '1')
+    t.change('#graph-stale', '2m')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'graph', id: 'cpu', label: '消しゴム', unit: '%', chart: 'bar', min: 0, max: 100,
+      points: 30, decimals: 1, stale: '2m' })
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.change('#graph-min', '200')
+    expect(t.$('.inspector').textContent).toContain('下の値は、上の値より小さくします')
+    t.change('#graph-points', '500')
+    expect(t.$('.inspector').textContent).toContain('2〜120 の整数')
+    await vi.waitFor(() => expect(t.app.validation).toBe('invalid'))
+    t.change('#graph-min', '')
+    t.change('#graph-points', '')
+    t.change('#graph-chart', '')
+    t.change('#graph-unit', '')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'graph', id: 'cpu', label: '消しゴム', max: 100, decimals: 1, stale: '2m' })
+    // 時計にすると、グラフの項目は消える
+    t.change('#widget', 'clock')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
+  })
+
   it('セルを月の表示にし、id、週の始まり、戻るまでの時間、印のカレンダーを決め、カレンダーのセルで選んだ日を見られる', async () => {
     const daemon = new FakeDaemon(sampleConfig())
     const cal = demoCalendar(new Date('2026-10-06T09:41:27+09:00'))

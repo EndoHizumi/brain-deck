@@ -63,7 +63,7 @@ export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
 export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド',
-  battery: '電池', stopwatch: 'ストップウォッチ', pomodoro: 'ポモドーロ', counter: 'カウンター', qr: 'QR コード', presence: '在席ランプ', month: '月の表示', weather: '天気' }
+  battery: '電池', stopwatch: 'ストップウォッチ', pomodoro: 'ポモドーロ', counter: 'カウンター', qr: 'QR コード', presence: '在席ランプ', month: '月の表示', weather: '天気', graph: 'グラフ' }
 // トラックパッドの項目（数）
 export const PAD_NUM_FIELDS = ['speed', 'accel', 'scroll_width', 'scroll_step', 'settle_ms', 'smooth', 'deadzone', 'min_pressure', 'tap_ms', 'tap_move', 'drag_ms'] as const
 // トラックパッドの項目
@@ -94,13 +94,17 @@ export function isTapWidget(w: WidgetKind | undefined): boolean {
 }
 // id を書けるウィジェット（text と qr は必須、ほかは省略すると種類の名前）
 export function hasStateId(w: WidgetKind | undefined): boolean {
-  return w === 'text' || w === 'qr' || w === 'month' || isTapWidget(w)
+  return w === 'text' || w === 'qr' || w === 'month' || w === 'graph' || isTapWidget(w)
 }
 // widget.go の既定の書式
 export const DEFAULT_CLOCK_FORMAT = '15:04'
 export const DEFAULT_DATE_FORMAT = '1月2日({wday})'
+// グラフの項目（数）
+export const GRAPH_NUM_FIELDS = ['min', 'max', 'points', 'decimals'] as const
+// グラフの項目
+export const GRAPH_FIELDS = ['unit', ...GRAPH_NUM_FIELDS, 'chart'] as const
 // ウィジェットにだけ書ける項目
-export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars', 'follow', 'week_start', 'work', 'break', 'states', ...PAD_FIELDS] as const
+export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars', 'follow', 'week_start', 'work', 'break', 'states', ...GRAPH_FIELDS, ...PAD_FIELDS] as const
 // ウィジェットの種類ごとの項目
 export const CLOCK_FIELDS = ['format', 'date_format', 'tz'] as const
 
@@ -180,8 +184,8 @@ export function normalizeAction(v: unknown): ActionSpec {
     const out: Record<string, unknown> = {}
     for (const [k, x] of Object.entries(v)) {
       if (x === undefined || x === null) continue
-      // 数で書いたキー（`1`）は文字にする。todo の rows とトラックパッドの項目は数のまま
-      out[k] = typeof x === 'number' && k !== 'rows' && !(PAD_NUM_FIELDS as readonly string[]).includes(k) ? String(x) : x
+      // 数で書いたキー（`1`）は文字にする。todo の rows、グラフとトラックパッドの項目は数のまま
+      out[k] = typeof x === 'number' && k !== 'rows' && !(GRAPH_NUM_FIELDS as readonly string[]).includes(k) && !(PAD_NUM_FIELDS as readonly string[]).includes(k) ? String(x) : x
     }
     return out as ActionSpec
   }

@@ -11,12 +11,13 @@ import { MONTH_MAX_OFFSET, monthFollowDay, monthLayout, monthWidgetOf, type Mont
 import { unpack565, type Image565 } from './image'
 import { blend8, weatherWidgetOf, wthLayout, type Icon, type WeatherWidget } from './weatherwidget'
 import { encodeQR } from './qr'
+import { GRAPH_LINE_W, GRAPH_NONE, graphLayout, graphSegment, graphWidgetOf, type GraphWidget } from './graphwidget'
 import {
   GAUGE_H, QR_NONE, QR_TOO_BIG, STOPWATCH_IDLE, batteryLines, colInkWarn, colQRDark, colQRDarkOld, colQRLight, colQRLitOld,
   contrastInk, pomoDurations, pomoInk, pomoText, pomodoroView, presenceStates, presenceView, qrFit, stateId, stopwatchElapsed,
   stopwatchText, type PresenceDef,
 } from './gadgetwidget'
-import type { ActionSpec, BatteryInfo, CalendarData, Config, PressStyle, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
+import type { ActionSpec, BatteryInfo, CalendarData, Config, GraphSeries, PressStyle, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
 
 export type Mode = 'base' | 'latched' | 'temp'
 type RGB = [number, number, number]
@@ -56,6 +57,10 @@ const colMonthTodayIn: RGB = [0x10, 0x14, 0x1a] // 今日の数字
 const colMonthTodaySa: RGB = [0x10, 0x50, 0xc0]
 const colMonthTodaySu: RGB = [0xd0, 0x20, 0x20]
 const colMonthMore: RGB = colSub // 点に入りきらないカレンダーがある
+// graphwidget.go
+const colGraphLine: RGB = [0x4f, 0x9d, 0xff]
+const colGraphOld: RGB = [0x34, 0x4c, 0x68] // 古いときの線
+const colGraphGrid: RGB = colTodoRule
 const JA_WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 const modeBorder: Record<Mode, RGB> = { base: colBorder, latched: [0x40, 0xc0, 0x70], temp: [0xff, 0x80, 0x20] }
 const modeBadge: Record<Mode, RGB> = { base: [0x3a, 0x48, 0x5c], latched: [0x2e, 0x9e, 0x5b], temp: [0xff, 0x80, 0x20] }
@@ -90,6 +95,7 @@ export interface CellView {
   cal?: CalWidget // カレンダーのウィジェット
   month?: MonthWidget // 月の表示のウィジェット
   weather?: WeatherWidget // 天気のウィジェット
+  graph?: GraphWidget // グラフのウィジェット
   padScroll?: number // トラックパッドのスクロールの帯の幅（0 なら帯なし）
   background?: string // セルの背景画像の id
   gadget?: Gadget // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ
@@ -135,6 +141,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'calendar') v.cal = calWidgetOf(a)
     if (a.widget === 'month') v.month = monthWidgetOf(a)
     if (a.widget === 'weather') v.weather = weatherWidgetOf(a)
+    if (a.widget === 'graph') v.graph = graphWidgetOf(a)
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
     if (['battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence'].includes(a.widget)) {
       v.gadget = { kind: a.widget as Gadget['kind'], id: stateId(a), work: pomoDurations(a).work, states: presenceStates(a.states) }
@@ -318,6 +325,7 @@ export interface PreviewParams {
   battery?: BatteryInfo | null // 電池（Brain の get_status）。省略すると読めないとき
   weather?: WeatherData | null // 天気予報（Brain の get_weather）
   weatherIcons?: (name: string) => Icon | undefined // 天気アイコン（Brain の get_weather_icon）。ないアイコンは描かない
+  graph?: Record<string, GraphSeries> // グラフの値（Brain の get_graph）
 }
 
 export interface WidgetEnv {
@@ -335,6 +343,7 @@ export interface WidgetEnv {
   battery: BatteryInfo | null
   weather: WeatherData | null
   weatherIcons: (name: string) => Icon | undefined
+  graph: Record<string, GraphSeries>
 }
 
 export interface PreviewLayout {
@@ -359,7 +368,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
     todoPage: p.todoPage ?? 0, calendar: p.calendar ?? null, calendarPage: p.calendarPage,
     month: { offset: Math.max(Math.min(p.monthOffset ?? 0, MONTH_MAX_OFFSET), -MONTH_MAX_OFFSET), sel: p.monthSelect ?? '' }, mouseOff: p.mouseOff ?? false,
     widgets: p.widgets ?? {}, qr: p.qr ?? {}, battery: p.battery ?? null, weather: p.weather ?? null,
-    weatherIcons: p.weatherIcons ?? (() => undefined) }
+    weatherIcons: p.weatherIcons ?? (() => undefined), graph: p.graph ?? {} }
   // display.go の Layout.rect と同じ。span のセルは覆う範囲全体
   const rect = (c: number, r: number): Rect => {
     const own = g.anchor[r * g.cols + c] === r * g.cols + c ? g.cells[r * g.cols + c] : null
@@ -541,6 +550,10 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
     drawWeather(font, px, area, v.weather, env)
     return
   }
+  if (v.graph) {
+    drawGraph(font, px, area, v.graph, env, ink, subInk)
+    return
+  }
   if (v.gadget) {
     drawGadget(font, px, area, v.gadget, env, ink, subInk)
     return
@@ -578,6 +591,49 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
   const y = area.y0 + Math.trunc((ah - FONT_H * ts - bh) / 2)
   drawCentered(font, px, area, y, time, ts, ink)
   if (date) drawCentered(font, px, area, y + FONT_H * ts + widgetLineGap, date, ds, subInk)
+}
+
+// drawGraph は graphwidget.go の drawGraph と同じ。area は見出しの下の範囲。
+function drawGraph(font: BitmapFont, px: Pixels, area: Rect, g: GraphWidget, env: WidgetEnv, ink: RGB, subInk: RGB): void {
+  const l = graphLayout(font, area, g, Object.hasOwn(env.graph, g.id) ? env.graph[g.id] : undefined, env.now)
+  const aw = area.x1 - area.x0
+  const ah = area.y1 - area.y0
+  if (l.none) {
+    const s = Math.min(fitScale(font, [GRAPH_NONE], aw, ah), 2)
+    drawCentered(font, px, area, area.y0 + Math.trunc((ah - FONT_H * s) / 2), GRAPH_NONE, s, subInk)
+    return
+  }
+  let valC = ink
+  let lineC = colGraphLine
+  if (l.stale) {
+    valC = sameRGB(ink, colText) ? colTodoDone : ink // 押したとき（fill）は、押したときの色
+    lineC = colGraphOld
+  }
+  const vb = l.valueBox
+  const subH = l.sub ? FONT_H * l.subS + widgetLineGap : 0
+  const y = vb.y0 + Math.trunc((vb.y1 - vb.y0 - FONT_H * l.valueS - subH) / 2)
+  drawCentered(font, px, vb, y, l.value, l.valueS, valC)
+  if (l.sub) drawCentered(font, px, vb, y + FONT_H * l.valueS + widgetLineGap, l.sub, l.subS, colUnsynced)
+  const p = l.plot
+  if (!p) return
+  px.fill({ x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y0 + 1 }, colGraphGrid)
+  px.fill({ x0: p.x0, y0: p.y1 - 1, x1: p.x1, y1: p.y1 }, colGraphGrid)
+  if (l.hiLabel) {
+    px.text(font, l.labelX, p.y0, l.hiLabel, 1, subInk, area)
+    px.text(font, l.labelX, p.y1 - FONT_H, l.loLabel, 1, subInk, area)
+  }
+  if (g.chart === 'bar') {
+    l.xs.forEach((x, i) => {
+      const y0 = Math.min(l.ys[i], l.barBase)
+      let y1 = Math.max(l.ys[i], l.barBase)
+      if (y1 === y0) y1 = y0 + 1
+      px.fill(intersect({ x0: x, y0, x1: l.barR[i], y1 }, p), lineC)
+    })
+    return
+  }
+  const dot = (x: number, y: number) => px.fill({ x0: x, y0: y, x1: x + GRAPH_LINE_W, y1: y + GRAPH_LINE_W }, lineC)
+  dot(l.xs[0], l.ys[0])
+  for (let i = 1; i < l.xs.length; i++) graphSegment(l.xs[i - 1], l.ys[i - 1], l.xs[i], l.ys[i], dot)
 }
 
 // widgetFill は gadgetwidget.go の widgetFill と同じ。セルの塗りをウィジェットが決めるとき、その色。

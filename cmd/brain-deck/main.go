@@ -71,6 +71,8 @@ const usage = `使い方：
   brain-deck qr <id> -                文字列を標準入力から読む。qr <id> --clear で消す。qr --list で一覧
   brain-deck presence                 在席ランプ（widget: presence）の今の状態と、選べる状態
   brain-deck presence <状態>|next|prev [--id <id>]   在席ランプの状態を変える（id を省略すると presence）
+  brain-deck graph <id> <値> [<id> <値>...]   グラフのセル（widget: graph）に値を足す（Brain は id ごとに新しい 120 個を覚える）
+  brain-deck graph <id> --clear       グラフの値を消す。graph --list [--json] で一覧
   brain-deck todo [list] [--json]     Todo の一覧（番号は Brain の画面と同じ順）
   brain-deck todo add <項目> [--top]  Todo を足す（- なら標準入力の 1 行ごとに足す。--top で先頭に）
   brain-deck todo done <番号|ID>...   完了にする（undo で未完了に戻す）
@@ -120,7 +122,7 @@ const usage = `使い方：
   --port <パス>      ポートを指定する（例：/dev/serial/by-id/usb-SHARP_Brain_0123456789-if05、/dev/cu.usbmodem01234567895）。
                      環境変数 BRAIN_DECK_PORT でも指定できる。省略すると探す
   --timeout <時間>   全体の時間の上限（既定 5s）
-  --no-time-sync     text、qr、calendar sync、weather sync の前に、Brain の時刻を合わせない
+  --no-time-sync     text、qr、graph、calendar sync、weather sync の前に、Brain の時刻を合わせない
   --id <id>          presence で、在席ランプの id（省略すると presence）
   --config <パス>    calendar sync、weather sync の設定ファイル（既定 ~/.config/brain-deck/calendars.yaml、weather.yaml）
   --city <ID>        weather sync で、地点（地点定義表の一次細分区域の id）
@@ -196,7 +198,7 @@ func parseArgs(argv []string) (*options, error) {
 			o.args = append(o.args, argv[i+1:]...)
 			break
 		}
-		if !strings.HasPrefix(a, "-") || a == "-" {
+		if !strings.HasPrefix(a, "-") || a == "-" || isNumber(a) { // -5 などの数はふつうの引数（graph の値）
 			o.args = append(o.args, a)
 			continue
 		}
@@ -295,6 +297,12 @@ func parseArgs(argv []string) (*options, error) {
 	return o, nil
 }
 
+// isNumber は、a が数（-5、-1.5e3 など）か。
+func isNumber(a string) bool {
+	_, err := strconv.ParseFloat(a, 64)
+	return err == nil
+}
+
 // parseTTL は Go の時間の書き方（90s、10m、1h30m）に加えて、日数（2d）を受け付ける。
 func parseTTL(s string) (time.Duration, error) {
 	if d, ok := strings.CutSuffix(s, "d"); ok {
@@ -330,8 +338,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	hint := "（使い方は brain-deck --help）"
-	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && (o.args[0] == "calendar" || o.args[0] == "images" || o.args[0] == "weather")) {
-		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo、calendar、images、weather で使います"+hint)
+	if (o.top || o.json) && o.args[0] != "todo" && !(o.json && (o.args[0] == "calendar" || o.args[0] == "images" || o.args[0] == "weather" || o.args[0] == "graph")) {
+		fmt.Fprintln(stderr, "brain-deck: --top は todo で、--json は todo、calendar、images、weather、graph で使います"+hint)
 		return exitUsage
 	}
 	if o.id != "" && o.args[0] != "presence" {
@@ -370,6 +378,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = textCommand(o, stdin, kindQR)
 	case "presence":
 		cmd, err = presenceCommand(o)
+	case "graph":
+		cmd, err = graphCommand(o)
 	case "todo":
 		cmd, err = todoCommand(o, stdin)
 	case "calendar":
