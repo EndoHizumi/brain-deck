@@ -5,7 +5,7 @@
 | フェーズ | 状態 | 本番への反映 |
 | --- | --- | --- |
 | R2 RTC の書き戻し | 終わり（8fdc3c3） | 反映した（config put、01:34） |
-| G フォトフレーム | まだ | |
+| G フォトフレーム | 終わり | デーモンを反映した（9ecd42e28a7c）。設定には入れない |
 | H ペンタブレットと手書きメモ | まだ | |
 | I 読み物 | まだ | |
 | P3 同期 | まだ | |
@@ -13,14 +13,15 @@
 
 ## 次にすること
 
-- フェーズ G から始める。
+- フェーズ H（ペンタブレットと手書きメモ）から始める。
 
 ## 本番の状態（最後に確かめたとき）
 
-- デーモン 22c9aaa3a9d2（`.prev` 45ca9fc2f32c）。設定は config/current.yaml（8fdc3c3、clock.rtc: write）。
+- デーモン 9ecd42e28a7c（`.prev` 22c9aaa3a9d2）。設定は config/current.yaml（8fdc3c3、clock.rtc: write）。
 - 本番に反映しない、と決めたフェーズ：なし。
 
 ## 再開するときの注意
 
 - go は `../toolchain/go/bin`（PATH にない）。
 - 試験のユニットは時間制限付き、`-data-dir` は /tmp の下。試験の前後で本番の lefthand.service を確かめる。
+- 試験の手順：/tmp/prodcmp.sh（本番の画面と -render-png の比較）、/tmp/brainreq.py（1 つのリクエストを送る）は /tmp にあるだけ（セッションが切れたら作り直す）。
