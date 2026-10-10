@@ -9,9 +9,11 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -523,6 +525,37 @@ type PhotoFrame struct {
 	order []string
 	pos   int
 	cur   string
+	// fitted は、向きに合わせて縮めた写真（帯を入れたもの）。縮めるのは重いので、新しい 2 枚だけを覚えておく
+	fitted []fittedPhoto
+}
+
+type fittedPhoto struct {
+	key string
+	img *Image
+}
+
+// fitCached は、写真 id を w×h の画面に合わせたもの。縮めたものは覚えておく。
+func (f *PhotoFrame) fitCached(id string, img *Image, w, h int) *Image {
+	if img.W == w && img.H == h {
+		return img
+	}
+	key := fmt.Sprintf("%s %dx%d", id, w, h)
+	f.mu.Lock()
+	for _, c := range f.fitted {
+		if c.key == key {
+			f.mu.Unlock()
+			return c.img
+		}
+	}
+	f.mu.Unlock()
+	out := photoForScreen(img, w, h)
+	f.mu.Lock()
+	f.fitted = append(f.fitted, fittedPhoto{key, out})
+	if len(f.fitted) > 2 {
+		f.fitted = f.fitted[1:]
+	}
+	f.mu.Unlock()
+	return out
 }
 
 // NewPhotoFrame は、store の写真を出す PhotoFrame を作る。
@@ -629,18 +662,22 @@ func (f *PhotoFrame) Stop() {
 	if f == nil {
 		return
 	}
+	// SetPhoto は待たずに返る。ロックを持ったまま呼び、run が読み終えた写真を、やめたあとに出さないようにする
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	was := f.on
 	f.on = false
 	f.gen++
-	disp := f.disp
-	f.mu.Unlock()
-	if was && disp != nil {
-		disp.SetPhoto(nil)
+	if was && f.disp != nil {
+		f.disp.SetPhoto(nil)
 	}
 }
 
 func (f *PhotoFrame) run(gen uint64) {
+	// 写真を読んで縮めるのは重い（ARMv5 で 0.5〜0.7 秒）ので、入力と描画の goroutine を先に走らせる
+	runtime.LockOSThread()
+	syscall.Setpriority(syscall.PRIO_PROCESS, syscall.Gettid(), 15)
+	w0, h0 := f.size()
 	for {
 		f.mu.Lock()
 		if f.gen != gen || !f.on {
@@ -671,23 +708,26 @@ func (f *PhotoFrame) run(gen uint64) {
 		disp := f.disp
 		f.mu.Unlock()
 		w, h := f.size()
+		if w != w0 || h != h0 {
+			return // 画面の向きが変わった（明るくして写真をやめるので、ここでは何もしない）
+		}
 		t := time.Now()
 		img, err := f.store.load(id)
 		if err != nil {
 			log.Printf("photos: %s: %v", id, err)
 		} else {
-			img = photoForScreen(img, w, h)
+			img = f.fitCached(id, img, w, h)
 			f.mu.Lock()
 			ok := f.gen == gen && f.on
 			if ok {
 				f.cur = id
+				if disp != nil {
+					disp.SetPhoto(img) // Stop と同じロックの中で（やめたあとに出さない）
+				}
 			}
 			f.mu.Unlock()
 			if !ok {
 				return
-			}
-			if disp != nil {
-				disp.SetPhoto(img)
 			}
 			vlogf("photos: showing %s (%dx%d) in %v", id, w, h, time.Since(t))
 		}

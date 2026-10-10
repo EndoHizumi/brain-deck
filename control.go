@@ -542,6 +542,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		if !okr {
 			return errResp(id, errBadRequest, `"mode" must be next, 0, 90, 180 or 270`, nil)
 		}
+		c.dim.Wake() // 写真を出していたらやめる（写真は今の向きの画面に描いている）
 		c.engine.Rotate(r)
 		return ok(map[string]any{"status": c.engine.Status()})
 	case "set_usb_mode":
