@@ -895,6 +895,11 @@ func status(c *Client) (string, error) {
 		Term   *termInfo `json:"terminal"`
 		Bat    *battery  `json:"battery"`
 		Light  *dimInfo  `json:"backlight"`
+		Photo  *struct {
+			Available bool   `json:"available"`
+			Count     int    `json:"count"`
+			Showing   string `json:"showing"`
+		} `json:"photo"`
 		RTC    *rtcInfo  `json:"rtc"`
 		Link   *linkInfo `json:"link"`
 	}
@@ -930,6 +935,13 @@ func status(c *Client) (string, error) {
 	}
 	if st.Light != nil {
 		out += "\n画面の明るさ\t" + st.Light.describe()
+	}
+	if st.Photo != nil && st.Photo.Available {
+		p := fmt.Sprintf("%d 枚", st.Photo.Count)
+		if st.Photo.Showing != "" {
+			p += "（今 " + st.Photo.Showing + " を出している）"
+		}
+		out += "\n写真\t" + p
 	}
 	return out, nil
 }
@@ -977,7 +989,7 @@ func (d dimInfo) describe() string {
 	if !d.Enabled {
 		return "自動減光なし（設定の backlight）"
 	}
-	return fmt.Sprintf("%s（%d/%d）", map[string]string{"bright": "明るい", "dim": "暗くしている", "off": "消している"}[d.State], d.Level, d.Max)
+	return fmt.Sprintf("%s（%d/%d）", map[string]string{"bright": "明るい", "dim": "暗くしている", "off": "消している", "photo": "写真を出している"}[d.State], d.Level, d.Max)
 }
 
 // termInfo は get_status の terminal（lefthand の termmode.go の TermInfo）。
