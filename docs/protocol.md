@@ -60,7 +60,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
 - `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱い、`get_qr`・`get_widgets` があるときだけ QR コードとストップウォッチなどの状態を読む。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
-- `upload_kinds` は、`upload_begin` で受け取れる種類（`update`、`image`）。この項目がなければ、`upload_*` がない版。
+- `upload_kinds` は、`upload_begin` で受け取れる種類（`update`、`image`、`weather_icon`）。この項目がなければ、`upload_*` がない版。
 
 ### get_config
 
@@ -400,6 +400,73 @@ Todo のセル（`{ widget: todo }`）の項目を読み書きする。項目は
 
 Brain にある予定を返す。形は `set_calendar` の引数と同じ（`error` を含む）。一度も受け取っていなければ `rev` は 0、`calendars` は空。`shown` は、今の設定にカレンダーのセルがあるか。設定 GUI は、接続したときに読んでプレビューに描く。
 
+### set_weather
+
+天気のセル（`{ widget: weather }`）の予報を差し替える。PC の `brain-deck weather sync` が、天気予報 API（livedoor 天気互換。データの元は気象庁）から取ってきて送る。
+
+```json
+→ {"id":32,"cmd":"set_weather","source":"brain-deck","weather":{"area":"東京都 東京","office":"気象庁",
+   "public_time":"2026-10-05T20:00:00Z","fetched_at":"2026-10-06T00:05:00Z","days":[
+     {"date":"2026-10-06","telop":"晴時々曇","icon":"101","max":26,"min":null,"rain":[null,10,30,60]},
+     {"date":"2026-10-07","telop":"曇のち一時雨","icon":"212","max":22,"min":17,"rain":[20,40,70,50]}]}}
+← {"id":32,"ok":true,"result":{"rev":3,"kept":false,"shown":true,"icon_boxes":[[183,122],[87,58]],
+   "icons_missing":[{"name":"212-183x122","icon":"212","w":183,"h":122}]}}
+→ {"id":33,"cmd":"set_weather","weather":{"error":"取得できません（HTTP 500）"}}
+← {"id":33,"ok":true,"result":{"rev":4,"kept":true,"shown":true,"icon_boxes":[...],"icons_missing":[]}}
+```
+
+| 引数（`weather` の中） | 内容 |
+| --- | --- |
+| `days` | 日ごとの予報（7 日まで）。`date`（YYYY-MM-DD。重ならない）、`telop`（天気の文。40 文字まで）、`icon`（気象庁の天気アイコンの番号。3 桁）、`max`・`min`（℃。-99〜99。取れなければ `null`）、`rain`（0〜6、6〜12、12〜18、18〜24 時の降水確率。0〜100。取れなければ `null`） |
+| `area`、`office` | 地点（「東京都 東京」）と、発表した気象台（40 文字まで） |
+| `public_time` | 予報の発表の時刻（RFC 3339）。画面の「5時発表」に出る |
+| `fetched_at` | 予報を取ってきた時刻（PC の時刻）。画面の「更新」に出る。省略すると Brain が受け取った時刻 |
+| `error` | 取得に失敗したときの説明（200 文字まで）。`days` が空なら、Brain は前の予報（地点、発表、`fetched_at` も）を残し、失敗と時刻だけを覚える（結果の `kept`）。画面には「失敗」と出る |
+
+| 結果 | 内容 |
+| --- | --- |
+| `kept` | 失敗だけを知らせて、前の予報を残した |
+| `shown` | 今の設定に天気のセルがあるか |
+| `icon_boxes` | 今の設定の天気のセルで使うアイコンの箱の大きさ（[幅, 高さ]、大きい順）。箱の大きさはセルの大きさだけで決まる |
+| `icons_missing` | 予報の天気（`days` の `icon`）と `icon_boxes` の組のうち、まだ Brain にないアイコン。PC は、それぞれを箱に収めた大きさで作り、`upload_*`（kind: `weather_icon`、name: `<番号>-<幅>x<高さ>`）で送る |
+
+- **今日の決め方**：Brain は予報を日付で持ち、Brain の日付と同じ日付のものを今日として出す（API が 0 時〜5 時に返す、前の日の発表の「明日」も、日付で今日になる）。
+- **保存**：`/var/lib/lefthand/weather.json` に書く。返事は書き込みを待たない。
+- **誤り**：`days` も `error` もない、日付の形や重なり、`icon` の形、範囲の外の数、制御文字などは `bad_request`。何も変えない。
+
+### get_weather
+
+```json
+→ {"id":34,"cmd":"get_weather"}
+← {"id":34,"ok":true,"result":{"rev":3,"received_at":"...","area":"東京都 東京","public_time":"...","fetched_at":"...","days":[...],
+   "shown":true,"icon_boxes":[[183,122],[87,58]],"icons":[{"name":"101-183x122","w":163,"h":122,"bytes":59686,"added":"..."}],
+   "icons_bytes":59686,"icons_limit":2097152,"icons_missing":[...]}}
+```
+
+Brain にある予報（形は `set_weather` の `weather` と同じ。`error_at` を含む）と、アイコンの一覧。一度も受け取っていなければ `rev` は 0、`days` は空。設定 GUI は、接続したときに読んでプレビューに描く。
+
+### get_weather_icon
+
+```json
+→ {"id":35,"cmd":"get_weather_icon","name":"101-87x58","offset":0}
+← {"id":35,"ok":true,"result":{"name":"101-87x58","offset":0,"bytes":13406,"data":"TEhBMU0AOgA…"}}
+```
+
+アイコンのファイル（下の `.lha`）の `offset` から `length`（既定と上限は 98,304 バイト）を base64 で返す。`bytes` はファイル全体の大きさ。設定 GUI のプレビューが使う。ないアイコンは `not_found`。
+
+**アイコンのファイル**（`/var/lib/lefthand/weather-icons/<番号>-<幅>x<高さ>.lha`）：
+
+```
+0..3   "LHA1"
+4..5   幅（リトルエンディアンの uint16）
+6..7   高さ（同）
+8..    画素。左上から行の順に、1 画素 2 バイトの RGB565（リトルエンディアン）
+..     そのあとに、1 画素 1 バイトの不透明度（0 透明 〜 255 不透明）
+```
+
+- 画像は名前の箱以下の大きさ（縦横比を保って箱に収めたもの）。描くときは箱の中央に置き、不透明度で下の色と混ぜる（下の色を 8 ビットに戻して `(s·a + d·(255−a) + 127) / 255`）。
+- 1 つ 460,808 バイト（480×320）まで。合計 2 MiB まで。超えたら、今の設定で使わない大きさのものから古い順に消し、それでも足りなければ `quota_exceeded`。SD カードの空きは背景画像と同じく確かめる（`no_space`）。
+
 ### set_qr、get_qr
 
 QR コードのセル（`{ widget: qr, id: share }`）の中身を書き換える、読む。引数と結果は `set_text`、`get_text` と同じ（`name`、`text`、`ttl_sec`、`clear`、`source`。`style` は使わない）。
@@ -537,6 +604,7 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 | --- | --- | --- |
 | `update` | 24 MiB | 確かめ終えた更新（下の `update_*`） |
 | `image` | 768,008 バイト | `{"id":"<画像の id>"}`。`image_begin` と違い、幅と高さは受け取ったファイルのヘッダから読む。合計の上限と SD カードの空きは同じ |
+| `weather_icon` | 460,808 バイト | `{"name":"101-87x58","w":77,"h":58,"bytes":13406}`（消したものがあれば `removed`）。`name` は `<番号>-<幅>x<高さ>`（箱の大きさ）。形は上の `get_weather_icon` の `.lha` |
 
 - **順番**：`offset` は、それまでに受け取った大きさと同じでなければ `bad_request`（受け取りは続く）。言った大きさを超えたら捨てる。
 - **確かめ**：`upload_end` で大きさと SHA-256 を確かめる。違えば `hash_mismatch` で、一時ファイルを消す。

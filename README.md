@@ -7,10 +7,10 @@ USB HID のキーボードとマウスとして PC に送る。タッチパネ�
 - **キーボード**：本体のキーごとに、PC に送るキーやショートカットを割り当てる。例：A キーで Ctrl+Z。
 - **タッチパネル**：画面を格子に分け、セルごとにキーを割り当てる。セルの枠とラベルが画面に表示され、押しているセルは枠が黄色く光る。
 - **トラックパッド**：タッチパネルのセルを、マウスのトラックパッドにできる（`widget: trackpad`）。指でカーソルを動かし、タップでクリック、右端の帯でスクロール。キーやセルにマウスのボタンも割り当てられる（`mouse: left`）。Android のスマホでもそのまま使える。起動したときはブートキーボード（BIOS でも使える）で、マウスを使うときだけ USB の形を切り替える（`usb_mode`）。
-- **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定、月の表示（卓上カレンダー。祝日を赤く、予定のある日に点）、電池の残り、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
+- **ウィジェット**：タッチのセルに、キーの代わりに時計、テキスト、Todo、カレンダーの予定、月の表示（卓上カレンダー。祝日を赤く、予定のある日に点）、天気予報（今日と明日。気象庁の天気アイコン、気温、降水確率）、電池の残り、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプを表示できる。セルは複数の格子にまたがる大きさにもできる（`span`）。
 - **自動減光**：しばらく触らなければ画面を暗くし、さらに時間がたったら消す（`backlight`）。暗いときのタッチは明るくするだけで、セルは押さない。本体キーは暗いときもそのまま PC に送る。
 - **背景画像**：セルごとの背景と、レイヤーごとの壁紙に、好きな画像を置ける。画像の切り抜きと変換は設定 GUI（PC）で行い、Brain は変換済みの画像を写すだけ。
-- **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定を送ったり（`brain-deck calendar sync`）、URL を QR コードにして出したり（`brain-deck qr share "https://..."`）、在席ランプを変えたり（`brain-deck presence 会議中`）、Brain の時刻を合わせたりする。
+- **brain-deck**：PC のコマンド。ビルドの結果などのテキストを Brain の画面に出したり（`brain-deck text build "ビルド成功" --style ok`）、Todo を足したり、カレンダー（ICS）の予定や天気予報を送ったり（`brain-deck calendar sync`、`brain-deck weather sync`）、URL を QR コードにして出したり（`brain-deck qr share "https://..."`）、在席ランプを変えたり（`brain-deck presence 会議中`）、Brain の時刻を合わせたりする。
 - **端末モード**：Brain の画面とキーボードを、USB でつないだ PC のコンソールの端末にする。画面やキーボードのない PC に、Brain からログインして操作できる（PC の OS が起動したあとだけ。BIOS や GRUB は見えない）。PC 側の設定が一度だけ要る。
 - **時刻合わせ**：Brain には電池で動く時計（RTC）がないので、設定 GUI が接続したときに PC の時刻に合わせる。
 - **レイヤー**：キーとタッチの割り当てを、まとめて切り替えられる。押しているあいだだけ、押すたびに、次の 1 キーだけ、の切り替え方がある。今のレイヤー名は画面の右上に出る。
@@ -1041,6 +1041,84 @@ macOS の launchd（`~/Library/LaunchAgents/local.brain-deck.calendar.plist`。`
 - **時刻合わせ**：`calendar sync` は時刻も合わせるので、別に `time sync` の cron を置かなくてよい。
 - **間隔**：短くしても Brain の負担は小さい（受け取って描き直すだけ）。ICS の提供元によっては、短い間隔での取得を制限することがある（Google は数時間遅れることがある）。15 分〜1 時間を勧める。
 
+### 天気
+
+天気予報 API（livedoor 天気互換、https://weather.tsukumijima.net/ 。データの元は気象庁）から予報を取ってきて、Brain の天気のセル（`widget: weather`）に送る。Brain はインターネットに出ない。
+
+```sh
+brain-deck weather sync                    # ~/.config/brain-deck/weather.yaml の地点の予報を送る（まだ Brain にない天気アイコンも）
+brain-deck weather sync --dry-run          # 取ってきた予報を表示するだけ（Brain には送らない）
+brain-deck weather sync --city <ID>        # 設定ファイルを使わず、地点を直接
+brain-deck weather                         # Brain にある予報と、天気アイコンの数
+```
+
+```
+$ brain-deck weather sync
+東京都 東京 の予報を送りました（10-10 晴れ、10-11 晴れ）。アイコン 4 個を送りました
+Brain の時刻は合っています（ずれ 3ms）
+$ brain-deck weather sync --dry-run
+東京都 東京（10/09 17:00 気象庁発表）
+10/10(土) 100 晴れ  最高 26℃ 最低 16℃  降水 0%/0%/0%/0%
+10/11(日) 100 晴れ  最高 27℃ 最低 16℃  降水 10%/10%/10%/10%
+10/12(月) 201 曇時々晴  最高 25℃ 最低 16℃  降水 30%/30%/30%/30%
+取得 10/10 03:39
+（Brain には送っていません）
+```
+
+**設定ファイル**（`~/.config/brain-deck/weather.yaml`。calendars.yaml と同じ場所。リポジトリには入れない）
+
+```yaml
+# 地点定義表 https://weather.tsukumijima.net/primary_area.xml の、一次細分区域（city タグ）の id（6 桁）
+city: "<一次細分区域の ID>"
+```
+
+- **地点の ID の調べ方**：地点定義表（XML）をブラウザで開き、都道府県（`pref`）の中の、住んでいる地域の `<city title="…" id="……">` の `id` を写す。県庁所在地のほか、県内のいくつかの地域（一次細分区域）に分かれている。
+- **API のお願いを守る**：brain-deck は独自の User-Agent（`brain-deck/<版> (+https://github.com/endohizumi/brain-deck)`）を付ける。続けてアクセスするときは 0.6 秒あける（前のアクセスの時刻を `~/.cache/brain-deck/` に残すので、brain-deck を続けて実行しても間があく）。予報の発表は 1 日に数回（5 時、11 時、17 時ごろ）なので、定期実行は 1 時間に 1 回にする（下のタイマーの例）。
+- **取れなかったとき**：API は、正確さや続くことが保証されていない（気象庁のサイトの非公開の API から作られている）。取れなかったときは、Brain に失敗だけを知らせ、Brain は前の予報を残す。画面の最終更新の行が橙色になり「失敗」と出る。終了コードは 7。
+- **時刻**：送る前に、Brain の時刻を PC に合わせる（`--no-time-sync` で合わせない）。「今日」は Brain の日付で決める。
+
+**画面に出すもの**（大きさに応じて変える。書き方は [docs/config.md](docs/config.md) の「天気（weather）」）
+
+| セルの大きさ（4×3 の格子） | 出すもの |
+| --- | --- |
+| 1×1 | 今日：見出し（今日 10/10(土)）、アイコン、天気、最高/最低気温、6 時間ごとの降水確率 |
+| 2×1 | 今日と明日を並べる（幅が 288 ドット以上あれば明日も） |
+| 2×2 など縦長 | アイコンの下に天気と気温、降水確率には時間帯の見出し（0-6、6-12、12-18、18-24）も |
+| 低いセル（4×8 の格子の 1 行など） | 1 行に、アイコン、見出し、天気、気温 |
+
+- **最終更新**：いちばん下に「更新 9:05 5時発表 出典:気象庁」と小さく出す。最終更新が 3 時間（`stale` で変える）より古い、最後の取得に失敗した、Brain の時刻を合わせていないときは橙色。幅が足りなければ、発表の時刻、「出典:」の順に省く。
+- **取れない値**：今日の最低気温は、予報にない（null）。17 時の発表のあとは、今日の最高気温もない。過ぎた時間帯の降水確率も「--%」で来る。どれも「--」と出す。今日の過ぎた時間帯の降水確率は、Brain の時刻で薄く描く。
+- **0 時〜5 時**：API は、前の日の発表の「明日」を「今日」として返す。Brain は予報を日付で持ち、今日の日付のものを今日として出す。このあいだは、前の日に発表した予報なので、最低気温と 0〜6 時の降水確率も出る。発表の時刻に日付が付く（「10/9 17時発表」）ので、前の日の発表だと分かる。日付が変わっても sync していなければ、前に送った予報の「明日」を今日として出し、「古い」と出す。
+- **予報のない日**：明日の予報がなければ「データなし」。一度も受け取っていなければ「天気を受け取っていません」、取得に失敗しただけなら「天気を取得できません」。
+
+**天気アイコン**
+
+- API が返す気象庁の天気アイコン（SVG）を、PC の brain-deck が、セルに合う大きさの透明度付きの RGB565 にして送る（SVG を描き、Floyd–Steinberg のディザリングで減色する。背景画像と同じ考え方）。Brain は受け取ったものを `/var/lib/lefthand/weather-icons/` に残し、描くときにセルの背景に重ねるだけ。
+- アイコンは天気の種類（100 番 晴れ、201 番 曇時々晴 など）とセルの大きさごとに 1 つ。Brain は sync のたびに、まだないもの（今の設定のセルの大きさ × 予報の天気）を知らせ、brain-deck はそれだけを送る。SVG は PC のキャッシュ（`~/.cache/brain-deck/weather-icons/`、macOS は `~/Library/Caches/brain-deck/`）に残し、2 回目からは取りに行かない。
+- Brain のアイコンの合計は 2 MiB まで。超えたら、今の設定で使わない大きさのものから古い順に消す。SD カードの空きが少ないとき（背景画像と同じく 64 MiB かファイルシステムの 10%）は受け取らない。
+- **セルの大きさを変えたら**：設定を保存してから `brain-deck weather sync` を実行する（次のタイマーでもよい）。それまでは、アイコンなしで文字だけを出す。設定 GUI のプレビューも同じ。
+- **アイコンの絵はリポジトリに入れていない**：テストのアイコン（`gui/test/fixtures/weather-icons/`）は、テスト用に描いた円と帯。
+
+**出典と利用条件**
+
+- 気象庁のサイトのコンテンツ（予報、天気アイコン）は、「公共データ利用規約（第 1.0 版）」に準拠した条件で使える（https://www.jma.go.jp/jma/kishou/info/coment.html ）。出典の記載と、加工したときは加工したことの記載が要る。
+- 出典：気象庁ホームページ（https://www.jma.go.jp/bosai/forecast/ ）の天気予報。天気アイコンは、気象庁ホームページの天気予報の天気アイコン（https://www.jma.go.jp/bosai/forecast/img/ ）を加工して作成（縮小、RGB565 への減色、ディザリング）。
+- 予報は、天気予報 API（livedoor 天気互換、(C) 天気予報 API（livedoor 天気互換）、https://weather.tsukumijima.net/ ）を通して取得している。API の作者は気象庁ではなく、この API も brain-deck も、気象庁や国が作ったものではない。
+- 画面には「出典:気象庁」（幅が足りなければ「気象庁」）と出す。とても狭いセルでは、最終更新の時刻を優先して省くことがあるので、そのときは README のこの記載が出典の表示になる。
+
+**定期的に送る**（systemd のユーザータイマー。[contrib/systemd/](contrib/systemd/) にある）
+
+```sh
+cp contrib/systemd/brain-deck-weather.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now brain-deck-weather.timer
+systemctl --user list-timers brain-deck-weather.timer   # 次に動く時刻
+journalctl --user -u brain-deck-weather                  # 結果を見る
+```
+
+- タイマーは毎時 17 分に、さらに 0〜5 分ずらして動く（毎時 0 分にアクセスが集まらないように）。Brain がない（終了コード 3）、設定 GUI の接続中（4）は失敗にしない。予報を取れなかった（7）は失敗として残る（`systemctl --user status brain-deck-weather` で分かる）。
+- cron なら `17 * * * * $HOME/.local/bin/brain-deck -q weather sync`。macOS の launchd は、カレンダーの例の `calendar` を `weather` に、`StartInterval` を `3600` にする。
+
 ### 終了コード
 
 | コード | 意味 | 例 |
@@ -1052,12 +1130,12 @@ macOS の launchd（`~/Library/LaunchAgents/local.brain-deck.calendar.plist`。`
 | 4 | 設定 GUI が接続中（ほかのプログラムがポートを使っている） | 「設定 GUI が接続中です（chromium (pid 1234) が … を開いています）」。ほかの brain-deck が 5 秒以内に終わらないときも |
 | 5 | Brain がエラーを返した | `--style` の誤り、古い lefthand（`set_text` がない）、Todo を読んだあとに Brain で変わった |
 | 6 | ポートを開く権限がない | Linux で dialout に入っていない |
-| 7 | 予定の取得に失敗した（`calendar sync`） | ICS の URL が 404、ネットワークにつながらない。取れたカレンダーは送っている |
+| 7 | 予定や予報の取得に失敗した（`calendar sync`、`weather sync`） | ICS の URL が 404、ネットワークにつながらない、天気予報 API が 500。取れたカレンダーは送っている。天気は Brain に失敗を知らせ、Brain は前の予報を残す |
 | 8 | 更新や再起動に失敗した（`update`、`restart`、`config put --restart`、`reboot`） | 新しい lefthand が起動しなかった（Brain は前の版に戻した）、`reboot` で Brain のポートが消えない |
 
 `exec` は、実行したコマンドの終了コードを返す（タイルに書けなくても）。ほかに、コマンドが `--limit` の時間内に終わらなかったら 124（`timeout` コマンドと同じ）、同じ `--result` の id で実行中なら 75。使い方の誤りは 2。
 
-- **待つ時間**：Brain との通信は、全体で 5 秒（`--timeout` で変える）。`calendar sync` の予定の取得は、これとは別に 30 秒まで（`--fetch-timeout`）。Brain が見つからない、GUI が接続中のときは、すぐに終わる。ビルドのスクリプトから呼んでも止まらない。
+- **待つ時間**：Brain との通信は、全体で 5 秒（`--timeout` で変える）。`calendar sync` の予定の取得と、`weather sync` の予報とアイコンの取得は、これとは別に 30 秒まで（`--fetch-timeout`）。Brain が見つからない、GUI が接続中のときは、すぐに終わる。ビルドのスクリプトから呼んでも止まらない。
 - **出力**：成功したときは 1 行を標準出力に、エラーは標準エラーに出す。`-q` で成功の出力を消す。`-v` で通信の中身を出す。
 
 ### ポートの探し方
@@ -1659,8 +1737,11 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | qr.go | QR コードの符号化（Project Nayuki の手順をバイトモードに絞ったもの。gui/src/qr.ts も同じ） |
 | battery.go | 電池の状態（power_supply か、i.MX28 の LRADC の電圧） |
 | backlight.go | 自動減光（設定の backlight）。暗いときのタッチを捨てる、終わるときに戻す |
+| weather.go | 天気予報（set_weather、get_weather の中身）と、その保存。取得の失敗のときは前の予報を残す |
+| weathericon.go | 天気アイコンの置き場所（.lha、透明度付きの RGB565）、受け取り（upload_* の weather_icon）、上限、重ねて描く処理 |
+| weatherwidget.go | 天気のセルの配置（描くものの並び）、最終更新の行、アイコンの箱の大きさ、描画 |
 | image.go | 背景画像の置き場所、受け取り（transfer.go を使う）、一覧、削除、読み込みとキャッシュ、先読み |
-| transfer.go | 分割して送られる大きなファイルの受け取り（SHA-256 の確認、一時ファイル、順番、時間切れ）。種類を選べる upload_*（update、image） |
+| transfer.go | 分割して送られる大きなファイルの受け取り（SHA-256 の確認、一時ファイル、順番、時間切れ）。種類を選べる upload_*（update、image、weather_icon） |
 | update.go | 更新のファイルの展開と確かめ（-version、-check-gadget、-check、GADGET_CHECK）、係の起動、restart、power、get_logs、起動の知らせ（-ready-file） |
 | updatehelper.go | 入れ替えの係（-update-apply）：止める、.prev に残して入れ替える、gadget-setup.sh、起動、確認を待つ、戻す |
 | todo.go | Todo の項目（get_todo、todo_* のコマンドの中身）と、その保存、変わったことの通知 |
@@ -1697,7 +1778,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | tools/record-touch.sh | トラックパッドの調整のために、動きごとにタッチを記録する（Brain で実行） |
 | tools/fbshot.sh | Brain の画面のスクリーンショットを、PC に PNG で保存する（PC で実行） |
 | testdata/touch/ | Brain で記録したタッチ（テストで再生する） |
-| contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごとに実行する、ユーザー単位の systemd のタイマー |
+| contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごと、`brain-deck weather sync` を 1 時間ごとに実行する、ユーザー単位の systemd のタイマー |
+| config/weather-example.yaml | 天気のウィジェットの例（widgets-example.yaml に「天気」と「天気(小)」のレイヤーを足したもの） |
+| cmd/brain-deck/weather.go | PC の `brain-deck weather`：天気予報 API からの取得（User-Agent、間をあける）、天気アイコンの SVG の取得とキャッシュ、変換、送信 |
+| cmd/brain-deck/svg.go、svgfilter.go | PC の brain-deck の SVG の描画（天気アイコン用。道筋、線、グラデーション、埋め込みの PNG、フィルター） |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
 | docs/kernel-build.md | HID と ACM を有効にしたカーネルのビルドと、SD カードへの差し替え |
@@ -1759,7 +1843,20 @@ TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-base-pressed.png -render
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-base-pressed-fill.png -render-press-style fill -render-pressed "0,0 1,1" -render-images $I $B
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-menu.png -render-layer menu -render-pressed "1,1" -render-images $I $B
 TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/bg-dashboard.png -render-layer dashboard -render-time $T -render-texts $X -render-todo $D -render-calendar $K -render-images $I $B
+# 天気。予報は gui/test/fixtures/weather*.json（-render-weather）、アイコンは gui/test/fixtures/weather-icons（-render-weather-icons。
+# テスト用に描いた円と帯。LEFTHAND_UPDATE_WEATHER=1 go test -run TestWeatherFixtures で、配置の表 weatherlayout.json と一緒に作り直す）
+F=gui/test/fixtures; WI=$F/weather-icons; W=config/weather-example.yaml
+TZ=Asia/Tokyo go run . -render-png $F/weather.png -render-layer weather -render-time $T -render-weather $F/weather.json -render-weather-icons $WI $W
+TZ=Asia/Tokyo go run . -render-png $F/weather-small.png -render-layer weather-small -render-time $T -render-weather $F/weather.json -render-weather-icons $WI $W
+TZ=Asia/Tokyo go run . -render-png $F/weather-night.png -render-layer weather -render-time 2026-10-06T03:12:00+09:00 -render-weather $F/weather-night.json -render-weather-icons $WI $W
+TZ=Asia/Tokyo go run . -render-png $F/weather-stale-fill.png -render-layer weather -render-time $T -render-weather $F/weather-stale.json -render-weather-icons $WI -render-press-style fill -render-pressed "2,0 2,1" $W
+TZ=Asia/Tokyo go run . -render-png $F/weather-none.png -render-layer weather -render-time $T -render-unsynced -render-weather-icons $WI $W
+TZ=Asia/Tokyo go run . -render-png $F/weather-failed.png -render-layer weather-small -render-time $T -render-weather $F/weather-failed.json -render-weather-icons $WI $W
 ```
+
+天気のウィジェットの配置（`gui/src/weatherwidget.ts`）は、Go の結果の表（`gui/test/fixtures/weatherlayout.json`。文字、色、アイコンの箱の位置）と比べる。配置を変えたら `LEFTHAND_UPDATE_WEATHER=1 go test -run TestWeatherFixtures` で書き直し、上の PNG も作り直す。
+
+本物の天気アイコンでの見え方は、気象庁の SVG を手元に置いて確かめる（リポジトリには入れない）。`BRAIN_DECK_SVG_DIR=<SVG のディレクトリ> BRAIN_DECK_ICON_OUT=/tmp/icons BRAIN_DECK_ICON_BOXES=87x58,183x122 go test ./cmd/brain-deck -run TestMakeIconsDir` で、箱の大きさのアイコン（.lha）を作り、`-render-weather-icons /tmp/icons` で描く。`TestRenderSVGDir`（`BRAIN_DECK_SVG_DIR`、`BRAIN_DECK_SVG_SIZE`）は、SVG を PNG にして、ブラウザで描いたものと見比べるのに使う。
 
 背景画像の変換（`gui/src/image.ts`）のファイルの形と id は、`config/background-images/` のファイル（`tools/mkbg` が Go で書いたもの）と同じになることをテストで確かめる。
 
@@ -1907,6 +2004,8 @@ lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き
          -render-todo todo.json              Todo のセルの項目（todo.json と同じ形）
          -render-todo-page 2                 Todo のセルに出すページ（1 から）
          -render-calendar calendar.json      カレンダーのセルの予定（calendar.json と同じ形）
+         -render-weather weather.json        天気のセルに出す予報（weather.json の形のファイル）
+         -render-weather-icons dir           天気アイコン（.lha）を探すディレクトリ（省略すると -data-dir の weather-icons）
          -render-calendar-page 2             カレンダーのセルに出すページ（1 から。省略すると触っていないときのページ）
          -render-month-offset -1             月の表示に出す月（今月からのずれ。-1 で先月）
          -render-month-select 2026-10-17     月の表示で選んだ日。follow のカレンダーにもその日の予定が出る
@@ -1950,6 +2049,12 @@ go run ./tools/mkfont k8x12.bdf font/k8x12.bin
 > あらゆる改変の有無に関わらず、また商業的な利用であっても、自由にご利用、複製、再配布することができますが、全て無保証とさせていただきます。
 
 Copyright (C) 2015-2021 Num Kadoma
+
+SVG の描画（`cmd/brain-deck/svg.go`、`svgfilter.go`。PC の brain-deck が天気アイコンを描くのに使い、デーモンには入らない）は、Go の標準ライブラリだけで書いたもので、ほかのライブラリのコードは入っていない。
+使えるライブラリを試したが、気象庁のアイコンが使うもの（43 個中 41 個がフィルター、51 か所の偶奇規則、グラデーションの参照）を描けなかったので、アイコンが使う範囲を自分で書いた。試したもの：oksvg と rasterx（BSD 3-Clause。グラデーションの参照とフィルターがなく、アイコンが黒く塗りつぶされる。rasterx の ScannerGV は偶奇規則に対応していない）、tdewolff/canvas（MIT。グラデーションと埋め込みの画像、フィルターが出ない）、resvg-go（GPL-3.0。WebAssembly の resvg。ライセンスで避けた）、Cogent Core の svg（BSD 3-Clause。依存が 80 個を超え、WebGPU まで入る）。
+43 個のアイコンを 240×180 と 54×36 で描き、Chromium で描いたものとの差は、1 画素の色の平均で 0.32/255 と 1.08/255 だった。
+
+天気アイコンと予報は、気象庁のサイトのコンテンツで、「公共データ利用規約（第 1.0 版）」に準拠した条件で使っている（[天気](#天気)の「出典と利用条件」）。アイコンの絵はリポジトリに入れていない（PC の brain-deck が、使うときに気象庁のサイトから取ってくる）。
 
 QR コードの符号化（`qr.go`、`gui/src/qr.ts`）は、Project Nayuki の QR Code generator library（https://www.nayuki.io/page/qr-code-generator-library 、MIT ライセンス）の手順を、バイトモードだけに絞って書き直したもの。
 
