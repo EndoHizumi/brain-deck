@@ -272,7 +272,7 @@ layers:
 	hid := t.TempDir() + "/hidg"
 	writeSys(t, "/", map[string]string{strings.TrimPrefix(hid, "/"): ""})
 	e := NewEngine(km, &State{hid: NewHIDWriter(hid), active: map[string]Combo{}})
-	calc := NewCalcService(OpenStore(t.TempDir()))
+	calc := NewCalcService(nil) // calc.json は書かない（書くのは別の goroutine で、TempDir の後片付けと重なる）
 	rt := NewWidgetRT(nil)
 	rt.calc = calc
 	e.SetWidgets(rt)
