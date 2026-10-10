@@ -234,7 +234,7 @@ terminal:
 
 ### ウィジェット
 
-タッチのセルに、キーの代わりに情報を出す。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）、月の表示（`month`）、天気（`weather`）、グラフ（`graph`）、トラックパッド（`trackpad`）、電池（`battery`）、ストップウォッチ（`stopwatch`）、ポモドーロ（`pomodoro`）、カウンター（`counter`）、QR コード（`qr`）、在席ランプ（`presence`）。
+タッチのセルに、キーの代わりに情報を出す。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）、月の表示（`month`）、天気（`weather`）、グラフ（`graph`）、トラックパッド（`trackpad`）、電池（`battery`）、ストップウォッチ（`stopwatch`）、ポモドーロ（`pomodoro`）、カウンター（`counter`）、QR コード（`qr`）、在席ランプ（`presence`）、プレゼン用タイマー（`presenter`）。
 
 ```yaml
 "0,0": { widget: clock }                                       # 時刻と日付。既定の書式
@@ -252,22 +252,23 @@ terminal:
 "3,0": { widget: counter, id: coffee, label: コーヒー }          # タップで +1、長押しで 0 に戻す
 "0,0": { widget: qr, id: share, span: [2, 3] }                  # QR コード。中身は PC の brain-deck で送る
 "2,0": { widget: presence, span: [2, 2] }                       # 在席ランプ。タップで次の状態
+"0,0": { widget: presenter, duration: 20m, span: [2, 2] }      # プレゼン用タイマー。タップで開始と一時停止
 ```
 
 | 項目 | 内容 |
 | --- | --- |
-| `widget` | ウィジェットの種類。`clock`、`text`、`todo`、`calendar`、`month`、`weather`、`graph`、`trackpad`、`battery`、`stopwatch`、`pomodoro`、`counter`、`qr`、`presence` |
+| `widget` | ウィジェットの種類。`clock`、`text`、`todo`、`calendar`、`month`、`weather`、`graph`、`trackpad`、`battery`、`stopwatch`、`pomodoro`、`counter`、`qr`、`presence`、`presenter` |
 | `label` | セルの上に小さく出す見出し（省略可） |
-| `key`、`layer_*`、`mouse` | タップしたときの動き（省略可）。書けば、ふつうのセルと同じく働き、押したときに枠が光る。書かなければ、タップしても何もせず、枠も光らない。`todo`、`calendar`、`month`、`trackpad` には書けない（押した位置で働くため）。`stopwatch`、`pomodoro`、`counter`、`presence` にも書けない（タップと長押しを自分で処理するため） |
-| `id` | `text`、`qr`、`graph`：中身の名前（必須）。`stopwatch`、`pomodoro`、`counter`、`presence`：状態の名前（省略すると種類の名前。同じ id のセルは同じ状態を出す）。英数字と `_ . -` の 32 文字まで |
+| `key`、`layer_*`、`mouse` | タップしたときの動き（省略可）。書けば、ふつうのセルと同じく働き、押したときに枠が光る。書かなければ、タップしても何もせず、枠も光らない。`todo`、`calendar`、`month`、`trackpad` には書けない（押した位置で働くため）。`stopwatch`、`pomodoro`、`counter`、`presence`、`presenter` にも書けない（タップと長押しを自分で処理するため） |
+| `id` | `text`、`qr`、`graph`：中身の名前（必須）。`stopwatch`、`pomodoro`、`counter`、`presence`、`presenter`：状態の名前（省略すると種類の名前。同じ id のセルは同じ状態を出す）。英数字と `_ . -` の 32 文字まで |
 | `span` | セルの大きさ。上を参照 |
 
 - **使える場所**：タッチのセルだけ。本体キーとソフトキーには書けない。
 - **`key: none` は書けない**：ウィジェットを出すだけなら、key を省略する。
 - **描き直し**：ウィジェットごとに、中身が次に変わる時刻まで待って、変わったセルだけを描き直す。描画は今までどおり別のスレッドで行い、入力の処理を待たせない。壁時計が NTP などで飛んでも、1 分以内には表示が追いつく。
 - **データ**：テキスト、Todo、カレンダー、天気、グラフの中身は、設定ファイルではなく `/var/lib/lefthand/` に置く。設定 GUI で設定を保存しても消えない。
-- **ほかの種類の項目**：`format` などの時計の項目をテキストに、`id` を時計などに、`rows` を Todo とカレンダー以外に、`page_reset` を Todo、カレンダー、月の表示以外に、`stale` をカレンダー、天気、グラフ以外に、`unit`、`min`、`max`、`chart`、`points`、`decimals` をグラフ以外に、`follow` をカレンダー以外に、`calendars` をカレンダーと月の表示以外に、`week_start` を月の表示以外に、トラックパッドの項目をトラックパッド以外に、`work` と `break` をポモドーロ以外に、`states` を在席ランプ以外に書くと誤り。
-- **タップと長押し**（`stopwatch`、`pomodoro`、`counter`、`presence`）：離したときに「タップ」の働きをする。**0.5 秒押し続ける**と（Todo の完了の切り替えと同じ長さ）、離す前に「長押し」の働きをし、離しても何もしない。押しているあいだは、ふつうのセルと同じく枠が光る。設定を差し替えたときに押していたものは、何もしない。
+- **ほかの種類の項目**：`format` などの時計の項目をテキストに、`id` を時計などに、`rows` を Todo とカレンダー以外に、`page_reset` を Todo、カレンダー、月の表示以外に、`stale` をカレンダー、天気、グラフ以外に、`unit`、`min`、`max`、`chart`、`points`、`decimals` をグラフ以外に、`follow` をカレンダー以外に、`calendars` をカレンダーと月の表示以外に、`week_start` を月の表示以外に、トラックパッドの項目をトラックパッド以外に、`work` と `break` をポモドーロ以外に、`states` を在席ランプ以外に、`duration` と `colors` をプレゼン用タイマー以外に書くと誤り。
+- **タップと長押し**（`stopwatch`、`pomodoro`、`counter`、`presence`、`presenter`）：離したときに「タップ」の働きをする。**0.5 秒押し続ける**と（Todo の完了の切り替えと同じ長さ）、離す前に「長押し」の働きをし、離しても何もしない。押しているあいだは、ふつうのセルと同じく枠が光る。設定を差し替えたときに押していたものは、何もしない。
 
 #### 時計（clock）
 
@@ -619,6 +620,30 @@ PC から送った値を、折れ線か棒で描く。値は PC の `brain-deck 
 - **PC から**：`brain-deck presence 会議中`、`brain-deck presence next --id door`（プロトコルの `set_presence`）。
 - **保存**：`widgets.json`（状態の名前）。再起動しても残る。
 
+#### プレゼン用タイマー（presenter）
+
+発表の持ち時間を計る。残り時間を大きく、経過時間を小さく出し、いちばん下に進み具合の帯を出す。
+
+```yaml
+"0,0": { widget: presenter, id: talk, duration: 20m, label: 発表 20分, span: [2, 2] }   # 色は既定（残り 5 分で黄、1 分で赤）
+"0,0": { widget: presenter, id: lt, duration: 5m, span: [2, 2],                         # LT：残り 1 分で黄、30 秒で赤
+         colors: [{ remaining: 1m, color: "#ffc030" }, { remaining: 30s, color: "#ff5858" }] }
+```
+
+| 項目 | 既定 | 内容 |
+| --- | --- | --- |
+| `id` | `presenter` | 状態の名前。同じ id のセルは同じタイマーを出す |
+| `duration` | `10m` | 持ち時間。10 秒〜24 時間、秒の単位まで |
+| `colors` | 残り 5 分で黄、1 分で赤 | 色の区切り（6 つまで）。`remaining`（残りがこの時間以下になったら。秒の単位まで）と `color`（`#rrggbb`）。書いた順によらず、残りの短い区切りが優先する。`colors: []` なら色を変えない |
+
+- **タップ**：止まっていれば始め（続け）、動いていれば一時停止する。**長押し**（0.5 秒）：0 に戻して止める。タップしたときのキーなどは書けない。
+- **表示**：残り時間（秒は切り上げ。1 時間以上なら「時:分:秒」）。下に「経過 3:12」、止めているあいだは「一時停止 経過 3:12」（灰色）、まだ始めていなければ「タップで開始」。
+- **時間を過ぎたら**：「+0:12」のように超えた時間を赤で出し、下に「時間切れ 経過 20:12」。動いているあいだは、**セルを 0.5 秒ごとに赤く点滅させる**（一時停止すると止まる）。
+- **自動減光**：どれかのプレゼン用タイマーが動いているあいだは、画面を暗くも消しもしない（暗ければ明るくする）。止めたら、そこから時間を数え直す。
+- **スライド送り**：同じレイヤーに、`PAGEUP`、`PAGEDOWN`（プレゼンター用のリモコンと同じ）や、画面右の帯の `left`、`right` に `LEFT`、`RIGHT` を割り当てると、タイマーを見ながらスライドを送れる。
+- **保存**：ストップウォッチと同じ（`widgets.json` の `presenter`。デーモンを再起動しても数え続け、Brain を再起動すると止まる）。持ち時間はセルの設定なので、動いているあいだに `duration` を変えると、残り時間もすぐ変わる。
+- **例**：[config/presenter-example.yaml](../config/presenter-example.yaml)（メニューの「発表」「LT」）。
+
 ### 背景画像（background）
 
 ```yaml
@@ -706,6 +731,7 @@ backlight:
 - **暗いときのタッチ**：暗くしたか消したあとのタッチは、**明るくするだけで、そのタッチではセルもソフトキーも押さない**（誤って押さないため）。離すまでのサンプルもすべて捨てる。次のタッチからふつうに働く。
 - **暗いときのキー**：本体キーは、暗いときもそのまま PC に送る（文字の入力を止めない）。
 - **触れているあいだ**：指が触れているあいだ（トラックパッドで長く動かしているときなど）は暗くしない。離したときから数える。
+- **プレゼン用タイマー**：どれかが動いているあいだは暗くしない（止めたときから数え直す）。
 - **ほかに明るくするとき**：ポモドーロの作業と休憩が切り替わったとき。設定 GUI から設定を保存したとき（新しい設定ですぐ数え直す）。
 - **反映**：設定 GUI から保存すれば、再起動せずに反映する（`backlight` は GUI では編集しないが、ファイルを直接編集したあと GUI で保存しても残る）。
 - **終わるとき**：起動したときの明るさに戻す。強制終了などで戻せなかったときは、`lefthand -restore-console`（サービスの ExecStopPost）が `/run/lefthand-backlight` に残した明るさに戻す。

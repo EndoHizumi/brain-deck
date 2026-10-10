@@ -27,7 +27,7 @@ export class FakeDaemon {
   timeSynced = false
   texts: Record<string, TextEntry> = {} // テキストのタイルの中身
   qr: Record<string, TextEntry> = {} // QR コードのウィジェットの中身
-  widgets: WidgetsState = { stopwatch: {}, pomodoro: {}, counter: {}, presence: {} } // ストップウォッチなどの状態
+  widgets: WidgetsState = { stopwatch: {}, pomodoro: {}, counter: {}, presence: {}, presenter: {} } // ストップウォッチなどの状態
   battery: BatteryInfo | null = { percent: 87, voltage_mv: 4040, plugged: true, charging: true, source: 'demo', estimated: true }
   todo: TodoList = { rev: 0, items: [] } // Todo の一覧
   calendar: CalendarData = { rev: 0, calendars: [] } // カレンダーの予定（brain-deck calendar sync が送るもの）
@@ -127,7 +127,7 @@ export class FakeDaemon {
         return ok({ name: req.name, cleared: !!req.clear, shown: this.widgetIds('qr').includes(req.name) })
       case 'get_widgets': {
         const ids: Record<string, string[]> = {}
-        for (const k of ['stopwatch', 'pomodoro', 'counter', 'presence', 'qr']) ids[k] = this.widgetIds(k)
+        for (const k of ['stopwatch', 'pomodoro', 'counter', 'presence', 'qr', 'presenter']) ids[k] = this.widgetIds(k)
         const presence_states: Record<string, PresenceSpec[]> = {}
         for (const pid of ids.presence) presence_states[pid] = this.presenceStates(pid)
         return ok({ widgets: this.widgets, ids, presence_states, battery: this.battery, now: new Date().toISOString() })
@@ -453,7 +453,7 @@ export function validate(cfg: Config): Problem[] {
     if (!cell && (a.widget || a.span || a.background)) return out.push({ path, message: `${where}: widget, span and background can be used only in touch cells` })
     if (a.background !== undefined && !/^[0-9a-f]{16}$/.test(a.background))
       out.push({ path, message: `${where}: background must be the 16-digit lowercase hex id of an image (as the settings GUI writes it), got "${a.background}"` })
-    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month', 'weather', 'graph'].includes(a.widget))
+    if (a.widget && !['clock', 'text', 'todo', 'calendar', 'trackpad', 'battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'month', 'weather', 'graph', 'presenter'].includes(a.widget))
       out.push({ path, message: `${where}: unknown widget "${a.widget}" (clock, text, todo, calendar, trackpad, battery, stopwatch, pomodoro, counter, qr, presence, month)` })
     if (isTapWidget(a.widget) && n > 0)
       out.push({ path, message: `${where}: widget: ${a.widget} handles taps itself; remove key, layer_*, mouse, usb_mode and terminal` })
@@ -461,6 +461,15 @@ export function validate(cfg: Config): Problem[] {
     for (const f of ['work', 'break'] as const) {
       const d = a[f] !== undefined ? parseDurationMs(a[f]!) : 60000
       if (d === null || d < 60000 || d > 4 * 3600000) out.push({ path, message: `${where}: ${f} must be a whole number of seconds from 1m0s to 4h0m0s (such as 25m or 5m)` })
+    }
+    if ((a.duration !== undefined || a.colors !== undefined) && a.widget !== 'presenter') out.push({ path, message: `${where}: duration and colors are for widget: presenter` })
+    if (a.widget === 'presenter' && a.duration !== undefined) {
+      const d = parseDurationMs(a.duration)
+      if (d === null || d < 10_000 || d > 86400_000 || d % 1000) out.push({ path, message: `${where}: duration must be a whole number of seconds from 10s to 24h0m0s (such as 20m or 5m)` })
+    }
+    for (const [i, c] of (a.colors ?? []).entries()) {
+      if (!/^#[0-9a-fA-F]{6}$/.test(c.color ?? '')) out.push({ path, message: `${where}: colors[${i}]: color must be #rrggbb, got "${c.color}"` })
+      if (!(parseDurationMs(c.remaining ?? '') ?? 0)) out.push({ path, message: `${where}: colors[${i}]: remaining must be a whole number of seconds such as 5m or 30s, got "${c.remaining}"` })
     }
     if (a.states !== undefined && a.widget !== 'presence') out.push({ path, message: `${where}: states is for widget: presence` })
     if (a.widget === 'todo' && n > 0) out.push({ path, message: `${where}: widget: todo handles taps itself (long press an item to check it, ▲▼ to turn pages); remove key and layer_*` })
@@ -484,7 +493,7 @@ export function validate(cfg: Config): Problem[] {
     if (a.rows !== undefined && !(Number.isInteger(a.rows) && a.rows >= 1 && a.rows <= 20)) out.push({ path, message: `${where}: rows must be 1..20 (omit it to fit the cell height)` })
     if ((a.widget === 'text' || a.widget === 'qr' || a.widget === 'graph') && !TEXT_ID_PATTERN.test(a.id ?? ''))
       out.push({ path, message: `${where}: widget: ${a.widget} needs id (1-32 characters of A-Z a-z 0-9 _ . -), got "${a.id ?? ''}"` })
-    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence and month` })
+    if (!hasStateId(a.widget) && a.id) out.push({ path, message: `${where}: id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter and month` })
     if (!a.widget && (a.format || a.date_format || a.tz)) out.push({ path, message: `${where}: format, date_format and tz need widget: clock` })
     if (a.tz) {
       try {

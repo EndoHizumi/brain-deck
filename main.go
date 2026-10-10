@@ -1120,6 +1120,7 @@ func main() {
 	dim := NewDimmer(dimP)
 	addAtExit(dim.Close)
 	gadgets.SetOnAlert(dim.Wake)
+	gadgets.SetOnBusy(dim.SetBusy) // プレゼン用タイマーが動いているあいだは暗くしない
 	images := OpenImageStore(imagesDir)
 	if ps := imageProblems(km, images, 800, 480); len(ps) > 0 {
 		for _, p := range ps {

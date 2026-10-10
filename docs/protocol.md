@@ -484,7 +484,7 @@ QR コードのセル（`{ widget: qr, id: share }`）の中身を書き換え�
 
 ### get_widgets
 
-ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態と、今の設定で使っている id を返す。設定 GUI はプレビューに描く。
+ストップウォッチ、ポモドーロ、カウンター、在席ランプ、プレゼン用タイマーの状態と、今の設定で使っている id を返す。設定 GUI はプレビューに描く。
 
 ```json
 → {"id":62,"cmd":"get_widgets"}
@@ -503,6 +503,7 @@ QR コードのセル（`{ widget: qr, id: share }`）の中身を書き換え�
 | `stopwatch` | `elapsed_ms`（止めているあいだの経過時間。動いているなら、始める前までの分）、`started_at`（動いているなら、始めた時刻）。今の経過時間は `elapsed_ms` + (今 − `started_at`) |
 | `pomodoro` | 動いているとき（`running`）：`anchor`（最初の作業を始めたことにした時刻）、`work_ms`、`break_ms`、`done`（`anchor` より前に終えた作業の数）。今の段階は、`anchor` からの経過を `work_ms + break_ms` で割って求める。止めているとき：`phase`（`work` か `break`。なければ、まだ始めていない）、`remaining_ms`、`done`。`ack_at` は点滅をタップで止めた時刻 |
 | `counter` | `value` |
+| `presenter` | プレゼン用タイマー。`stopwatch` と同じ形（経過時間）。持ち時間と色はセルの設定 |
 | `presence` | `state`（状態の名前）、`source`（変えた側。Brain でタップしたときは `brain`） |
 | `ids` | 今の設定で、種類ごとに使われている id（id を書かないセルは種類の名前） |
 | `presence_states` | id ごとの、在席ランプの状態の並び（同じ id のセルの状態を、出てきた順に重なりを除いて並べたもの） |

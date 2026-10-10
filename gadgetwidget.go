@@ -132,7 +132,7 @@ func pomoDuration(name, s string, def time.Duration) (time.Duration, error) {
 
 // isTapWidget は、タップと長押しを自分で処理するウィジェットか。
 func isTapWidget(kind string) bool {
-	return kind == widgetStopwatch || kind == widgetPomodoro || kind == widgetCounter || kind == widgetPresence
+	return kind == widgetStopwatch || kind == widgetPomodoro || kind == widgetCounter || kind == widgetPresence || kind == widgetPresenter
 }
 
 // hasStateID は、id を書けるウィジェットか。
@@ -145,6 +145,7 @@ var tapHelp = map[string]string{
 	widgetPomodoro:  "tap to start or pause, long press to reset",
 	widgetCounter:   "tap to add 1, long press to reset",
 	widgetPresence:  "tap for the next state, long press for the previous one",
+	widgetPresenter: "tap to start or pause, long press to reset",
 }
 
 func (w *WidgetDef) tapWidget() bool { return w != nil && w.tap != nil }
@@ -223,6 +224,12 @@ func (rt *WidgetRT) tapAction(w *WidgetDef, long bool) {
 		} else {
 			g.CounterAdd(w.ID, 1)
 		}
+	case widgetPresenter:
+		if long {
+			g.PresenterReset(w.ID)
+		} else {
+			g.PresenterToggle(w.ID)
+		}
 	case widgetPresence:
 		dir := 1
 		if long {
@@ -285,6 +292,10 @@ func widgetFill(v *CellView, env WidgetEnv) (RGB, bool) {
 		if pv := env.Gadgets.Pomodoro[w.ID].view(env.Now, w.Work); pv.Alert && pv.BlinkOn {
 			return pomoInk(pv.Phase), true
 		}
+	case widgetPresenter:
+		if pv := presenterView(w, env); pv.BlinkOn {
+			return colInkError, true
+		}
 	}
 	return RGB{}, false
 }
@@ -340,6 +351,9 @@ func gadgetKey(v *CellView, env WidgetEnv) string {
 	case widgetPresence:
 		n, c := presenceView(w, env)
 		return n + "\x00" + c.hex()
+	case widgetPresenter:
+		pv := presenterView(w, env)
+		return fmt.Sprintf("%s\x00%s\x00%v\x00%v\x00%v\x00%d", pv.Main, pv.Sub, pv.Color, pv.BlinkOn, pv.Running, pv.Bar)
 	case widgetQR:
 		e, ok := env.QR[w.ID]
 		if !ok {
@@ -363,6 +377,10 @@ func gadgetNext(v *CellView, env WidgetEnv) time.Time {
 		}
 	case widgetPomodoro:
 		if pv := env.Gadgets.Pomodoro[w.ID].view(now, w.Work); pv.Running {
+			return pv.Next
+		}
+	case widgetPresenter:
+		if pv := presenterView(w, env); pv.Running {
 			return pv.Next
 		}
 	case widgetQR:
@@ -455,6 +473,8 @@ func drawGadget(cv *Canvas, area image.Rectangle, v *CellView, env WidgetEnv, in
 			subInk = c
 		}
 		drawTwoLines(cv, area, pomoText(pv.Remaining), sub, c, subInk)
+	case widgetPresenter:
+		drawPresenter(cv, area, w, env, ink, subInk)
 	case widgetCounter:
 		drawTwoLines(cv, area, fmt.Sprint(env.Gadgets.Counter[w.ID].Value), "", ink, subInk)
 	case widgetPresence:

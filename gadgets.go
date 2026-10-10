@@ -143,6 +143,8 @@ type gadgetFile struct {
 	Pomodoro  map[string]PomodoroState  `json:"pomodoro,omitempty"`
 	Counter   map[string]CounterState   `json:"counter,omitempty"`
 	Presence  map[string]PresenceState  `json:"presence,omitempty"`
+	// Presenter はプレゼン用タイマー。持ち時間はセルの設定なので、経過時間だけを覚える（ストップウォッチと同じ形）
+	Presenter map[string]StopwatchState `json:"presenter,omitempty"`
 }
 
 func (f gadgetFile) clone() gadgetFile {
@@ -151,6 +153,7 @@ func (f gadgetFile) clone() gadgetFile {
 	g.Pomodoro = cloneMap(f.Pomodoro)
 	g.Counter = cloneMap(f.Counter)
 	g.Presence = cloneMap(f.Presence)
+	g.Presenter = cloneMap(f.Presenter)
 	return g
 }
 
@@ -171,6 +174,8 @@ type GadgetService struct {
 	onChange func()           // 状態が変わったとき（画面の描き直し）。待たずに返ること
 	onAlert  func()           // ポモドーロの段階が切り替わったとき（画面を明るくする）。待たずに返ること
 	onNotify func(gadgetFile) // 状態が変わったとき（設定 GUI への通知）。待たずに返ること
+	onBusy   func(bool)       // プレゼン用タイマーが動き始めた・すべて止まったとき（自動減光を止める）。待たずに返ること
+	busy     bool             // プレゼン用タイマーのどれかが動いている
 	alert    *time.Timer
 	dirty    chan struct{}
 	saved    chan struct{} // テスト用
@@ -179,7 +184,7 @@ type GadgetService struct {
 func NewGadgetService(store *Store) *GadgetService {
 	g := &GadgetService{store: store, bootID: readBootID(), dirty: make(chan struct{}, 1)}
 	g.f = gadgetFile{Stopwatch: map[string]StopwatchState{}, Pomodoro: map[string]PomodoroState{},
-		Counter: map[string]CounterState{}, Presence: map[string]PresenceState{}}
+		Counter: map[string]CounterState{}, Presence: map[string]PresenceState{}, Presenter: map[string]StopwatchState{}}
 	var f gadgetFile
 	if err := store.Load(gadgetStoreName, &f); err == nil {
 		g.restore(f)
@@ -215,21 +220,28 @@ func (g *GadgetService) restore(f gadgetFile) {
 			g.f.Presence[id] = s
 		}
 	}
+	for id, s := range f.Presenter {
+		if validTextID(id) {
+			g.f.Presenter[id] = s
+		}
+	}
 	if f.BootID == g.bootID || f.BootID == "" {
 		return // 同じ起動のあいだ（デーモンの再起動）：そのまま数え続ける
 	}
 	// Brain を再起動した。終了したときの時刻（なければ最後に始めた時点）で止める
 	n := 0
-	for id, s := range g.f.Stopwatch {
-		if s.StartedAt == nil {
-			continue
+	for _, m := range []map[string]StopwatchState{g.f.Stopwatch, g.f.Presenter} {
+		for id, s := range m {
+			if s.StartedAt == nil {
+				continue
+			}
+			if f.LastSeen != nil {
+				s.ElapsedMS = s.Elapsed(*f.LastSeen).Milliseconds()
+			}
+			s.StartedAt = nil
+			m[id] = s
+			n++
 		}
-		if f.LastSeen != nil {
-			s.ElapsedMS = s.Elapsed(*f.LastSeen).Milliseconds()
-		}
-		s.StartedAt = nil
-		g.f.Stopwatch[id] = s
-		n++
 	}
 	for id, p := range g.f.Pomodoro {
 		if !p.Running {
@@ -245,7 +257,7 @@ func (g *GadgetService) restore(f gadgetFile) {
 		n++
 	}
 	if n > 0 {
-		log.Printf("widgets: the Brain restarted; stopped %d running stopwatch/pomodoro timers", n)
+		log.Printf("widgets: the Brain restarted; stopped %d running stopwatch/pomodoro/presenter timers", n)
 	}
 }
 
@@ -277,6 +289,28 @@ func (g *GadgetService) SetOnNotify(f func(gadgetFile)) {
 	g.mu.Unlock()
 }
 
+// SetOnBusy は、プレゼン用タイマーが動き始めたとき（true）と、すべて止まったとき（false）に呼ぶ関数を設定する。
+// 設定したときに、今の様子で一度呼ぶ。
+func (g *GadgetService) SetOnBusy(f func(bool)) {
+	g.mu.Lock()
+	g.onBusy = f
+	g.busy = g.presenterRunningLocked()
+	busy := g.busy
+	g.mu.Unlock()
+	if f != nil {
+		f(busy)
+	}
+}
+
+func (g *GadgetService) presenterRunningLocked() bool {
+	for _, s := range g.f.Presenter {
+		if s.StartedAt != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Snapshot は、今の状態の写し。描画の goroutine が描き直すたびに使う。
 func (g *GadgetService) Snapshot() gadgetFile {
 	if g == nil {
@@ -304,9 +338,17 @@ func (g *GadgetService) update(f func(now time.Time) bool) {
 	if changed && nf != nil {
 		snap = g.f.clone()
 	}
+	busyCb, busy := g.onBusy, g.presenterRunningLocked()
+	busyChanged := changed && busy != g.busy
+	if busyChanged {
+		g.busy = busy
+	}
 	g.mu.Unlock()
 	if !changed {
 		return
+	}
+	if busyChanged && busyCb != nil {
+		busyCb(busy)
 	}
 	select {
 	case g.dirty <- struct{}{}:
@@ -338,6 +380,7 @@ func (g *GadgetService) evictLocked() {
 	evictOldest(g.f.Pomodoro, func(s PomodoroState) time.Time { return s.UpdatedAt }, "pomodoro")
 	evictOldest(g.f.Counter, func(s CounterState) time.Time { return s.UpdatedAt }, "counter")
 	evictOldest(g.f.Presence, func(s PresenceState) time.Time { return s.UpdatedAt }, "presence")
+	evictOldest(g.f.Presenter, func(s StopwatchState) time.Time { return s.UpdatedAt }, "presenter")
 }
 
 // ---------- ストップウォッチ ----------
@@ -363,6 +406,33 @@ func (g *GadgetService) StopwatchToggle(id string) {
 func (g *GadgetService) StopwatchReset(id string) {
 	g.update(func(now time.Time) bool {
 		g.f.Stopwatch[id] = StopwatchState{UpdatedAt: now.UTC()}
+		return true
+	})
+}
+
+// ---------- プレゼン用タイマー ----------
+
+// PresenterToggle は、止まっていれば始め（続け）、動いていれば一時停止する。
+func (g *GadgetService) PresenterToggle(id string) {
+	g.update(func(now time.Time) bool {
+		s := g.f.Presenter[id]
+		if s.StartedAt != nil {
+			s.ElapsedMS = s.Elapsed(now).Milliseconds()
+			s.StartedAt = nil
+		} else {
+			t := now.UTC()
+			s.StartedAt = &t
+		}
+		s.UpdatedAt = now.UTC()
+		g.f.Presenter[id] = s
+		return true
+	})
+}
+
+// PresenterReset は、0 に戻して止める。
+func (g *GadgetService) PresenterReset(id string) {
+	g.update(func(now time.Time) bool {
+		g.f.Presenter[id] = StopwatchState{UpdatedAt: now.UTC()}
 		return true
 	})
 }
@@ -517,12 +587,14 @@ func presenceIndex(states []PresenceDef, name string) int {
 func (g *GadgetService) ClockStepped(off time.Duration) {
 	g.update(func(now time.Time) bool {
 		n := 0
-		for id, s := range g.f.Stopwatch {
-			if s.StartedAt != nil {
-				t := s.StartedAt.Add(off)
-				s.StartedAt = &t
-				g.f.Stopwatch[id] = s
-				n++
+		for _, m := range []map[string]StopwatchState{g.f.Stopwatch, g.f.Presenter} {
+			for id, s := range m {
+				if s.StartedAt != nil {
+					t := s.StartedAt.Add(off)
+					s.StartedAt = &t
+					m[id] = s
+					n++
+				}
 			}
 		}
 		for id, p := range g.f.Pomodoro {
@@ -555,6 +627,7 @@ func (g *GadgetService) Shutdown() {
 	for _, s := range g.f.Stopwatch {
 		running = running || s.StartedAt != nil
 	}
+	running = running || g.presenterRunningLocked()
 	for _, p := range g.f.Pomodoro {
 		running = running || p.Running
 	}

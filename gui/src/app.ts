@@ -26,6 +26,7 @@ import { TODO_MAX_ROWS, TODO_MAX_RUNES, todoOrder } from './todowidget'
 import { DEFAULT_PAGE_RESET, calShown, calWidgetOf, parseDuration } from './calwidget'
 import { DEFAULT_MONTH_ID, MONTH_MIN_SPAN } from './monthwidget'
 import { parseIcon, type Icon } from './weatherwidget'
+import { DEFAULT_PRESENTER_COLORS, presenterDef, presenterView } from './presenter'
 import { DEFAULT_GRAPH_POINTS, GRAPH_MAX_POINTS, formatGraph, graphDecimals } from './graphwidget'
 import {
   DEFAULT_PRESENCE, QR_MAX_BYTES, parseColor, pomoDurations, pomoText, pomodoroView, presenceStates, stateId, stopwatchElapsed, stopwatchText,
@@ -35,7 +36,7 @@ import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './ports'
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
-  ActionSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
+  ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
@@ -1081,7 +1082,8 @@ export class App {
     if (!cur) return
     const a = { ...cur, ...p }
     if (a.label === '') delete a.label
-    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale', 'work', 'break', 'follow', 'unit'] as const) if (a[f] === '') delete a[f]
+    for (const f of ['format', 'date_format', 'tz', 'id', 'page_reset', 'stale', 'work', 'break', 'follow', 'unit', 'duration'] as const) if (a[f] === '') delete a[f]
+    if (a.colors && !a.colors.length) delete a.colors
     for (const f of GRAPH_NUM_FIELDS) if (a[f] === undefined || !Number.isFinite(a[f])) delete a[f]
     if (!a.chart) delete a.chart
     if (!a.week_start) delete a.week_start
@@ -1110,6 +1112,10 @@ export class App {
       delete a.break
     }
     if (w !== 'presence') delete a.states
+    if (w !== 'presenter') {
+      delete a.duration
+      delete a.colors
+    }
     const paged = w === 'todo' || w === 'calendar'
     if (!paged) delete a.rows
     if (!paged && w !== 'month') delete a.page_reset
@@ -2397,6 +2403,29 @@ export class App {
           'セルに入らない長さのときは「QR が入りません」と出るので、セルを大きく（span）します。設定 GUI が接続しているあいだは、brain-deck から送れません。'))
         break
       }
+      case 'presenter': {
+        const dur = own.duration ?? ''
+        const dms = dur === '' ? 600_000 : parseDuration(dur)
+        out.push(h('label', { class: 'row', title: '10s から 24h まで（20m、5m、1h30m など）' }, '持ち時間 ',
+          h('input', { value: dur, placeholder: '10m', 'data-focus': 'duration', id: 'pres-duration', class: 'num',
+            onchange: (e: Event) => this.patchAction({ duration: (e.target as HTMLInputElement).value.trim() }) })))
+        if (dms === null || dms < 10_000 || dms > 86400_000 || dms % 1000) out.push(h('div', { class: 'err' }, '持ち時間は、20m のような 10 秒から 24 時間の時間です'))
+        const lines = (own.colors ?? []).map((c) => `${c.remaining} ${c.color}`).join('\n')
+        out.push(h('label', { class: 'row', title: '1 行に 1 つ、「残り時間 #rrggbb」の形で書きます。残りがその時間以下になると、その色にします。空なら残り 5 分で黄、1 分で赤' }, '色の区切り ',
+          h('textarea', { rows: 3, 'data-focus': 'colors', id: 'pres-colors', value: lines,
+            placeholder: DEFAULT_PRESENTER_COLORS.map((c) => `${c.remaining} ${c.color}`).join('\n'),
+            onchange: (e: Event) => this.patchAction({ colors: parsePresenterColors((e.target as HTMLTextAreaElement).value) }) })))
+        const badC = (own.colors ?? []).filter((c) => !parseColor(c.color) || !(parseDuration(c.remaining) ?? 0)).map((c) => `${c.remaining} ${c.color}`)
+        if (badC.length) out.push(h('div', { class: 'err' }, `「5m #ffc030」のように、残り時間と #rrggbb の色を書きます：${badC.join('、')}`))
+        if (live) {
+          const pv = presenterView(presenterDef(own), this.widgetsState.presenter?.[sid], now)
+          out.push(h('p', { class: 'hint gadget-now' }, `今：${pv.main}（${pv.sub}）`))
+        } else if (this.connected) old()
+        out.push(h('p', { class: 'hint' }, 'Brain でタップすると開始と一時停止、0.5 秒押し続けると 0 に戻します。残り時間を大きく、経過時間を小さく出し、' +
+          '残りが区切りを下回ると色を変えます。時間を過ぎたら、超えた時間を赤で出し、動いているあいだはセルを点滅させます。動いているあいだは、画面を暗くしません（自動減光）。' +
+          '同じレイヤーに、スライド送りのキー（PAGEUP、PAGEDOWN、LEFT、RIGHT）のセルを置くと便利です（config/presenter-example.yaml）。'))
+        break
+      }
       case 'presence': {
         const lines = (own.states ?? []).map((x) => (x.color ? `${x.name} ${x.color}` : x.name)).join('\n')
         out.push(h('label', { class: 'row', title: '1 行に 1 つ、「名前 #rrggbb」の形で書きます（色は省略可）。空なら在席、集中、会議中、休憩' }, '状態 ',
@@ -2939,6 +2968,18 @@ export function utcOffset(sec: number): string {
   const a = Math.abs(sec)
   const m = Math.floor(a / 60) % 60
   return `UTC${sec < 0 ? '-' : '+'}${Math.floor(a / 3600)}${m ? `:${String(m).padStart(2, '0')}` : ''}`
+}
+
+// parsePresenterColors は、プレゼン用タイマーの色の欄（1 行に「残り時間 #rrggbb」）を読む。
+export function parsePresenterColors(text: string): PresenterColorSpec[] {
+  const out: PresenterColorSpec[] = []
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line) continue
+    const [remaining, color = ''] = line.split(/\s+/)
+    out.push({ remaining, color: color.toLowerCase() })
+  }
+  return out
 }
 
 // parsePresenceLines は、在席ランプの状態の欄（1 行に「名前 #rrggbb」）を読む。

@@ -29,6 +29,7 @@ const (
 	widgetMonth     = "month"
 	widgetWeather   = "weather"
 	widgetGraph     = "graph"
+	widgetPresenter = "presenter"
 
 	defaultClockFormat = "15:04"
 	defaultDateFormat  = "1月2日({wday})"
@@ -44,7 +45,7 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter}
 
 // ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
@@ -62,26 +63,28 @@ var colUnsynced = RGB{0xff, 0x80, 0x20}
 // WidgetDef は組み立て済みのウィジェット 1 つ。
 type WidgetDef struct {
 	Kind       string
-	Format     string         // clock：時刻の行
-	DateFormat string         // clock：日付の行。空なら出さない
-	Loc        *time.Location // clock：nil なら Brain のタイムゾーン
-	Seconds    bool           // clock：秒を出す（1 秒ごとに描き直す）
-	ID         string         // text、qr：中身の名前。stopwatch、pomodoro、counter、presence：状態の名前（省略すると種類の名前）。month：follow で指す名前
-	Rows       int            // todo、calendar：1 ページの行数。0 なら高さで決める
-	PageReset  time.Duration  // todo、calendar、month：最後に触ってから、最初のページ（今月と今日）に戻るまでの時間。0 なら戻らない
-	Stale      time.Duration  // calendar、weather：最終更新がこれより古ければ、古いと出す
-	Calendars  []string       // calendar：出すカレンダーの名前。month：印を付けるカレンダー。空ならすべて
-	Follow     string         // calendar：選んだ日を見る月の表示の id。空なら今日
-	follow     *WidgetDef     // calendar：Follow の月の表示（compileKeymap が同じレイヤーから探して結ぶ）
-	WeekStart  time.Weekday   // month：週の始まり（日曜か月曜）
-	month      *monthState    // month：出している月と、選んだ日
-	pager      *pagerState    // todo、calendar：ページと、押している行
-	Pad        *PadParams     // trackpad：判定の設定
-	Work       time.Duration  // pomodoro：作業の時間
-	Break      time.Duration  // pomodoro：休憩の時間
-	States     []PresenceDef  // presence：状態（タップで順に切り替える）
-	tap        *tapState      // stopwatch、pomodoro、counter、presence：タップと長押し
-	Graph      *GraphDef      // graph：単位、範囲、描き方
+	Format     string           // clock：時刻の行
+	DateFormat string           // clock：日付の行。空なら出さない
+	Loc        *time.Location   // clock：nil なら Brain のタイムゾーン
+	Seconds    bool             // clock：秒を出す（1 秒ごとに描き直す）
+	ID         string           // text、qr：中身の名前。stopwatch、pomodoro、counter、presence：状態の名前（省略すると種類の名前）。month：follow で指す名前
+	Rows       int              // todo、calendar：1 ページの行数。0 なら高さで決める
+	PageReset  time.Duration    // todo、calendar、month：最後に触ってから、最初のページ（今月と今日）に戻るまでの時間。0 なら戻らない
+	Stale      time.Duration    // calendar、weather：最終更新がこれより古ければ、古いと出す
+	Calendars  []string         // calendar：出すカレンダーの名前。month：印を付けるカレンダー。空ならすべて
+	Follow     string           // calendar：選んだ日を見る月の表示の id。空なら今日
+	follow     *WidgetDef       // calendar：Follow の月の表示（compileKeymap が同じレイヤーから探して結ぶ）
+	WeekStart  time.Weekday     // month：週の始まり（日曜か月曜）
+	month      *monthState      // month：出している月と、選んだ日
+	pager      *pagerState      // todo、calendar：ページと、押している行
+	Pad        *PadParams       // trackpad：判定の設定
+	Work       time.Duration    // pomodoro：作業の時間
+	Break      time.Duration    // pomodoro：休憩の時間
+	States     []PresenceDef    // presence：状態（タップで順に切り替える）
+	tap        *tapState        // stopwatch、pomodoro、counter、presence：タップと長押し
+	Graph      *GraphDef        // graph：単位、範囲、描き方
+	Duration   time.Duration    // presenter：持ち時間
+	Colors     []PresenterColor // presenter：残り時間に応じた色（残りの長い順）
 }
 
 // WidgetEnv は、ウィジェットを描くときの外の状態。描画の goroutine が描き直すたびに作る。
@@ -134,6 +137,9 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 	if s.WeekStart != "" && s.Widget != widgetMonth {
 		return nil, fmt.Errorf("week_start is for widget: month")
 	}
+	if (s.Duration != "" || s.Colors != nil) && s.Widget != widgetPresenter {
+		return nil, fmt.Errorf("duration and colors are for widget: presenter")
+	}
 	if (s.Work != "" || s.Break != "") && s.Widget != widgetPomodoro {
 		return nil, fmt.Errorf("work and break are for widget: pomodoro")
 	}
@@ -154,9 +160,9 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 		case paged:
 			return nil, fmt.Errorf("format, date_format, tz and id cannot be used with widget: %s", s.Widget)
 		case s.Widget == "":
-			return nil, fmt.Errorf("id needs widget: text, qr, graph, stopwatch, pomodoro, counter, presence or month")
+			return nil, fmt.Errorf("id needs widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter or month")
 		}
-		return nil, fmt.Errorf("id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence and month")
+		return nil, fmt.Errorf("id is for widget: text, qr, graph, stopwatch, pomodoro, counter, presence, presenter and month")
 	}
 	switch s.Widget {
 	case widgetClock:
@@ -215,7 +221,7 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 			w.Stale = d
 		}
 		return w, nil
-	case widgetStopwatch, widgetCounter, widgetPomodoro, widgetPresence:
+	case widgetStopwatch, widgetCounter, widgetPomodoro, widgetPresence, widgetPresenter:
 		id := widgetStateID(s)
 		if !validTextID(id) {
 			return nil, fmt.Errorf("id must be 1-32 characters of A-Z a-z 0-9 _ . - (omit it to use %q), got %q", s.Widget, s.ID)
@@ -236,6 +242,10 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 				return nil, err
 			}
 			w.States = states
+		case widgetPresenter:
+			if err := compilePresenter(w, s); err != nil {
+				return nil, err
+			}
 		}
 		return w, nil
 	case "":
@@ -435,7 +445,7 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		if b != "" {
 			drawCentered(cv, area, y+fontH*ts+widgetLineGap, b, ds, subInk)
 		}
-	case widgetBattery, widgetStopwatch, widgetPomodoro, widgetCounter, widgetPresence, widgetQR:
+	case widgetBattery, widgetStopwatch, widgetPomodoro, widgetCounter, widgetPresence, widgetQR, widgetPresenter:
 		drawGadget(cv, area, v, env, ink, subInk)
 	case widgetText:
 		e, ok := env.Texts[v.Widget.ID]

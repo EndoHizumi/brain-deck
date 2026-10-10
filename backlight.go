@@ -201,17 +201,19 @@ type Dimmer struct {
 	state   int
 	holding bool // 指が触れている
 	term    bool // 端末モードのあいだ
+	busy    bool // プレゼン用タイマーが動いているあいだ
 	timer   *time.Timer
 	gen     uint64 // タイマーを数え直すたびに増やす（古いタイマーを無効にする）
 	writes  chan int
-	written int // 最後に書いた明るさ（書く goroutine だけが触る）
+	done    chan struct{} // writer が終わったら閉じる
+	written int           // 最後に書いた明るさ（書く goroutine だけが触る）
 	closed  bool
 	since   time.Time // 今の段階になった時刻
 }
 
 // NewDimmer は、設定の backlight で自動減光を始める。p が nil なら何もしない。
 func NewDimmer(p *dimParams) *Dimmer {
-	d := &Dimmer{writes: make(chan int, 1), written: -1}
+	d := &Dimmer{writes: make(chan int, 1), done: make(chan struct{}), written: -1}
 	go d.writer()
 	d.Apply(p)
 	return d
@@ -291,6 +293,9 @@ func (d *Dimmer) setLocked(st int) {
 }
 
 func (d *Dimmer) queueLocked(lv int) {
+	if d.closed {
+		return // writes は閉じてある
+	}
 	select {
 	case <-d.writes: // 書く前のものは捨て、最新だけを書く
 	default:
@@ -300,6 +305,7 @@ func (d *Dimmer) queueLocked(lv int) {
 
 // writer は明るさを書く。書くのは、変わったときだけ。暗くしているあいだは、戻す明るさを /run に残す。
 func (d *Dimmer) writer() {
+	defer close(d.done)
 	for lv := range d.writes {
 		d.mu.Lock()
 		bl := d.bl
@@ -333,8 +339,8 @@ func (d *Dimmer) stopTimerLocked() {
 func (d *Dimmer) activeLocked() {
 	d.setLocked(dimBright)
 	d.stopTimerLocked()
-	if d.holding || (d.term && !d.p.inTerminal) {
-		return // 触れているあいだと、端末モードのあいだは暗くしない
+	if d.holding || d.busy || (d.term && !d.p.inTerminal) {
+		return // 触れているあいだ、プレゼン用タイマーが動いているあいだ、端末モードのあいだは暗くしない
 	}
 	d.scheduleLocked(time.Now())
 }
@@ -448,6 +454,24 @@ func (d *Dimmer) SetTerminal(on bool) {
 	}
 }
 
+// SetBusy は、プレゼン用タイマーが動き始めた（true）・すべて止まった（false）ときに呼ぶ。
+// 動いているあいだは明るくしたまま暗くしない。止まったら、そこから時間を数え直す。
+func (d *Dimmer) SetBusy(on bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.busy == on {
+		return
+	}
+	d.busy = on
+	if d.p != nil && !d.closed {
+		d.activeLocked()
+		vlogf("backlight: presenter timer %s", map[bool]string{true: "running (no dimming)", false: "stopped"}[on])
+	}
+}
+
 // DimInfo は get_status の backlight。
 type DimInfo struct {
 	Enabled bool   `json:"enabled"`
@@ -483,10 +507,20 @@ func (d *Dimmer) Close() {
 		return
 	}
 	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return
+	}
 	d.closed = true
 	d.stopTimerLocked()
+	close(d.writes)
 	bl := d.bl
 	d.mu.Unlock()
+	// 書いている途中の明るさを書き終えてから戻す（あとから暗い値で上書きされないように）
+	select {
+	case <-d.done:
+	case <-time.After(2 * time.Second):
+	}
 	if bl == nil {
 		return
 	}

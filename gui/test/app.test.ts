@@ -614,6 +614,35 @@ describe('Todo', () => {
     expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'clock', label: '消しゴム' })
   })
 
+  it('セルをプレゼン用タイマーにし、持ち時間と色の区切りを決められる。タップの動きは選べず、Brain の状態を出す', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.widgets.presenter = { presenter: { elapsed_ms: 125_000, updated_at: '2026-10-06T00:00:00Z' } }
+    const t = await connected(setup({ daemon }))
+    t.click('[data-cell="1,0"]')
+    t.change('#kind', 'widget')
+    t.change('#widget', 'presenter')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'presenter', label: '消しゴム' })
+    expect(t.root.querySelector('#tap')).toBeNull()
+    expect(t.$('.inspector').textContent).toContain('今：7:55（一時停止 経過 2:05）')
+    t.change('#pres-duration', '5m')
+    t.change('#pres-colors', '1m #FFC030\n30s #ff5858')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'presenter', label: '消しゴム', duration: '5m',
+      colors: [{ remaining: '1m', color: '#ffc030' }, { remaining: '30s', color: '#ff5858' }] })
+    expect(t.$('.inspector').textContent).toContain('今：2:55')
+    await vi.waitFor(() => expect(t.app.validation).toBe('ok'))
+    t.change('#pres-duration', '3s')
+    expect(t.$('.inspector').textContent).toContain('10 秒から 24 時間')
+    t.change('#pres-colors', 'soon red')
+    expect(t.$('.inspector').textContent).toContain('残り時間と #rrggbb の色')
+    await vi.waitFor(() => expect(t.app.validation).toBe('invalid'))
+    t.change('#pres-colors', '')
+    t.change('#pres-duration', '')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'presenter', label: '消しゴム' })
+    t.change('#pres-duration', '20m')
+    t.change('#widget', 'stopwatch')
+    expect(t.app.cfg!.layers[0].touch!.cells!['1,0']).toEqual({ widget: 'stopwatch', label: '消しゴム' })
+  })
+
   it('セルを月の表示にし、id、週の始まり、戻るまでの時間、印のカレンダーを決め、カレンダーのセルで選んだ日を見られる', async () => {
     const daemon = new FakeDaemon(sampleConfig())
     const cal = demoCalendar(new Date('2026-10-06T09:41:27+09:00'))

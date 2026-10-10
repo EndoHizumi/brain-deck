@@ -272,10 +272,14 @@ type widgetsState struct {
 	Pomodoro  map[string]PomodoroState  `json:"pomodoro"`
 	Counter   map[string]CounterState   `json:"counter"`
 	Presence  map[string]PresenceState  `json:"presence"`
+	Presenter map[string]StopwatchState `json:"presenter"`
 }
 
 func widgetsJSON(f gadgetFile) widgetsState {
-	w := widgetsState{Stopwatch: f.Stopwatch, Pomodoro: f.Pomodoro, Counter: f.Counter, Presence: f.Presence}
+	w := widgetsState{Stopwatch: f.Stopwatch, Pomodoro: f.Pomodoro, Counter: f.Counter, Presence: f.Presence, Presenter: f.Presenter}
+	if w.Presenter == nil {
+		w.Presenter = map[string]StopwatchState{}
+	}
 	if w.Stopwatch == nil {
 		w.Stopwatch = map[string]StopwatchState{}
 	}
@@ -687,7 +691,7 @@ func (c *Controller) addGraph(id json.RawMessage, req request) response {
 func (c *Controller) widgets() map[string]any {
 	cfg := c.store.Current()
 	ids := map[string][]string{}
-	for _, k := range []string{widgetStopwatch, widgetPomodoro, widgetCounter, widgetPresence, widgetQR} {
+	for _, k := range []string{widgetStopwatch, widgetPomodoro, widgetCounter, widgetPresence, widgetQR, widgetPresenter, widgetGraph} {
 		ids[k] = gadgetIDs(cfg, k)
 	}
 	states := map[string][]map[string]string{}

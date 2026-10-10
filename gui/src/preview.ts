@@ -11,9 +11,10 @@ import { MONTH_MAX_OFFSET, monthFollowDay, monthLayout, monthWidgetOf, type Mont
 import { unpack565, type Image565 } from './image'
 import { blend8, weatherWidgetOf, wthLayout, type Icon, type WeatherWidget } from './weatherwidget'
 import { encodeQR } from './qr'
+import { presenterDef, presenterView, type PresenterDef } from './presenter'
 import { GRAPH_LINE_W, GRAPH_NONE, graphLayout, graphSegment, graphWidgetOf, type GraphWidget } from './graphwidget'
 import {
-  GAUGE_H, QR_NONE, QR_TOO_BIG, STOPWATCH_IDLE, batteryLines, colInkWarn, colQRDark, colQRDarkOld, colQRLight, colQRLitOld,
+  GAUGE_H, QR_NONE, QR_TOO_BIG, STOPWATCH_IDLE, batteryLines, colInkError, colInkWarn, colQRDark, colQRDarkOld, colQRLight, colQRLitOld,
   contrastInk, pomoDurations, pomoInk, pomoText, pomodoroView, presenceStates, presenceView, qrFit, stateId, stopwatchElapsed,
   stopwatchText, type PresenceDef,
 } from './gadgetwidget'
@@ -104,10 +105,11 @@ export interface CellView {
 
 // Gadget は、新しいウィジェットの描き方に要る設定（gadgetwidget.go）。
 export interface Gadget {
-  kind: 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence'
+  kind: 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'presenter'
   id: string
   work: number // pomodoro：作業の時間（ミリ秒）
   states: PresenceDef[] // presence
+  presenter?: PresenterDef // presenter
 }
 
 interface Rect {
@@ -143,8 +145,9 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'weather') v.weather = weatherWidgetOf(a)
     if (a.widget === 'graph') v.graph = graphWidgetOf(a)
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
-    if (['battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence'].includes(a.widget)) {
+    if (['battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'presenter'].includes(a.widget)) {
       v.gadget = { kind: a.widget as Gadget['kind'], id: stateId(a), work: pomoDurations(a).work, states: presenceStates(a.states) }
+      if (a.widget === 'presenter') v.gadget.presenter = presenterDef(a)
     }
     return v
   }
@@ -645,6 +648,7 @@ function widgetFill(v: CellView, env: WidgetEnv): RGB | null {
     const pv = pomodoroView(env.widgets.pomodoro?.[g.id], env.now.getTime(), g.work)
     if (pv.alert && pv.blinkOn) return pomoInk(pv.phase)
   }
+  if (g.kind === 'presenter' && presenterView(g.presenter!, env.widgets.presenter?.[g.id], env.now.getTime()).blinkOn) return colInkError
   return null
 }
 
@@ -675,6 +679,29 @@ function drawGadget(font: BitmapFont, px: Pixels, area: Rect, g: Gadget, env: Wi
     drawCentered(font, px, area, area.y0 + Math.trunc((ah - FONT_H * sc) / 2), s, sc, c)
   }
   switch (g.kind) {
+    case 'presenter': {
+      // presenter.go の drawPresenter と同じ
+      const pv = presenterView(g.presenter!, env.widgets.presenter?.[g.id], now)
+      let c = ink
+      if (pv.color && !pressed) c = pv.color
+      if (!pv.running && !pv.over && !pressed) c = subInk
+      if (pv.blinkOn && !pressed) {
+        c = contrastInk(colInkError)
+        subInk = c
+      }
+      if (ah > GAUGE_H * 3) {
+        const gr = { x0: area.x0, y0: area.y1 - GAUGE_H, x1: area.x1, y1: area.y1 }
+        px.frame(gr, 1, subInk)
+        const inn = inset(gr, 2)
+        const fw = Math.trunc(((inn.x1 - inn.x0) * pv.bar) / 1000)
+        let gc: RGB = pv.color ?? colSub // gadgetwidget.go の colGauge（colSub と同じ色）
+        if (pressed || pv.blinkOn) gc = subInk
+        if (fw > 0) px.fill({ ...inn, x1: inn.x0 + fw }, gc)
+        area = { ...area, y1: area.y1 - (GAUGE_H + widgetLineGap) }
+      }
+      drawTwoLines(font, px, area, pv.main, pv.sub, c, subInk)
+      return
+    }
     case 'battery': {
       const b = batteryLines(env.battery, ink, colSub)
       let c = pressed ? ink : b.c

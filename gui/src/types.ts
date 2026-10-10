@@ -36,6 +36,9 @@ export interface ActionSpec {
   chart?: 'line' | 'bar' // 折れ線（既定）か棒
   points?: number // 描く値の数（2〜120、既定 60）
   decimals?: number // 小数点以下の桁数。省略すると値の大きさで決める
+  // presenter：プレゼン用タイマー（presenter.go）
+  duration?: string // 持ち時間（20m など）
+  colors?: PresenterColorSpec[] // 残り時間に応じた色。省略すると残り 5 分で黄、1 分で赤
   // trackpad：トラックパッド（trackpad.go）。省略すると既定値
   speed?: number // 感度（画面の 1 ドットを、PC のマウスの何カウントにするか）
   accel?: number // 加速（0 で加速しない）
@@ -52,7 +55,13 @@ export interface ActionSpec {
   long_press?: 'none' | 'right' // 長押しで右クリック
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter'
+
+// プレゼン用タイマーの色の区切り 1 つ（presenter.go の PresenterColorSpec）
+export interface PresenterColorSpec {
+  remaining: string
+  color: string
+}
 
 // 在席ランプの状態 1 つ（gadgetwidget.go の PresenceSpec）
 export interface PresenceSpec {
@@ -217,6 +226,7 @@ export interface WidgetsState {
   pomodoro?: Record<string, PomodoroState>
   counter?: Record<string, CounterState>
   presence?: Record<string, PresenceState>
+  presenter?: Record<string, StopwatchState>
 }
 
 // グラフの値（get_graph。graph.go の GraphPoint、GraphSeries）

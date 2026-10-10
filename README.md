@@ -307,6 +307,7 @@ cells:
 - **ストップウォッチ**：1 秒ごとに描き直す（実機で約 5 ms）。デーモンを再起動しても数え続ける。Brain を再起動すると止まる（Brain には RTC がないため。終了した時点までの時間は残る）。
 - **ポモドーロ**：作業（既定 25 分）と休憩（既定 5 分）をくり返す。**切り替わるとセルを 15 秒点滅させ、画面が暗ければ明るくする**。点滅はタップで止まる。
 - **QR コード**：中身はテキストのタイルと同じ仕組みで、PC の [brain-deck qr](#qr-コード) で送る（UTF-8 で 400 バイトまで、有効期限も付けられる）。セルに入らないときは「QR が入りません」と出る。
+- **プレゼン用タイマー**（`presenter`）：持ち時間（`duration`、既定 10 分）から残り時間を大きく出し、残りが区切り（`colors`。既定は残り 5 分で黄、1 分で赤）を下回ると色を変える。時間を過ぎたら超えた時間を赤で出し、セルを点滅させる。タップで開始と一時停止、長押しで 0 に戻す。**動いているあいだは自動減光をしない**。スライド送りのセルと並べた例は [config/presenter-example.yaml](config/presenter-example.yaml)（「発表」は 20 分、「LT」は 5 分で残り 1 分で黄、30 秒で赤）。
 - **在席ランプ**：セル全体を状態の色で塗る。状態の名前と色は `states` で決める（既定は在席、集中、会議中、休憩）。PC から [brain-deck presence](#在席ランプ) でも変えられる。
 - **状態の保存**：ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態は `/var/lib/lefthand/widgets.json` に残す。同じ `id` のセルは同じ状態を出す（`id` を省略すると種類の名前）。
 - **例**：[config/gadgets-example.yaml](config/gadgets-example.yaml)（widgets-example.yaml に、メニューから入る「道具」と「共有」のレイヤーと、自動減光を足したもの）。
@@ -325,6 +326,7 @@ backlight:
 - **暗いときのタッチ**：明るくするだけで、そのタッチではセルもソフトキーも押さない（誤操作を防ぐため）。次のタッチから、ふつうに働く。
 - **暗いときのキー**：本体キーは、暗いときもそのまま PC に送る。`wake_on_key: true`（既定）なら、キーで明るくもなる。
 - **端末モード**：`in_terminal: false`（既定）なら、端末モードのあいだは暗くしない。
+- **プレゼン用タイマー**：動いているあいだは暗くしない。
 - **ほかに明るくするとき**：ポモドーロの作業と休憩が切り替わったとき。
 - **終わるとき**：デーモンが終わると、起動したときの明るさに戻す（落ちたときも、サービスの ExecStopPost の `lefthand -restore-console` が戻す）。
 - **バックライト**：PW-SH2 では `/sys/class/backlight/backlight@0`（pwm-backlight、0〜7）。実機で、暗くする・消す・明るくする・終了時に戻す、を確かめた。
@@ -368,7 +370,7 @@ layers:
 | calendar.json | カレンダーの予定（カレンダーごとに、名前、色、祝日か、取ってきた時刻、取得の失敗、予定）と、送られた範囲。展開したあとの予定で、1000 件まで（約 250 KB） |
 | qr.json | QR コードのウィジェットの中身（text.json と同じ形）。64 個まで |
 | graph.json | グラフの値（id ごとに新しい 120 個、32 個の id まで）。値を受け取るたびには書かず、5 分に 1 回まとめて書く（デーモンが終わるときにも書く） |
-| widgets.json | ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（種類と id ごと。種類ごとに 64 個まで）と、書いたときの起動の ID、終了した時刻 |
+| widgets.json | ストップウォッチ、ポモドーロ、カウンター、在席ランプ、プレゼン用タイマーの状態（種類と id ごと。種類ごとに 64 個まで）と、書いたときの起動の ID、終了した時刻 |
 | images/&lt;id&gt;.565 | 背景画像。8 バイトのヘッダ（`LHI1`、幅、高さ）と RGB565 の画素。id はファイルの SHA-256 の先頭 16 文字 |
 | images/index.json | 背景画像の名前（元のファイル名など）、大きさ、SHA-256、足した時刻、送った側 |
 
@@ -1818,6 +1820,8 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | testdata/touch/ | Brain で記録したタッチ（テストで再生する） |
 | contrib/systemd/ | PC で `brain-deck calendar sync` を 15 分ごと、`brain-deck weather sync` を 1 時間ごと、グラフの値（contrib/graph/linux-stats.sh）を 30 秒ごとに送る、ユーザー単位の systemd のタイマー |
 | contrib/graph/linux-stats.sh | PC（Linux）の CPU、メモリ、温度、負荷を、`brain-deck graph` で送る例 |
+| config/presenter-example.yaml | プレゼン用タイマーとスライド送りのボタンの例（「発表」20 分、「LT」5 分） |
+| presenter.go | プレゼン用タイマーの設定（持ち時間、色の区切り）、表示、点滅 |
 | config/graph-example.yaml | グラフのウィジェットの例（widgets-example.yaml に「グラフ」のレイヤーを足したもの） |
 | graph.go、graphwidget.go | グラフの値（add_graph、clear_graph、get_graph、間引いた保存）と、グラフのセルの配置と描画 |
 | cmd/brain-deck/graph.go | PC の `brain-deck graph` |
@@ -1894,6 +1898,12 @@ TZ=Asia/Tokyo go run . -render-png $F/weather-night.png -render-layer weather -r
 TZ=Asia/Tokyo go run . -render-png $F/weather-stale-fill.png -render-layer weather -render-time $T -render-weather $F/weather-stale.json -render-weather-icons $WI -render-press-style fill -render-pressed "2,0 2,1" $W
 TZ=Asia/Tokyo go run . -render-png $F/weather-none.png -render-layer weather -render-time $T -render-unsynced -render-weather-icons $WI $W
 TZ=Asia/Tokyo go run . -render-png $F/weather-failed.png -render-layer weather-small -render-time $T -render-weather $F/weather-failed.json -render-weather-icons $WI $W
+# プレゼン用タイマー。状態は gui/test/fixtures/presenter-state.json（動いている）と presenter-paused.json
+P=config/presenter-example.yaml
+TZ=Asia/Tokyo go run . -render-png $F/presenter.png -render-layer presen -render-time $T -render-widgets $F/presenter-state.json $P
+TZ=Asia/Tokyo go run . -render-png $F/presenter-lt-over.png -render-layer lt -render-time $T -render-widgets $F/presenter-state.json $P
+TZ=Asia/Tokyo go run . -render-png $F/presenter-paused.png -render-layer presen -render-time $T -render-widgets $F/presenter-paused.json $P
+TZ=Asia/Tokyo go run . -render-png $F/presenter-idle-fill.png -render-layer lt -render-time $T -render-widgets $F/presenter-paused.json -render-pressed 0,0 -render-press-style fill $P
 # グラフ。値は gui/test/fixtures/graph.json と graph-few.json（-render-graph）
 G=config/graph-example.yaml
 TZ=Asia/Tokyo go run . -render-png $F/graph.png -render-layer graph -render-time $T -render-graph $F/graph.json $G

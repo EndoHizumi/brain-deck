@@ -63,7 +63,7 @@ export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode
 
 // ウィジェットの種類と、画面に出す名前（widget.go の widgetKinds）
 export const WIDGET_LABELS: Record<WidgetKind, string> = { clock: '時計', text: 'テキスト', todo: 'Todo', calendar: 'カレンダー', trackpad: 'トラックパッド',
-  battery: '電池', stopwatch: 'ストップウォッチ', pomodoro: 'ポモドーロ', counter: 'カウンター', qr: 'QR コード', presence: '在席ランプ', month: '月の表示', weather: '天気', graph: 'グラフ' }
+  battery: '電池', stopwatch: 'ストップウォッチ', pomodoro: 'ポモドーロ', counter: 'カウンター', qr: 'QR コード', presence: '在席ランプ', month: '月の表示', weather: '天気', graph: 'グラフ', presenter: 'プレゼン用タイマー' }
 // トラックパッドの項目（数）
 export const PAD_NUM_FIELDS = ['speed', 'accel', 'scroll_width', 'scroll_step', 'settle_ms', 'smooth', 'deadzone', 'min_pressure', 'tap_ms', 'tap_move', 'drag_ms'] as const
 // トラックパッドの項目
@@ -90,7 +90,7 @@ export function ownsTouch(w: WidgetKind | undefined): boolean {
 }
 // タップと長押しを自分で処理する（タップしたときのキーやレイヤーを書けない。押すと枠が光る）
 export function isTapWidget(w: WidgetKind | undefined): boolean {
-  return w === 'stopwatch' || w === 'pomodoro' || w === 'counter' || w === 'presence'
+  return w === 'stopwatch' || w === 'pomodoro' || w === 'counter' || w === 'presence' || w === 'presenter'
 }
 // id を書けるウィジェット（text と qr は必須、ほかは省略すると種類の名前）
 export function hasStateId(w: WidgetKind | undefined): boolean {
@@ -104,7 +104,7 @@ export const GRAPH_NUM_FIELDS = ['min', 'max', 'points', 'decimals'] as const
 // グラフの項目
 export const GRAPH_FIELDS = ['unit', ...GRAPH_NUM_FIELDS, 'chart'] as const
 // ウィジェットにだけ書ける項目
-export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars', 'follow', 'week_start', 'work', 'break', 'states', ...GRAPH_FIELDS, ...PAD_FIELDS] as const
+export const WIDGET_FIELDS = ['widget', 'format', 'date_format', 'tz', 'id', 'rows', 'page_reset', 'stale', 'calendars', 'follow', 'week_start', 'work', 'break', 'states', 'duration', 'colors', ...GRAPH_FIELDS, ...PAD_FIELDS] as const
 // ウィジェットの種類ごとの項目
 export const CLOCK_FIELDS = ['format', 'date_format', 'tz'] as const
 

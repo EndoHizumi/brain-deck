@@ -221,6 +221,29 @@ describe('Brain の画面のプレビュー', () => {
     })
   }
 
+  // プレゼン用タイマー。config/presenter-example.yaml の「発表」「LT」レイヤー、状態は fixtures/presenter-*.json（-render-widgets）
+  // TZ=Asia/Tokyo go run . -render-png gui/test/fixtures/presenter.png -render-layer presen -render-time 2026-10-06T09:41:27+09:00 -render-widgets gui/test/fixtures/presenter-state.json config/presenter-example.yaml
+  const presCfg = parseConfigText(repoFile('config/presenter-example.yaml').toString('utf8'))
+  const presLayer = (n: string) => presCfg.layers.findIndex((l) => l.name === n)
+  const presCases: { file: string; layer: string; state: string; pressed?: string[]; pressStyle?: PressStyle }[] = [
+    { file: 'presenter.png', layer: 'presen', state: 'presenter-state.json' },
+    { file: 'presenter-lt-over.png', layer: 'lt', state: 'presenter-state.json' },
+    { file: 'presenter-paused.png', layer: 'presen', state: 'presenter-paused.json' },
+    { file: 'presenter-idle-fill.png', layer: 'lt', state: 'presenter-paused.json', pressed: ['0,0'], pressStyle: 'fill' },
+  ]
+  for (const c of presCases) {
+    it(`プレゼン用タイマーも lefthand -render-png と画素単位で同じ（${c.file}）`, () => {
+      const want = decodePNG(repoFile(`gui/test/fixtures/${c.file}`))
+      const widgets = JSON.parse(repoFile(`gui/test/fixtures/${c.state}`).toString('utf8'))
+      const { pixels } = renderPreview(font, { cfg: presCfg, stack: [0, presLayer(c.layer)], mode: 'latched', now, widgets,
+        pressed: new Set(c.pressed), pressStyle: c.pressStyle })
+      const got = to565(pixels)
+      let diff = 0
+      for (let i = 0; i < got.length; i++) if (got[i] !== want.data[i]) diff++
+      expect(diff).toBe(0)
+    })
+  }
+
   // 天気のウィジェット。config/weather-example.yaml の「天気」「天気(小)」レイヤー、予報は fixtures/weather*.json（-render-weather）、
   // アイコンは fixtures/weather-icons（-render-weather-icons。テスト用に描いた円と帯で、気象庁のアイコンではない）
   const wcfg2 = parseConfigText(repoFile('config/weather-example.yaml').toString('utf8'))
