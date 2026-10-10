@@ -701,6 +701,23 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 - 出している写真を消すと、写真をやめて元の画面に戻す。もとの写真を消しても、縦向きに切り抜き直した写真は残る（縦向きだけの写真として出す）。
 - ない id は `not_found`、id の形が違えば `bad_request`。
 
+## 手書きメモ（list_memos、get_memo、delete_memo）
+
+手書きメモ（widget: memo）の線（`/var/lib/lefthand/memo/<id>.json`）。id は `m1`、`m2` …（作った順）。Brain のデータが正。
+
+```json
+→ {"id":1,"cmd":"list_memos"}
+← {"id":1,"ok":true,"result":{"memos":[{"id":"m1","created":"…","updated":"…","pages":2,"strokes":37,"bytes":5120}]}}
+→ {"id":2,"cmd":"get_memo","memo":"m1","offset":0}
+← {"id":2,"ok":true,"result":{"memo":"m1","offset":0,"total":5120,"data":"eyJpZCI6Im0xIiw…"}}
+→ {"id":3,"cmd":"delete_memo","memo":"m1"}
+← {"id":3,"ok":true,"result":{"deleted":"m1"}}
+```
+
+- `get_memo` は、メモの JSON（下の形）を 96 KiB ずつ base64 で返す。`total` までくり返して読む。書いていない線も含む。
+- メモの JSON：`{"id":"m1","created":…,"updated":…,"pages":[{"w":776,"h":410,"strokes":[{"w":4,"p":[x0,y0,x1,y1,…]},{"w":20,"e":true,"p":[…]}]}]}`。`w`、`h` はページの大きさ（ドット）、線の `w` は太さ、`e` は消しゴム（紙の色で塗る）、`p` は点の列。描き方は `internal/ink`（丸いペン先を点と点のあいだに動かした跡）。
+- ない id は `not_found`。
+
 ## 更新、再起動、電源、ログ（ssh を使わない保守）
 
 README の「Brain の保守」。lefthand が systemd のサービスとして動いていないとき（`-unit` も `/proc/self/cgroup` も分からない）は、`update_apply`、`update_rollback`、`restart` が `internal_error` になる。

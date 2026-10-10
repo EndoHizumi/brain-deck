@@ -39,22 +39,23 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 5. [PC との接続](#pc-との接続)
 6. [設定](#設定)
 7. [マウスとトラックパッド](#マウスとトラックパッド)
-8. [メディアキー、F13〜F24、スリープ解除](#メディアキーf13f24スリープ解除)
-9. [コマンドのショートカット](#コマンドのショートカット)
-10. [設定 GUI](#設定-gui)
-11. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
-12. [Brain の保守（ssh を使わない）](#brain-の保守ssh-を使わない)
-13. [時刻合わせ](#時刻合わせ)
-14. [PC から外して使う](#pc-から外して使う)
-15. [フォトフレーム](#フォトフレーム)
-16. [タッチのキャリブレーション](#タッチのキャリブレーション)
-17. [日常の操作](#日常の操作)
-18. [シリアルコンソール](#シリアルコンソール)
-19. [端末モード](#端末モード)
-20. [画面とコンソール](#画面とコンソール)
-21. [困ったとき](#困ったとき)
-22. [開発](#開発)
-23. [フォントとライセンス](#フォントとライセンス)
+8. [ペンタブレットと手書きメモ](#ペンタブレットと手書きメモ)
+9. [メディアキー、F13〜F24、スリープ解除](#メディアキーf13f24スリープ解除)
+10. [コマンドのショートカット](#コマンドのショートカット)
+11. [設定 GUI](#設定-gui)
+12. [brain-deck（PC のコマンド）](#brain-deckpc-のコマンド)
+13. [Brain の保守（ssh を使わない）](#brain-の保守ssh-を使わない)
+14. [時刻合わせ](#時刻合わせ)
+15. [PC から外して使う](#pc-から外して使う)
+16. [フォトフレーム](#フォトフレーム)
+17. [タッチのキャリブレーション](#タッチのキャリブレーション)
+18. [日常の操作](#日常の操作)
+19. [シリアルコンソール](#シリアルコンソール)
+20. [端末モード](#端末モード)
+21. [画面とコンソール](#画面とコンソール)
+22. [困ったとき](#困ったとき)
+23. [開発](#開発)
+24. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -628,6 +629,57 @@ ssh brain sudo systemctl stop lefthand-try    # 早く終えるとき（本番�
 
 `-replay-touch` は、タッチごとに長さ、サンプル数、最初と最後の位置、押す強さの範囲、最初の 1 歩の距離（触れた瞬間の跳ね）、いちばん大きな 1 歩を出し、最後に判定の結果（タップ、クリック、ドラッグ、動いた量、ホイール）をまとめる。
 記録のファイルの形は record.go の先頭に書いてある。
+
+## ペンタブレットと手書きメモ
+
+スタイラスで書く 2 つのウィジェット（フェーズ H）。書き方は docs/config.md の「ペンタブレット」「手書きメモ」「線の読み取り」、例は `config/pen-example.yaml`（本番の設定にレイヤー「ペン」と「メモ」を足したもの）。**本番の設定には入れていない**。
+
+### ペンタブレット（widget: pentablet）
+
+- PC には HID のペン（デジタイザ）として届く。**キーボードとマウスの形（`usb_mode: mouse`）のときだけ**使える（USB のエンドポイントに空きがないので、マウスと同じ HID に入れた。キーボードだけの形では、セルに「マウスありの形で使えます」）。
+- PC から外しているあいだは休み。抵抗膜はペンを浮かせた位置を読めないので、触れているあいだだけペンがある。
+- 筆圧：押す強さ（ABS_PRESSURE）を 0〜1023 にして送る。指の記録では、同じ線の中でも 2〜3 倍変わる粗い値なので、使いにくければ `pressure: false`。
+
+| OS | 扱い（調べた結果） | 確かめたか |
+| --- | --- | --- |
+| Linux | hid-generic が、Digitizer の中の Stylus を、BTN_TOOL_PEN、BTN_TOUCH、ABS_X、ABS_Y、ABS_PRESSURE のある入力（名前は「SHARP Brain」）として作る。libinput はタブレットの道具として扱い、Wayland（tablet-v2）と X11（xf86-input-libinput）のアプリ（GIMP、Krita、Xournal++ など）で筆圧が使える。全体を全画面（GNOME では「設定」→「Wacom タブレット」で画面を選べることがある）に当てはめる | 入力の種類として受け付けられたことまで（下の「確かめた結果」）。ペンの入力を送って窓を操作する試験はしていない |
+| Windows | 標準の HID のペン（Windows Ink）として扱う（Tip Switch、In Range、X、Y、Tip Pressure は Windows のペンの必須の項目）。筆圧は Windows Ink に対応したアプリで使える | 未確認 |
+| macOS | 標準のペンのドライバーがなく、マウスのような絶対座標の入力になるか、使えないことがある。筆圧はふつう使えない | 未確認 |
+
+**確かめた結果（Linux、2026-10-11）**：試験のデーモンでキーボードとマウスの形にすると、PC（Linux 6.8）の `/proc/bus/input/devices` に「SHARP Brain」（Handlers mouse1 event11、PROP=1（INPUT_PROP_POINTER）、KEY に BTN_TOOL_PEN と BTN_TOUCH、ABS に X、Y、PRESSURE）ができ、udev は `ID_INPUT_TABLET=1`、`ID_INPUT_WIDTH_MM=108`、`ID_INPUT_HEIGHT_MM=65` とした。アプリケーションを Pen（0x02）にしていたときは、画面に重なったペン（PROP=2、INPUT_PROP_DIRECT）になったので、PC の外にあるタブレットとして Digitizer（0x01）にした。
+
+### 手書きメモ（widget: memo）
+
+- 書いた線を点の列で Brain に保存する（PC から外していても使える）。上の帯：細・中・太、消（消しゴム）、戻す、全消（長押し）、＋頁、新規、前・次。
+- 書いている途中は線の部分だけを描き足す（紙は描き直さない）。縦向きでも書ける（横向きで書いたページは縮めて出す）。
+- PC で取り出す：`brain-deck memo list`、`brain-deck memo get <番号> -o メモ.png`（ページは縦に並べる。`--page 2` で 1 ページ）、`brain-deck memo rm <番号>`。
+
+### ペンの記録を取る（線の読み取りの値を見直す）
+
+線の読み取りの既定値（`min_pressure` 400、`settle_ms` 20、`smooth` 3、離す直前の 2 サンプル、つなぎ 120 ms・24 ドット）は、**指で記録したタッチから決めた仮の値**。スタイラスで記録して、値を見直す。
+
+1. Brain で `config/pen-example.yaml` を使う（`brain-deck config put config/pen-example.yaml`）。
+2. 本番を止めて記録する（ssh。1 回 1 分。記録しているあいだ、線は画面に出ない）：
+   ```sh
+   sudo systemctl stop lefthand
+   sudo lefthand -record-touch /tmp/pen-write.touch -record-layer memo -record-gesture pen-write -record-note "スタイラスで「あいうえお」と 3 回書く" -record-for 1m /etc/lefthand/config.yaml
+   sudo lefthand -record-touch /tmp/pen-dots.touch -record-layer memo -record-gesture pen-dots -record-note "スタイラスで点を 20 個打つ" -record-for 30s /etc/lefthand/config.yaml
+   sudo lefthand -record-touch /tmp/pen-line.touch -record-layer memo -record-gesture pen-line -record-note "スタイラスで、ゆっくり長い線、速い線、弱い押し方の線" -record-for 1m /etc/lefthand/config.yaml
+   sudo lefthand -record-touch /tmp/finger-line.touch -record-layer memo -record-gesture finger-line -record-note "指で同じ線を書く（ペンと見分けられるかを見る）" -record-for 1m /etc/lefthand/config.yaml
+   sudo systemctl start lefthand
+   ```
+3. PC に写して（`scp brain:/tmp/*.touch testdata/touch/`）、`go run . -replay-pen -replay-png pen-write.png testdata/touch/pen-*.touch`。線の数、捨てたサンプル、いちばん大きな点の間、PNG を見る。`-replay-params '{"min_pressure":300,"smooth":4,"hold_back":2,"join_ms":100}'` で値を変えて比べる。
+4. 押す強さの分布は `python3` などで `ABS_PRESSURE`（コード 24）を集計し、ペンと指で見分けられるか（ペンのほうが弱い・強いなど）を見る。
+5. 決めた値を `stroke.go` の `defaultPen` にし、`TestStrokeFilterRecordings` に記録を足す。
+
+### 目で確かめる手順（フェーズ H）
+
+1. `brain-deck config put config/pen-example.yaml`。ホーム画面の 2 ページ目に「ペン」と「メモ」。
+2. **メモ**：「メモ」に入り、スタイラスで字を書く。線が遅れずに出ること。細・中・太・消、戻す、全消（短く押すと説明、長押しで消える。戻すで戻る）、＋頁、新規、前・次を試す。縦向き（「画面の向き」→「縦向き」）でも書けること。PC から外しても書けること。
+3. PC で `brain-deck memo list`、`brain-deck memo get 1 -o メモ.png` を開き、Brain の画面と同じ線であること。
+4. **ペン**：「本体」→「マウス切替」でキーボードとマウスの形にしてから、「ペン」に入る。Linux なら GIMP か Xournal++ で、なぞった線が描け、強く押すと太くなること（筆圧）。マウスなしの形に戻すと、セルに「マウスありの形で使えます」。
+5. Windows と macOS で使えるかは未確認（上の表）。試したら結果を教えてほしい。
+6. 終わったら `brain-deck config put config/current.yaml`。要らないメモは `brain-deck memo rm`。
 
 ## メディアキー、F13〜F24、スリープ解除
 
@@ -2040,6 +2092,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | weatherwidget.go | 天気のセルの配置（描くものの並び）、最終更新の行、アイコンの箱の大きさ、描画 |
 | image.go | 背景画像の置き場所、受け取り（transfer.go を使う）、一覧、削除、読み込みとキャッシュ、先読み |
 | transfer.go | 分割して送られる大きなファイルの受け取り（SHA-256 の確認、一時ファイル、順番、時間切れ）。種類を選べる upload_*（update、image、weather_icon、photo） |
+| pen.go | ペンタブレット：HID のペンのレポート、セルを PC の画面に当てはめる、筆圧、描画 |
+| memo.go | 手書きメモ：メモの置き場所、帯のボタン、描き足し、ページの変換、保存 |
+| stroke.go | スタイラスの線の読み取り（跳ね、平均、つなぎ）。penreplay.go は -replay-pen |
+| internal/ink | 線の描き方（丸いペン先）。lefthand と brain-deck memo get が使う |
 | photo.go | フォトフレーム：写真の置き場所（/var/lib/lefthand/photos）、受け取り、一覧、削除、向きに合わせて縮める、順に出す係（自動減光の段階から呼ぶ） |
 | internal/imgconv | 画像の変換（縮小、切り抜き、面積の平均、明るさ、Floyd–Steinberg、帯を入れて縮める）。整数だけで計算し、gui/src/image.ts と同じ結果にする。brain-deck と lefthand が使う |
 | update.go | 更新のファイルの展開と確かめ（-version、-check-gadget、-check、GADGET_CHECK）、係の起動、restart、power、get_logs、起動の知らせ（-ready-file） |
