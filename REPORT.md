@@ -6,6 +6,71 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ J　ファイルと Brain の端末（2026-10-11）
+
+Brain 自身のシェルを端末モードで使えるようにし、Brain のファイルを Brain の画面、PC のコマンド、設定 GUI で扱えるようにしたフェーズ。デーモンは本番に反映した（8dd144e9196d）。本番の設定は変えていない（例の設定 `config/files-example.yaml`）。Brain へのログインは、パスワードを打つので試していない（ユーザーの手順）。
+
+### 作ったもの
+
+| もの | 内容 |
+| --- | --- |
+| Brain の端末（termmode.go、termpty.go、termdraw.go） | `terminal: brain` と、PC から外しているときの `terminal: on`：`/bin/login user`（`terminal.brain_user`）を PTY で動かす。パスワードは login が聞く（`-f` は使わない。root は書けない）。USB の構成と getty は変えない。PC につないでいるときの `on`、`toggle` は「PC」と「Brain」を選ぶ画面（タッチ、P、B、戻る）。`terminal: pc` で直接。PC をつないでも外しても Brain のシェルは閉じない。PC の端末の途中で外れたら、帯と画面に出す。ログアウトしたら決定でもう一度 |
+| ファイルエクスプローラ（filewidget.go） | `widget: files`。場所の一覧 → フォルダ（名前、大きさ、更新日時、SD カードの空き）。並び：名前と大きい順（フォルダは中の合計、8 秒まで）。テキストは読み物と同じ描き方、画像は写真と同じ変換。見ているときに真ん中で「読み物に足す」「写真に足す」「背景画像に足す」。行の長押し（0.8 秒）で「消しますか？」 |
+| 見られる場所（files.go） | 設定の `files.roots`（name、path、delete）。既定はホーム（/home/user）、写真、メモ、読み物（どれも delete）。`/proc` `/sys` `/dev` `/run` `/` は書けない。`/boot`、`/root`、`/etc/shadow` `/etc/gshadow` `/etc/sudoers(.d)` `/etc/ssh`、`.ssh` `.gnupg` は出さず読ませない。`delete: true` は `/home/` `/media/` `/mnt/` `/tmp/` の下とデータだけ（`/etc`、`/boot` は設定の誤り）。シンボリックリンクはたどらない。写真、メモ、読み物はそれぞれの係を通して消す（一覧も直る） |
+| プロトコル | `list_files`（by_size）、`get_file`（96 KiB ずつ）、`delete_file`、`upload_*` の `kind: file`（path と name。同じ名前は断る。64 MiB まで。置いたファイルはフォルダの持ち主のものにする）。誤りは `not_allowed`、`not_found` |
+| brain-deck files | `ls [<フォルダ>] [--sort size]`、`get <ファイル> [-o] [--force]`、`put <ファイル>... <フォルダ>`、`rm <ファイル>...` |
+| 設定 GUI | 「ファイル」のタブ（一覧、フォルダをたどる、大きい順、見る、取り出す、選ぶかドロップで足す、確かめてから消す）。セルの種類に「ファイル」 |
+| 文書と例 | README の「Brain 自身にログインする」「ファイル」、docs/config.md、docs/protocol.md、`config/files-example.yaml`、`-render-files` |
+
+### 決めたこと
+
+| 項目 | 決めたこと | 理由 |
+| --- | --- | --- |
+| Brain へのログインの仕方 | `login -- user` を PTY で。パスワードを聞く | root で動くデーモンから、パスワードなしでシェルを開かない（指示：root のシェルを開かない、パスワードを変えない） |
+| ユーザー名 | 既定 `user`、`terminal.brain_user` で変えられる（root は誤り） | Brain の普段のユーザー |
+| PC につないでいるときの「端末」 | 選ぶ画面を出す（前は、すぐ PC の端末に入った） | 指示。本番の設定の「本体」→「端末」の動きが変わる（P で前と同じ） |
+| 見られないもの | 上の表（鍵とパスワード、起動の領域） | 指示の「システムのフォルダは出さない」。設定で場所を広げても出さない |
+| 消せる場所の決まり | `/home/` `/media/` `/mnt/` `/tmp/` の下とデータだけ | 指示の「/boot や /etc を消せるようにはできない」より広めに安全側 |
+| 開く画像の上限 | 400 万画素（50 万画素を超えると「時間がかかります」） | 実機で 200 万画素に 5 秒、380 万画素に 9 秒。展開すると 1 画素 8 バイトほど（RAM 112 MB） |
+| テキストの上限 | Brain の画面は 4 MiB まで、GUI の「見る」は最初の 64 KiB | 325 KB で 751 ページを数えるのに 1.7 秒 |
+| データの場所に PC から足す | 断る（photo add、read add を使う） | 索引を通さないファイルを置かない |
+| 一時ファイル | `/var/lib/lefthand/files-tmp`（受け取りのあいだだけ。空のフォルダが残る） | ほかの upload と同じ。置き先と別のファイルシステムでもよいように写してから消す |
+
+### 実機で調べたこと
+
+| 調べたもの | 結果 |
+| --- | --- |
+| 実機のテスト（phasej_hw_test.go。本番は動かしたまま、user の権限、データは一時ディレクトリ） | /home/user の一覧 30 ms、du 込み 0.36 秒（22 個）。PNG 1600×1200 を開く 5.0 秒、2400×1600 は 8.6 秒。325 KB のテキストで 751 ページ 1.7 秒 |
+| 本番の brain-deck files | 場所の一覧（写真、メモはまだフォルダがないので「まだない」）、/home/user の大きい順（lefthand/ 38.6 MB、.cache/ 17.3 MB …）。`/etc`、`/etc/shadow` は not_allowed |
+| put → get → rm（/home/user に試しのファイル 293 KB） | 同じ中身で戻る。持ち主は user。同じ名前は not_allowed。消して、残っていないことを確かめた。**1 回目は SD の空きを 0 と読んで断った**（一時のフォルダがまだなかった）ので直した（a7a1b11） |
+| 選ぶ画面 | `brain-deck terminal on` で「PC」「Brain」の画面、`terminal off` で戻る（getty は active、USB の構成の名前は NCM+HID+ACM+ACM のまま、本番の画面と -render-png は 0 画素の違い）。帯の「0×0」を直した（8dd144e） |
+
+### 確認（ホスト）
+
+- Go：files（場所の決まり、隠すもの、リンク、大きい順、読む、消す、データを係を通して消す、足す、同じ名前、一時のフォルダがないとき）、画面のファイルエクスプローラ（開く、テキスト、道具、長押しで消す・やめる、読み物と写真に足す）、Brain の端末（termbrain_test.go）。`-race` でも通る。brain-deck：偽の Brain に files ls、get、put、rm。
+- GUI：240 件（ファイルのタブ）。`lefthand -check config/files-example.yaml` が通る。
+- 一度だけ、`go test .` 全体が FAIL と出た（どのテストか残していない）。そのあと全体を 9 回、files を 30 回、files と端末を -race で 3 回、どれも通った。下の「あとで確かめてほしいこと」。
+
+### 反映
+
+- `brain-deck update` で lefthand を e508f0756286 → a7a1b1155e50 → 53b427552923 → 8dd144e9196d（直しのたび）。どれも成功、本番の画面と `-render-png` は 0 画素の違い（状態の帯の分を合わせて）。今の .prev は 53b427552923。
+- PC の brain-deck を 8dd144e9196d にした（~/.local/bin）。
+
+### 目で確かめる手順
+
+1. **Brain のシェル**（README の「Brain 自身にログインする」）：PC から USB を抜いて、ホーム画面の「本体」→「端末」。`Password:` が出たら、Brain の user のパスワード。`id`、`tty`、`stty size`（31 100）、記号のキー、`vi`。USB を PC につないでもシェルが残ること。`exit` でログインの画面、HOME で抜ける。
+2. **選ぶ画面**：PC につないで「端末」→「PC」「Brain」の画面。P で前と同じ PC の端末、B で Brain、戻るでやめる。
+3. **ファイルエクスプローラ**：`brain-deck config put config/files-example.yaml`、ホーム画面の 2 ページ目の「ファイル」。ホーム → フォルダ、「並び：大きさ」、テキストをタップして左右でめくる、真ん中で「読み物に足す」→ 読む のアプリに出る、画像（写真）を開いて「写真に足す」。PC で `brain-deck files put 何か.txt /home/user` したものを長押しして「消す」。
+4. **設定 GUI**：「ファイル」のタブで、フォルダをたどる、見る、取り出す、ドロップで足す、削除。
+5. 終わったら `brain-deck config put config/current.yaml`。
+
+### 残っている課題
+
+- Brain へのログインの実機の確かめ（上の 1）。
+- ファイルエクスプローラで、フォルダを作る、名前を変える、写すことはできない（PC で行う）。
+- 大きな画像（400 万画素を超える）は Brain では開かない。
+- 端末の Brain のシェルは、端末モードを抜けると終わる（裏で残しておく仕組みはない）。
+
 ## 追記：フェーズ P3　同期（2026-10-11）
 
 PC と Brain のあいだのやり取りを `brain-deck sync` 1 つにまとめ、つないだとき（Linux の udev とユーザーの systemd）と Brain のボタン（Ctrl+F18 と PC のショートカット）から動かせるようにしたフェーズ。デーモンは本番に反映した（64d8bdb36652）。本番の設定は変えていない（例の設定 `config/sync-example.yaml`）。本番の Brain で `brain-deck sync` は動かしていない（本番のデータに sync.json を作るため。試験のデーモンで確かめた）。
