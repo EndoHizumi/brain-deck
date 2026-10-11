@@ -27,6 +27,7 @@ offline: { ... }            # PC から外したときの動き。省略可（�
 battery: { ... }            # 電池が少ないときの知らせと電源断、記録。省略すると既定値（下の「電池（battery）」）
 clock: { ... }              # 内蔵 RTC の使い方。省略すると読むだけ（下の「時刻と内蔵 RTC（clock）」）
 lid: { ... }                # ふたを閉じたときの動き。省略すると画面を消す（下の「ふた（lid）」）
+ime: { ... }                # 日本語の入力（uim-fep）。省略すると、入っていれば使う（下の「日本語の入力（ime）」）
 ```
 
 | 項目 | 型 | 内容 |
@@ -230,6 +231,8 @@ terminal:
   brain_user: user      # ログインするユーザー（既定 user。root は不可。パスワードは Brain の login が聞く）
 ```
 
+Brain 自身のシェルは `/bin/login -p` で開く（TERM、LANG、PATH、BRAIN_TERMINAL=1 と、日本語入力を使うときは BRAIN_IME、LIBUIM_USER_SCM_FILE を渡す。下の「日本語の入力（ime）」）。
+
 | 項目 | 内容 |
 | --- | --- |
 | `font` | `wide`：k8x12 の全角英数の字形（8×12）で 1 桁 8 ドット、800 ドットで 100 桁。`narrow`：半角の字形（4×12）で 200 桁。行はどちらも 31 行（下にタッチのキー 2 段） |
@@ -237,7 +240,7 @@ terminal:
 | `port` | 既定 `/dev/ttyGS0`（PC から見て 1 つ目のシリアル、`-if03`） |
 | `getty` | 端末モードのあいだ止め、抜けたら起動し直す Brain の getty。既定 `serial-getty@ttyGS0.service`。止めていなければ、起動もしない |
 | `command` | シリアルの代わりに動かすコマンドと引数。USB の付け直しも getty の停止もしない。端末の大きさは PTY でそのまま伝わる |
-| `user` | `command` を動かす Brain のユーザー。ログインはしない（パスワードを聞かない）。環境変数は TERM、HOME、USER、LANG（en_US.UTF-8）、PATH、BRAIN_TERMINAL=1 だけ |
+| `user` | `command` を動かす Brain のユーザー。ログインはしない（パスワードを聞かない）。環境変数は TERM、HOME、USER、LOGNAME、LANG（en_US.UTF-8）、PATH、SHELL、BRAIN_TERMINAL=1 だけ |
 
 - **反映**：端末モードに入るときに読む。設定 GUI で保存したあとも、再起動は要らない（今入っている端末モードは、抜けて入り直すと変わる）。
 - **設定 GUI**：`terminal` の項目は GUI では編集しない（保存しても残る）。ファイルを直接編集する。
@@ -1229,6 +1232,25 @@ lid:
 - **タブレットの形**（画面を裏返す）：SW_TABLET_MODE を覚えて、`get_status` の `lid.tablet` に出すだけ（動きは変えない）。
 - **状態を見る**：`brain-deck status` の「ふた」、プロトコルの `get_status` の `lid`。Brain の設定のアプリで変えられる（上書き `lid.close`）。
 
+## 日本語の入力（ime）
+
+文字を入れる欄（`input: todo`、`input: clock`）と、端末モードの Brain 自身のシェルで、uim-fep（Brainux に入っている）を通して日本語を打つ（`ime.go`）。省略しても、uim-fep と入力方式が入っていれば使う。
+
+```yaml
+ime:
+  method: auto        # uim の入力方式。auto（既定。入っているものから anthy-utf8、anthy、その他の順）、off（使わない）、anthy-utf8 などの名前
+  user: user          # uim-fep を動かす Brain のユーザー（既定 terminal.brain_user、なければ user。root は不可）
+  idle: 10m           # 欄を閉じてから、使わなければ uim-fep を止めるまで（既定 10m。0 で止めない）
+  terminal: true      # Brain 自身のシェル（terminal: brain）でも uim-fep を通す（既定 true）
+```
+
+- **欄**：欄は 2 行の小さな端末（1 行目が打った文字、2 行目が uim-fep の状態と変換の候補）になり、その中で `uim-fep -u <method> -s lastline -e bash line.sh` を `user` の権限で動かす。line.sh は bash の readline（`read -e`）で 1 行を読み、決定で `ESC ] 7777 ; ok ; <文字> BEL`、やめるで `ESC ] 7777 ; cancel BEL` を書く。lefthand はそれを端末の OSC として受け取る。uim-fep に渡すファイル（`uim.scm`、`inputrc`、`line.sh`）は、データの置き場所の `ime/` に lefthand が作る（手で直しても、起動のたびに作り直す）。
+- **キー**（`uim.scm` で決める。`~/.uim` は書き換えず、`LIBUIM_USER_SCM_FILE` で渡す。`~/.uim` があれば最後に読む）：Ctrl+Space で かな/英数（欄では本体の文字切り替えを 1 回押すのと同じ）、Ctrl+^ で英数にする（時刻の欄を開くときに lefthand が送る）、Ctrl+] は変換中なら変換をやめ、でなければ欄をやめる（readline のマクロ）。変換、候補、文節、確定は uim の既定（スペース、← →、Shift+← →、Enter、Esc、F6〜F10）。
+- **起動と停止**：uim-fep は起動に 3〜5 秒かかる（ARM926）ので、欄を閉じても止めず、`idle` のあいだ使わなければ止める。起動が終わるまでに打ったキーはためておいて、終わってから送る。方式を変える（設定の反映、上書き `ime.method`）と、欄を閉じているときに止め、次に開くときに起動し直す。
+- **使えないとき**（`off`、uim-fep がない、方式が入っていない、起動できない）：欄は英数字と記号だけの入れ方になる（題に「（英数字と記号）」と出る）。uim-fep が途中で止まったら、欄は英数字だけの入れ方に切り替わり、画面の下に理由を出す。
+- **Brain のシェル**（`terminal: true`）：`/bin/login -p` に `BRAIN_IME=<method>` と `LIBUIM_USER_SCM_FILE` を渡し、`/etc/profile.d/lefthand-ime.sh`（install.sh が置く。`contrib/brain/lefthand-ime.sh`）が、ログインしたシェルを `uim-fep -u <method> -s lastline` の中で開き直す。ssh やコンソールからのログインでは何もしない。
+- **入っている方式**：`/usr/share/uim/installed-modules.scm` の `installed-im-list`。Brain の設定のアプリ（「日本語入力」の行）で、使わない・自動・入っている方式から選べる（上書き `ime.method`）。`brain-deck status` の「日本語入力」、プロトコルの `get_status` の `ime`。
+
 ## 上書きの値（overrides.json）
 
 Brain の設定のアプリで変えた値は、設定ファイルを書き換えず、`/var/lib/lefthand/overrides.json` に置く（`overrides.go`）。コメント付きの設定ファイルを壊さないため。デーモンは、設定ファイルを読んだあとに上書きを重ねて使う。
@@ -1240,6 +1262,7 @@ Brain の設定のアプリで変えた値は、設定ファイルを書き換�
 | `backlight.offline.dim_after` | 5s〜24h か off | `backlight.offline.dim_after` |
 | `backlight.photo` | true か false | `backlight.photo`（と、書いていれば `backlight.offline.photo`） |
 | `lid.close` | off か none | `lid.close` |
+| `ime.method` | auto、off、方式の名前 | `ime.method` |
 
 - **設定ファイルを変えても残る**：設定 GUI の保存、`brain-deck config put` は設定ファイルだけを書き換え、上書きはそのまま重ねる。設定 GUI と `get_config` が返すのは設定ファイルの値（上書きを重ねる前）で、上書きは別に返す。
 - **合わない上書き**：上書きを重ねた設定が正しくないとき（写真を出すのに、設定ファイルで暗くしないなど）は、その上書きを使わず、「使っていない」と理由を出す。上書きで直る誤りでも、設定ファイルの誤りは断る。

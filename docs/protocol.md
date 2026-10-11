@@ -179,6 +179,8 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 
 `lid` はふた（`lid.go`）：`{"closed":false,"tablet":false,"close":"off","since":"…"}`。`closed` はふたが閉じている、`tablet` は画面を裏返したタブレットの形、`close` は閉じたときの動き（設定の `lid.close`、上書き）、`screen` は閉じて画面を消しているとき `off`。`overrides` は上書きの値（`get_overrides` と同じ）。`backlight.lid` は、ふたが閉じていて画面を消している。どれもなければ、フェーズ K1 より前の版。
 
+`ime` は日本語の入力（`ime.go`。設定の `ime`）：`{"method":"anthy-utf8","setting":"auto","installed":["anthy-utf8"],"uim_fep":true,"running":false,"terminal":true}`。`method` は使う入力方式（空なら使わない）、`setting` は設定の値（上書きを重ねたもの）、`installed` は uim に登録されている方式、`uim_fep` は uim-fep が入っているか、`running` は uim-fep が動いているか、`terminal` は Brain のシェルでも使うか、`error` は最後に起動できなかった理由。この項目がなければ、フェーズ K2 より前の版。
+
 `link` は PC とのつながり（`link.go`）。この項目がなければ、フェーズ P2 より前の版。
 
 | 項目 | 内容 |
