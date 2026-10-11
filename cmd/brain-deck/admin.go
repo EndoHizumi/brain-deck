@@ -138,6 +138,7 @@ var phaseText = map[string]string{
 	"starting_helper": "係を起動しています", "stopping": "lefthand を止めています", "installing": "入れ替えています",
 	"rebinding": "USB を付け直しています", "starting": "lefthand を起動しています", "waiting_ready": "新しい lefthand の起動を待っています",
 	"waiting_confirm": "つなぎ直しました。確かめています", "rolling_back": "前の版に戻しています",
+	"restoring": "入れ替えています（復元）",
 }
 
 // waitHelper は、Brain の係（stage）が終わるまで、つなぎ直しながら待つ。confirm なら、係が待っているときに
