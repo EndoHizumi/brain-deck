@@ -26,6 +26,7 @@ status_bar: { ... }         # 状態の帯。省略すると、status_bar を書
 offline: { ... }            # PC から外したときの動き。省略可（下の「PC から外したとき」）
 battery: { ... }            # 電池が少ないときの知らせと電源断、記録。省略すると既定値（下の「電池（battery）」）
 clock: { ... }              # 内蔵 RTC の使い方。省略すると読むだけ（下の「時刻と内蔵 RTC（clock）」）
+lid: { ... }                # ふたを閉じたときの動き。省略すると画面を消す（下の「ふた（lid）」）
 ```
 
 | 項目 | 型 | 内容 |
@@ -42,6 +43,9 @@ clock: { ... }              # 内蔵 RTC の使い方。省略すると読むだ
 | offline | オブジェクト | home（真偽）。PC から外れたらホーム画面に切り替える。下の「PC から外したとき」 |
 | battery | オブジェクト | warn、critical、poweroff、log、curve。下の「電池（battery）」 |
 | clock | オブジェクト | rtc（read、write、off）。下の「時刻と内蔵 RTC（clock）」 |
+| lid | オブジェクト | close（off、none）。下の「ふた（lid）」 |
+
+設定ファイルの値のうち、明るさ、暗くなるまでの時間、フォトフレーム、ふたを閉じたときの動きは、Brain の設定のアプリ（`widget: settings`）で変えられる。変えた値は設定ファイルを書き換えず、`/var/lib/lefthand/overrides.json` に「上書き」として置き、設定ファイルの値の代わりに使う（下の「上書きの値（overrides.json）」）。
 
 ## touch：タッチパネル
 
@@ -255,7 +259,7 @@ terminal:
 
 ### ウィジェット
 
-タッチのセルに、キーの代わりに情報を出す。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）、月の表示（`month`）、天気（`weather`）、グラフ（`graph`）、トラックパッド（`trackpad`）、電池（`battery`）、ストップウォッチ（`stopwatch`）、ポモドーロ（`pomodoro`）、カウンター（`counter`）、QR コード（`qr`）、在席ランプ（`presence`）、プレゼン用タイマー（`presenter`）、電卓（`calculator`）。
+タッチのセルに、キーの代わりに情報を出す。今あるのは時計（`clock`）、テキスト（`text`）、Todo（`todo`）、カレンダー（`calendar`）、月の表示（`month`）、天気（`weather`）、グラフ（`graph`）、トラックパッド（`trackpad`）、電池（`battery`）、ストップウォッチ（`stopwatch`）、ポモドーロ（`pomodoro`）、カウンター（`counter`）、QR コード（`qr`）、在席ランプ（`presence`）、プレゼン用タイマー（`presenter`）、電卓（`calculator`）。ほかに、レイヤー全体を使うアプリのウィジェット（`pentablet`、`memo`、`reader`、`files`、`settings`、`help`）がある。
 
 ```yaml
 "0,0": { widget: clock }                                       # 時刻と日付。既定の書式
@@ -279,7 +283,7 @@ terminal:
 
 | 項目 | 内容 |
 | --- | --- |
-| `widget` | ウィジェットの種類。`clock`、`text`、`todo`、`calendar`、`month`、`weather`、`graph`、`trackpad`、`battery`、`stopwatch`、`pomodoro`、`counter`、`qr`、`presence`、`presenter`、`calculator` |
+| `widget` | ウィジェットの種類。`clock`、`text`、`todo`、`calendar`、`month`、`weather`、`graph`、`trackpad`、`battery`、`stopwatch`、`pomodoro`、`counter`、`qr`、`presence`、`presenter`、`calculator`、`pentablet`、`memo`、`reader`、`files`、`settings`、`help` |
 | `label` | セルの上に小さく出す見出し（省略可） |
 | `key`、`layer_*`、`mouse` | タップしたときの動き（省略可）。書けば、ふつうのセルと同じく働き、押したときに枠が光る。書かなければ、タップしても何もせず、枠も光らない。`todo`、`calendar`、`month`、`trackpad`、`calculator` には書けない（押した位置で働くため）。`stopwatch`、`pomodoro`、`counter`、`presence`、`presenter` にも書けない（タップと長押しを自分で処理するため） |
 | `id` | `text`、`qr`、`graph`：中身の名前（必須）。`stopwatch`、`pomodoro`、`counter`、`presence`、`presenter`、`calculator`：状態の名前（省略すると種類の名前。同じ id のセルは同じ状態を出す）。英数字と `_ . -` の 32 文字まで |
@@ -657,6 +661,46 @@ files:
 - **見られないもの**：場所の中でも、`/boot`、`/root`、`/etc/shadow` `/etc/gshadow` `/etc/sudoers` `/etc/sudoers.d` `/etc/ssh`、名前が `.ssh` と `.gnupg` のフォルダは出さず、読ませない。
 - **写真、メモ、読み物のデータ**：消すと、それぞれのアプリの一覧からも消える。データの場所には PC から足せない（`brain-deck photo add`、`read add` を使う）。
 - **反映**：保存するとすぐ。
+
+#### 設定のアプリ（settings）
+
+Brain だけで、よく変える設定を変える画面（`settingswidget.go`）。PC から外していても使える。セルの項目はない。大きさは 1×1（レイヤー全体）がおすすめ。
+
+```yaml
+"0,0": { widget: settings }
+```
+
+- **タブ**：上の「設定」「情報」「電源」をタップして切り替える。
+- **設定**：行をタップすると、選ぶ画面（2 列のボタン）を出す。今の値は黄色い枠。外をタップか「やめる」で閉じる。行が入りきらなければ下の ▲▼。
+
+| 行 | 選ぶもの | 置き場所 |
+| --- | --- | --- |
+| 明るさ | 1〜7 | 上書き `backlight.level`（`backlight.offline.level` を書いていれば、それも同じにする） |
+| 暗くなるまで（PC あり） | 30 秒、1 分、3 分、5 分、10 分、30 分、しない | 上書き `backlight.dim_after` |
+| 暗くなるまで（PC なし） | 同じ | 上書き `backlight.offline.dim_after` |
+| フォトフレーム | 使う、使わない | 上書き `backlight.photo`（`backlight.offline.photo` を書いていれば、それも同じにする） |
+| 画面の向き | 横向き、縦向き、横向き（逆）、縦向き（逆） | Brain の状態（`display.json`。`rotate` のセルと同じ） |
+| 読み物の文字 | ふつう（24）、大きい（32） | Brain の状態（読み物のしおりと同じ `reader/`。ヘルプも同じ大きさ） |
+| ふたを閉じたとき | 画面を消す、何もしない | 上書き `lid.close` |
+| 時刻合わせ | 画面の下の入力欄を開く（`{input: clock}` と同じ） | システムの時計と内蔵 RTC |
+| 設定ファイルの値に戻す | 上書きをすべて消す（聞いてから） | |
+
+- **上書き**：上書きしている行は、値を橙色にして「上書き」の札を出す。選ぶ画面の「設定ファイルの値に戻す（…）」でその上書きを消す。設定ファイルと同じ値を選んだときは、上書きを置かない（あれば消す）。
+- **暗くなるまでの時間**：消えるまでの時間（`off_after`）より長くしたときは、消えるまでの時間を、設定ファイルの「暗くなってから消えるまで」の間隔だけ延ばす（例：設定ファイルが 3 分と 15 分なら、30 分にすると 42 分で消す）。「しない」にすると、フォトフレームも出さない（写真は暗くする段階の代わりに出すため）。
+- **情報**：デーモンの版、電池（残り、電圧、USB 給電）、SD カードの空き、PC とのつながり、最後に同期した時刻（brain-deck sync。なければ時刻だけ合わせた時刻）、時刻を合わせてあるか、ふた、上書きの数。
+- **電源**：「再起動」「電源を切る」は **2 秒押し続ける**と行う（押しているあいだボタンが左から赤くなる）。短く押しただけでは行わない。データは保存してから（`brain-deck reboot`、`poweroff` と同じ）。systemd のサービスとして動いていないときは使えない。
+
+#### ヘルプ（help）
+
+使い方の説明を、読み物と同じ描き方（横書き）で読む（`helpwidget.go`）。中身は lefthand に埋め込んだ `help/ja.md` で、いつもデーモンの版と合う。セルの項目はない。大きさは 1×1（レイヤー全体）がおすすめ。
+
+```yaml
+"0,0": { widget: help }
+```
+
+- **めくる**：右の 3 分の 1 をタップすると次のページ、左で前のページ。本体キーの ← →、スペース（Shift で戻る）、PageUp と PageDown。このときのキーは PC に送らない。
+- **道具**：真ん中をタップ（か BS）で、目次、最初のページ、困ったとき、文字の大きさ（24・32。読み物と同じ）、読みつづける。
+- **章と節**：`help/ja.md` の `# ` は章（新しいページから）、`## ` は節。下の帯に今の節の名前とページ。
 
 #### 電池（battery）
 
@@ -1168,6 +1212,39 @@ clock:
 - **最後に分かっていた時刻**：時刻が合っているあいだ、30 分ごとと、デーモンが終わるときに `clock.json` の `last_known` に残す。RTC が使えず、今の時刻より `last_known` が後なら、そこまで時刻を進める（「時刻未設定」のまま。時計の時刻は目安になる）。
 - **書くとき**：RTC が前の書き込みを写し終えている（HW_RTC_STAT の NEW_REGS が 0）ときだけ書く。PERSISTENT のレジスタには触らない。
 - **確かめる**：`brain-deck status` の「内蔵 RTC」（RTC の時刻、PC との差、起動したときにどうしたか）。
+
+## ふた（lid）
+
+ふたを閉じたときの動き（`lid.go`）。キーボード（brain-kbd-i2c）が、ふたを閉じると SW_LID を出す（2026-10-11 に実機で確かめた。半分まで閉じたときは出ない）。
+
+```yaml
+lid:
+  close: off    # off（既定）：画面を消し、タッチを受け付けない。none：何もしない
+```
+
+- **閉じたとき**（`off`）：バックライトを消し、タッチをすべて捨てる。閉じているあいだは、キー、ポモドーロの知らせ、電池の知らせ、設定の保存があっても点けない。フォトフレームも出さない。時計、タイマー、同期、電池の見張りはそのまま動く。
+- **開けたとき**：明るくして、自動減光の時間を数え直す。画面の中身（今のアプリ）はそのまま。
+- **自動減光を使っていないとき**（`backlight` がない）も、閉じたら消し、開けたら起動したときの明るさに戻す。
+- **電源を入れたとき**：ドライバが起動したときの状態を読まないので、開いているとみなす（閉じたまま電源を入れたら、一度開ければよい）。デーモンを起動し直したときは、カーネルが覚えている状態を読む。
+- **タブレットの形**（画面を裏返す）：SW_TABLET_MODE を覚えて、`get_status` の `lid.tablet` に出すだけ（動きは変えない）。
+- **状態を見る**：`brain-deck status` の「ふた」、プロトコルの `get_status` の `lid`。Brain の設定のアプリで変えられる（上書き `lid.close`）。
+
+## 上書きの値（overrides.json）
+
+Brain の設定のアプリで変えた値は、設定ファイルを書き換えず、`/var/lib/lefthand/overrides.json` に置く（`overrides.go`）。コメント付きの設定ファイルを壊さないため。デーモンは、設定ファイルを読んだあとに上書きを重ねて使う。
+
+| 名前 | 値 | 代わりに使う項目 |
+| --- | --- | --- |
+| `backlight.level` | 1〜7 | `backlight.level`（と、書いていれば `backlight.offline.level`） |
+| `backlight.dim_after` | 5s〜24h か off | `backlight.dim_after`（消えるまでの時間は上の「設定のアプリ」のとおり延ばす） |
+| `backlight.offline.dim_after` | 5s〜24h か off | `backlight.offline.dim_after` |
+| `backlight.photo` | true か false | `backlight.photo`（と、書いていれば `backlight.offline.photo`） |
+| `lid.close` | off か none | `lid.close` |
+
+- **設定ファイルを変えても残る**：設定 GUI の保存、`brain-deck config put` は設定ファイルだけを書き換え、上書きはそのまま重ねる。設定 GUI と `get_config` が返すのは設定ファイルの値（上書きを重ねる前）で、上書きは別に返す。
+- **合わない上書き**：上書きを重ねた設定が正しくないとき（写真を出すのに、設定ファイルで暗くしないなど）は、その上書きを使わず、「使っていない」と理由を出す。上書きで直る誤りでも、設定ファイルの誤りは断る。
+- **見る・消す**：Brain の設定のアプリ（「上書き」の札と「設定ファイルの値に戻す」）、設定 GUI（上に一覧と「設定ファイルの値に戻す」）、`brain-deck status` の「上書き」、`brain-deck overrides`（`clear <名前>... | all`、`set <名前> <値>`）、プロトコルの `get_overrides`、`clear_overrides`、`set_override`。
+- **壊れたとき**：読めないファイル、知らない名前、範囲の外の値は使わない（ログに出す）。ファイルを消せば、設定ファイルの値で動く。
 
 ## 読み込み時の検証
 

@@ -66,10 +66,12 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 
 ```json
 → {"id":2,"cmd":"get_config"}
-← {"id":2,"ok":true,"result":{"config":{...},"path":"/etc/lefthand/config.yaml"}}
+← {"id":2,"ok":true,"result":{"config":{...},"path":"/etc/lefthand/config.yaml","overrides":[…]}}
 ```
 
-`config` は、今動いている設定。旧形式は layers の形にそろえ、割り当てはすべてオブジェクトの形（`{"key":"B"}`）、省略した項目には既定値が入る（`lefthand -dump-json` と同じ）。
+`config` は、設定ファイルの値（Brain の設定のアプリで変えた上書きを重ねる前）。設定 GUI はこれを編集して `set_config` で保存するので、上書きは設定ファイルに入らない。旧形式は layers の形にそろえ、割り当てはすべてオブジェクトの形（`{"key":"B"}`）、省略した項目には既定値が入る（`lefthand -dump-json` と同じ）。
+
+`overrides` は、上書きの値（下の「上書きの値」）。この項目がなければ、上書きのない版（フェーズ K1 より前）。そのときの `config` は、今動いている設定。
 
 ### validate
 
@@ -174,6 +176,8 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 | `stat`、`persistent0` | HW_RTC_STAT と HW_RTC_PERSISTENT0（調べるため。lefthand は PERSISTENT に書かない） |
 | `boot` | デーモンが起動したときにどうしたか（`set the clock from the RTC (…)`、`not used: …`、`not needed (…)`） |
 | `last_write`、`written_at` | `write` のとき、最後に書いた結果（`ok` か `failed: …`）と時刻 |
+
+`lid` はふた（`lid.go`）：`{"closed":false,"tablet":false,"close":"off","since":"…"}`。`closed` はふたが閉じている、`tablet` は画面を裏返したタブレットの形、`close` は閉じたときの動き（設定の `lid.close`、上書き）、`screen` は閉じて画面を消しているとき `off`。`overrides` は上書きの値（`get_overrides` と同じ）。`backlight.lid` は、ふたが閉じていて画面を消している。どれもなければ、フェーズ K1 より前の版。
 
 `link` は PC とのつながり（`link.go`）。この項目がなければ、フェーズ P2 より前の版。
 
@@ -801,6 +805,31 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 
 - `get_status` の `sync`：`{"running":false,"last":{…}}`。最後の結果は `sync.json` に残る。`done` が 10 分来なければ「同期中」をやめる。
 - `set_time` の結果の `rtc`：書き戻す前の内蔵 RTC と送られた時刻の差 `{"at":…,"offset_ms":-1500,"since_write_sec":172800,"source":"brain-deck"}`（RTC を読めるときだけ）と、`rtc_write`（書き戻すか）。`get_status` の `rtc.log` に新しい 30 回。
+
+## 上書きの値（get_overrides、set_override、clear_overrides）
+
+Brain の設定のアプリで変えた値は、設定ファイルを書き換えず、`/var/lib/lefthand/overrides.json` に置く（`overrides.go`。docs/config.md の「上書きの値」）。デーモンは設定ファイルの値に上書きを重ねて使う。`brain-deck overrides` と設定 GUI が使う。
+
+```json
+→ {"id":1,"cmd":"get_overrides"}
+← {"id":1,"ok":true,"result":{"overrides":[{"key":"backlight.level","label":"明るさ","value":3,"shown":"3","file":"起動したときの明るさ","used":true}],
+   "keys":["backlight.level","backlight.dim_after","backlight.offline.dim_after","backlight.photo","lid.close"]}}
+→ {"id":2,"cmd":"set_override","key":"lid.close","value":"none","source":"brain-deck"}
+← {"id":2,"ok":true,"result":{"overrides":[…],"keys":[…]}}
+→ {"id":3,"cmd":"clear_overrides","keys":[],"source":"gui"}
+← {"id":3,"ok":true,"result":{"cleared":["backlight.level","lid.close"],"overrides":[],"keys":[…]}}
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `key` | 上書きの名前（`keys` のどれか） |
+| `label`、`shown`、`file` | 画面に出す名前、上書きの値、設定ファイルの値（どれも日本語の文） |
+| `value` | 上書きの値（ファイルの形。数、文字列、真偽） |
+| `used`、`note` | 使っているか。false なら、ほかの項目と合わないので使っていない（`note` に理由） |
+
+- `set_override`：`value` を確かめて置き、すぐ反映する（自動減光とふただけを反映する。割り当ては変わらないので、押しているキーは離さない）。知らない名前や範囲の外の値は `bad_request`。
+- `clear_overrides`：`keys` の上書きを消す。`keys` が空ならすべて。`cleared` は消したもの。
+- 設定ファイルを変えても（`set_config`、`put_config_text`）、上書きは残る。
 
 ## 更新、再起動、電源、ログ（ssh を使わない保守）
 
