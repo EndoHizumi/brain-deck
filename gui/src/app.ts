@@ -43,6 +43,7 @@ import type {
   BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode, InputKind, CalibrateKind,
   FileEntry,
   FileListResult,
+  OverrideInfo,
 } from './types'
 import { FileError, parseConfigText, sameConfig, toJSON, toYAML } from './yamlio'
 
@@ -147,6 +148,7 @@ export class App {
   // 設定
   keymap: KeymapInfo = defaultKeymap as KeymapInfo
   saved: Config | null = null // Brain に保存されている設定（差分の基準）
+  overrides: OverrideInfo[] = [] // Brain の設定のアプリで変えた上書きの値（設定ファイルより優先。overrides.go）
   cfg: Config | null = null // 編集中の設定
   source = '' // 編集中の設定の出どころ
   layer = 0
@@ -476,8 +478,9 @@ export class App {
   async loadFromBrain(): Promise<void> {
     const c = this.client!
     this.keymap = await c.request<KeymapInfo>('get_keymap')
-    const r = await c.request<{ config: Config; path: string }>('get_config')
+    const r = await c.request<{ config: Config; path: string; overrides?: OverrideInfo[] }>('get_config')
     const brain = normalizeConfig(r.config)
+    this.overrides = r.overrides ?? []
     const keep =
       this.cfg && this.dirty && this.deps.confirm('編集中の設定があります。残しますか？\n（キャンセルすると、Brain の設定を読み込みます）')
     this.saved = brain
@@ -2075,8 +2078,9 @@ export class App {
       )
       this.diff = null
       this.say(`保存して反映しました（${r.saved}。前の版は ${r.previous}）`, 'ok')
-      const g = await this.client!.request<{ config: Config }>('get_config')
+      const g = await this.client!.request<{ config: Config; overrides?: OverrideInfo[] }>('get_config')
       this.saved = normalizeConfig(g.config)
+      this.overrides = g.overrides ?? []
       this.cfg = structuredClone(this.saved)
       if (this.layer >= this.cfg.layers.length) this.layer = 0
       this.warnings = r.warnings
@@ -2213,6 +2217,30 @@ export class App {
     )
   }
 
+  // viewOverrides は、Brain の設定のアプリで変えた上書きの値（設定ファイルより優先する）の一覧と、消すボタン。
+  private viewOverrides(): HTMLElement | null {
+    if (!this.client || this.overrides.length === 0) return null
+    return h('div', { class: 'overrides', id: 'overrides' },
+      h('p', null, 'Brain の設定のアプリで変えた値（上書き）があります。設定ファイル（ここで編集して保存するもの）より優先されます。'),
+      h('ul', null, this.overrides.map((o) => h('li', null,
+        `${o.label}：${o.shown}（設定ファイル：${o.file}）`, !o.used ? h('span', { class: 'warn' }, `　使っていない：${o.note ?? ''}`) : null, ' ',
+        h('button', { class: 'small', 'data-key': o.key, onclick: () => void this.clearOverrides([o.key]) }, '設定ファイルの値に戻す')))),
+      this.overrides.length > 1 ? h('button', { class: 'small', id: 'overrides-clear-all', onclick: () => void this.clearOverrides([]) }, 'すべて設定ファイルの値に戻す') : null)
+  }
+
+  // clearOverrides は、上書きを消す（keys が空ならすべて）。
+  async clearOverrides(keys: string[]): Promise<void> {
+    if (!this.client) return
+    try {
+      const r = await this.client.request<{ cleared: string[]; overrides: OverrideInfo[] }>('clear_overrides', { keys, source: 'gui' })
+      this.overrides = r.overrides ?? []
+      this.say(`上書きを消しました（設定ファイルの値に戻しました）：${r.cleared.join('、')}`, 'ok')
+    } catch (e: any) {
+      this.say(`上書きを消せませんでした：${e?.message ?? e}`, 'error')
+    }
+    this.render()
+  }
+
   private viewEditor(): HTMLElement {
     return h(
       'main',
@@ -2228,6 +2256,7 @@ export class App {
         ? this.viewFiles()
         : [
             h('div', { class: 'source' }, `編集中：${this.source}`, this.dirty ? h('span', { class: 'dirty' }, '（未保存の変更あり）') : null),
+            this.viewOverrides(),
             this.viewTabs(),
             this.homeView && this.cfg?.home
               ? h('div', { class: 'columns' },

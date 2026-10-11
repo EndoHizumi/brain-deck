@@ -8,7 +8,10 @@ import { ACTION_FIELDS, GRAPH_FIELDS, MOUSE_LABELS, PAD_FIELDS, actionKind, acti
 import type { Transport } from './protocol'
 import { TEXT_ID_PATTERN } from './textwidget'
 import { parseDurationMs, presenceStates } from './gadgetwidget'
-import type { ActionSpec, BatteryInfo, CalendarData, Config, GraphSeries, KeymapInfo, PresenceSpec, Problem, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
+import type { ActionSpec, BatteryInfo, CalendarData, Config, GraphSeries, KeymapInfo, OverrideInfo, PresenceSpec, Problem, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
+
+// 上書きできる項目（overrides.go の overrideKeys）
+const OVERRIDE_KEYS = ['backlight.level', 'backlight.dim_after', 'backlight.offline.dim_after', 'backlight.photo', 'lid.close']
 
 const keymap = keymapJSON as KeymapInfo
 const SOURCE_KEYS = new Set(keymap.keys.flatMap((k) => [k.code, k.symbol]).filter(Boolean) as string[])
@@ -45,6 +48,8 @@ export class FakeDaemon {
   private photoUp: { token: string; name: string; of?: string; path?: string; bytes: number; parts: Uint8Array[]; got: number } | null = null
   // ファイル（list_files、get_file、delete_file、upload_* の kind: file）。/home/user の下だけ、フォルダは 1 段
   files = new Map<string, Uint8Array>([['/home/user/memo.txt', new TextEncoder().encode('買うもの\n牛乳\n')]])
+  // Brain の設定のアプリで変えた上書きの値（overrides.go）。設定ファイル（config）とは別
+  overrides: OverrideInfo[] = []
   private nextTodo = 1
   dataSubscribed = false
   // 通知を送る先（FakeTransport が設定する）
@@ -91,9 +96,24 @@ export class FakeDaemon {
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
             'set_calendar', 'get_calendar', 'set_weather', 'get_weather', 'get_weather_icon', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal', 'set_rotate',
             'set_qr', 'get_qr', 'get_widgets', 'set_presence', 'add_graph', 'clear_graph', 'get_graph',
-            'upload_begin', 'upload_chunk', 'upload_end', 'upload_abort', 'list_photos', 'get_photo', 'delete_photo', 'list_reads', 'delete_read', 'list_files', 'get_file', 'delete_file'], upload_kinds: ['photo', 'file'] })
+            'upload_begin', 'upload_chunk', 'upload_end', 'upload_abort', 'list_photos', 'get_photo', 'delete_photo', 'list_reads', 'delete_read', 'list_files', 'get_file', 'delete_file',
+            'get_overrides', 'set_override', 'clear_overrides'], upload_kinds: ['photo', 'file'] })
       case 'get_config':
-        return ok({ config: this.config, path: this.path })
+        return ok({ config: this.config, path: this.path, overrides: this.overrides })
+      case 'get_overrides':
+        return ok({ overrides: this.overrides, keys: OVERRIDE_KEYS })
+      case 'set_override': {
+        if (!OVERRIDE_KEYS.includes(req.key)) return err('bad_request', `unknown override ${JSON.stringify(req.key)}`)
+        this.overrides = this.overrides.filter((o) => o.key !== req.key)
+        this.overrides.push({ key: req.key, label: req.key, value: req.value, shown: String(req.value), file: '?', used: true })
+        return ok({ overrides: this.overrides, keys: OVERRIDE_KEYS })
+      }
+      case 'clear_overrides': {
+        const keys: string[] = req.keys?.length ? req.keys : this.overrides.map((o) => o.key)
+        const cleared = this.overrides.filter((o) => keys.includes(o.key)).map((o) => o.key)
+        this.overrides = this.overrides.filter((o) => !keys.includes(o.key))
+        return ok({ cleared, overrides: this.overrides, keys: OVERRIDE_KEYS })
+      }
       case 'get_keymap':
         return ok(keymap)
       case 'get_status':

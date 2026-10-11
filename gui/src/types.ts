@@ -242,6 +242,18 @@ export interface Config {
   offline?: { home?: boolean } // PC から外したときの動き（offline.go）
   battery?: BatteryConfig // 電池が少ないときの知らせと電源断、記録（batteryguard.go）
   clock?: { rtc?: 'read' | 'write' | 'off' } // 内蔵 RTC の使い方（rtc.go）
+  lid?: { close?: 'off' | 'none' } // ふたを閉じたときの動き（lid.go）
+}
+
+// OverrideInfo は、Brain の設定のアプリで変えた上書きの値 1 つ（overrides.go。get_config、get_overrides）。
+export interface OverrideInfo {
+  key: string
+  label: string
+  value: unknown
+  shown: string // 上書きの値（画面に出す形）
+  file: string // 設定ファイルの値（画面に出す形）
+  used: boolean
+  note?: string
 }
 
 // InputKind は input の欄の種類。

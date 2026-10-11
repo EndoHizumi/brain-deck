@@ -1220,3 +1220,25 @@ describe('ファイル', () => {
     await vi.waitFor(() => expect(t.daemon.files.has('/home/user/a.bin')).toBe(false))
   })
 })
+
+describe('上書きの値（Brain の設定のアプリ）', () => {
+  it('get_config の上書きを一覧に出し、設定ファイルの値に戻せる', async () => {
+    const daemon = new FakeDaemon(sampleConfig())
+    daemon.overrides = [
+      { key: 'backlight.level', label: '明るさ', value: 5, shown: '5', file: '起動したときの明るさ', used: true },
+      { key: 'lid.close', label: 'ふたを閉じたとき', value: 'none', shown: '何もしない', file: '画面を消す', used: true },
+    ]
+    const t = await connected(setup({ daemon }))
+    expect(t.$('#overrides').textContent).toContain('明るさ：5（設定ファイル：起動したときの明るさ）')
+    expect(t.$('#overrides').textContent).toContain('ふたを閉じたとき：何もしない')
+    t.$<HTMLButtonElement>('#overrides button[data-key="lid.close"]').click()
+    await vi.waitFor(() => expect(daemon.overrides.map((o) => o.key)).toEqual(['backlight.level']))
+    expect(t.cmds()).toContain('clear_overrides')
+    expect(t.$('#overrides-clear-all')).toBeNull() // 1 つだけなら「すべて」は出さない
+    t.$<HTMLButtonElement>('#overrides button[data-key="backlight.level"]').click()
+    await vi.waitFor(() => expect(t.root.querySelector('#overrides')).toBeNull())
+    expect(t.app.messages.at(-1)?.text).toContain('設定ファイルの値に戻しました')
+    // 保存しても、上書きは設定ファイルに入らない（get_config の config は設定ファイルの値）
+    expect(daemon.config).not.toHaveProperty('lid')
+  })
+})

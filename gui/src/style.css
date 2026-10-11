@@ -250,3 +250,9 @@ table.files td, table.files th { padding: 3px 8px; border-bottom: 1px solid #eef
 table.files td:nth-child(2) { text-align: right; white-space: nowrap; }
 table.files a.dir { font-weight: bold; }
 .file-preview pre { max-height: 420px; overflow: auto; white-space: pre-wrap; background: #f6f7f9; padding: 8px; border-radius: 4px; }
+
+/* Brain の設定のアプリで変えた上書きの値（overrides.go） */
+.overrides { border: 1px solid #e0a040; background: #fff6e6; border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
+.overrides p { margin: 0 0 4px; }
+.overrides ul { margin: 0 0 4px; padding-left: 1.2em; }
+.overrides .warn { color: #b04000; }
