@@ -244,6 +244,19 @@ export interface Config {
   clock?: { rtc?: 'read' | 'write' | 'off' } // 内蔵 RTC の使い方（rtc.go）
   lid?: { close?: 'off' | 'none'; tablet_keys?: 'off' | 'on' } // ふたを閉じたときの動き、タブレットの形の本体キー（lid.go）
   ime?: { method?: string; user?: string; idle?: string; terminal?: boolean; start?: { todo?: 'kana' | 'latin' | 'last'; clock?: 'kana' | 'latin' | 'last' } } // 日本語の入力（uim-fep。ime.go）
+  start_layer?: string // 起動したときと設定を反映したときに開くレイヤー（home はホーム画面）
+  profiles?: ProfileConfig[] // PC ごとの設定（profile.go）。GUI では編集しない（そのまま保存する）
+}
+
+// ProfileConfig は、PC ごとの設定 1 つ（profile.go）。PC の brain-deck が名乗った名前で選び、設定に重ねる。
+export interface ProfileConfig {
+  name: string
+  label?: string
+  pcs?: string[]
+  start_layer?: string
+  modifiers?: Record<string, 'ctrl' | 'shift' | 'alt' | 'gui'>
+  home?: HomeConfig
+  layers?: LayerConfig[]
 }
 
 // OverrideInfo は、Brain の設定のアプリで変えた上書きの値 1 つ（overrides.go。get_config、get_overrides）。

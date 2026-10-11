@@ -539,6 +539,13 @@ export function renameLayer(cfg: Config, li: number, name: string): void {
     a[r.kind] = name
   }
   for (const a of cfg.home?.apps ?? []) if (a.layer === old) a.layer = name
+  // start_layer と PC ごとの設定（profiles）が書いたレイヤーの名前も変える
+  if (cfg.start_layer === old) cfg.start_layer = name
+  for (const p of cfg.profiles ?? []) {
+    if (p.start_layer === old) p.start_layer = name
+    for (const pl of p.layers ?? []) if (pl.name === old) pl.name = name
+    for (const a of p.home?.apps ?? []) if (a.layer === old) a.layer = name
+  }
   cfg.layers[li].name = name
 }
 
@@ -549,6 +556,12 @@ export function deleteLayer(cfg: Config, li: number): Ref[] {
   const refs = references(cfg, name).filter((r) => r.layer !== li)
   for (const r of refs) delete mapOf(cfg.layers[r.layer], r.where)![r.id]
   if (cfg.home) cfg.home.apps = cfg.home.apps.filter((a) => a.layer !== name) // そのレイヤーに入るアプリも消す
+  if (cfg.start_layer === name) delete cfg.start_layer
+  for (const p of cfg.profiles ?? []) { // PC ごとの設定の、そのレイヤーへの重ね書きも消す
+    if (p.start_layer === name) delete p.start_layer
+    if (p.layers) p.layers = p.layers.filter((pl) => pl.name !== name)
+    if (p.home) p.home.apps = p.home.apps.filter((a) => a.layer !== name)
+  }
   cfg.layers.splice(li, 1)
   return refs
 }

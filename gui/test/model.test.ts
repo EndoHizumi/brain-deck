@@ -68,6 +68,20 @@ describe('レイヤーの操作', () => {
     expect(c.layers[0].keys!.KEY_TAB).toBeUndefined()
     expect(() => deleteLayer(c, 0)).toThrow()
   })
+  it('PC ごとの設定（profiles）と start_layer のレイヤーの名前も合わせる', () => {
+    const c = sampleConfig()
+    const edit = c.layers[1].name
+    c.start_layer = edit
+    c.profiles = [{ name: 'mac', start_layer: edit, layers: [{ name: edit, keys: { KEY_Q: { key: 'LGUI+Q' } } }, { name: 'base' }] }]
+    renameLayer(c, 1, 'editing')
+    expect(c.start_layer).toBe('editing')
+    expect(c.profiles![0].start_layer).toBe('editing')
+    expect(c.profiles![0].layers!.map((l) => l.name)).toEqual(['editing', 'base'])
+    deleteLayer(c, 1)
+    expect(c.start_layer).toBeUndefined()
+    expect(c.profiles![0].start_layer).toBeUndefined()
+    expect(c.profiles![0].layers!.map((l) => l.name)).toEqual(['base'])
+  })
 })
 
 describe('そのほか', () => {
