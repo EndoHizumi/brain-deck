@@ -110,6 +110,8 @@ const usage = `使い方：
                                       フォルダを書かなければ場所の一覧。--sort size は大きい順（フォルダは中の合計）
   brain-deck files get <Brain のファイル> [-o <ファイル>] [--force]   取り出す。files put <ファイル>... <Brain のフォルダ>
                                       で足す、files rm <Brain のファイル>... で消す（delete: true の場所だけ）
+  brain-deck calibrate [--points 9] [--no-wait]   タッチのキャリブレーションを始める（Brain の画面の十字を順に押す。
+                                      終わるまで待ち、前と後のずれを出す）。--status で今の変換、--reset で設定の min と max に戻す
   brain-deck sync [--wait 90s] [--if-older 10m]   時刻、予定、天気、読み物の RSS、手書きメモの取り出しを、まとめて行う
                                       （~/.config/brain-deck/sync.yaml で選ぶ。--wait は Brain の準備を待つ。--if-older は、
                                       Brain がその時間のうちに同期していれば何もしない）。終了コードは、失敗があれば 9
@@ -211,12 +213,12 @@ type options struct {
 
 // subValueOpts、subFlagOpts は、photo、memo、read、files、sync のオプション。
 var (
-	subValueOpts = map[string]bool{"o": true, "page": true, "wait": true, "if-older": true, "out": true, "of": true, "zoom": true, "center": true, "brightness": true, "limit-items": true, "sort": true}
-	subFlagOpts  = map[string]bool{"portrait": true, "no-dither": true, "all": true, "force": true, "du": true, "recursive": true}
+	subValueOpts = map[string]bool{"o": true, "page": true, "wait": true, "if-older": true, "out": true, "of": true, "zoom": true, "center": true, "brightness": true, "limit-items": true, "sort": true, "points": true}
+	subFlagOpts  = map[string]bool{"portrait": true, "no-dither": true, "all": true, "force": true, "du": true, "recursive": true, "reset": true}
 )
 
 // subCommands は、vals と flags を使うコマンド。
-var subCommands = " photo memo read files sync "
+var subCommands = " photo memo read files sync calibrate "
 
 // checkSub は、コマンドが使えないオプションを書いていないかを確かめる。allowed は使える名前（空白区切り）。
 func (o *options) checkSub(allowed string) error {
@@ -438,7 +440,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		on   bool
 		name string
 		cmds string
-	}{{o.status || o.rollback, "--status、--rollback", "update"}, {o.usb, "--usb", "restart"}, {o.noWait, "--no-wait", "reboot poweroff"},
+	}{{o.rollback, "--rollback", "update"}, {o.status, "--status", "update calibrate"}, {o.usb, "--usb", "restart"}, {o.noWait, "--no-wait", "reboot poweroff calibrate"},
 		{o.follow, "-f", "logs"}, {o.lines != 0, "-n", "logs battery"}, {o.fit, "--fit", "battery"}, {o.prev || o.restartOK, "--prev、--restart", "config"}, {o.result != "" || o.limit != 0, "--result、--limit", "exec"}} {
 		if f.on && !strings.Contains(" "+f.cmds+" ", " "+o.args[0]+" ") {
 			fmt.Fprintf(stderr, "brain-deck: %s は %s で使います%s\n", f.name, f.cmds, hint)
@@ -491,6 +493,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = readCommand(o)
 	case "files":
 		cmd, err = filesCommand(o)
+	case "calibrate":
+		return runCalibrate(o, stdout, stderr)
 	case "sync":
 		return runSync(o, stdout, stderr)
 	case "time":
