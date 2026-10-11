@@ -248,8 +248,9 @@ func libGeometry(area image.Rectangle, n int) libGeom {
 func menuGeometry(area image.Rectangle) []image.Rectangle {
 	w := min(area.Dx()-40, 360)
 	h := 5*44 + 6*8
-	box := image.Rect(area.Min.X+(area.Dx()-w)/2, area.Min.Y+(area.Dy()-h)/2, 0, 0)
-	box.Max = box.Min.Add(image.Pt(w, h))
+	// image.Rect は小さいほうを Min にするので、Min と Max を直に書く（前は箱が画面の左上に寄っていた）
+	bmin := image.Pt(area.Min.X+(area.Dx()-w)/2, area.Min.Y+(area.Dy()-h)/2)
+	box := image.Rectangle{Min: bmin, Max: bmin.Add(image.Pt(w, h))}
 	var out []image.Rectangle
 	for i := 0; i < 5; i++ {
 		y := box.Min.Y + 8 + i*52
