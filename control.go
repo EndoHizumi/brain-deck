@@ -180,6 +180,10 @@ type request struct {
 	Read    string `json:"read,omitempty"`    // delete_read：読み物の id
 	Path    string `json:"path,omitempty"`    // list_files、get_file、delete_file：場所（絶対パス。list_files で空なら場所の一覧）。upload_begin（kind: file）：置くフォルダ
 	BySize  bool   `json:"by_size,omitempty"` // list_files：大きい順（フォルダは中の合計。du）
+	// set_override、clear_overrides：Brain で変える上書きの値（overrides.go）
+	Key   string          `json:"key,omitempty"`   // set_override：上書きの名前（backlight.level など）
+	Value json.RawMessage `json:"value,omitempty"` // set_override：値（JSON）
+	Keys  []string        `json:"keys,omitempty"`  // clear_overrides：消す上書き（空ならすべて）
 	// set_sync：同期の始めと終わり（sync.go）
 	OK      *bool      `json:"ok,omitempty"`
 	Summary string     `json:"summary,omitempty"`
@@ -497,11 +501,15 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
-				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync", "list_files", "get_file", "delete_file", "calibrate"},
+				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync", "list_files", "get_file", "delete_file", "calibrate",
+				"get_overrides", "set_override", "clear_overrides"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
-		return ok(map[string]any{"config": c.store.Current(), "path": c.store.path})
+		// 設定ファイルの値を返す（設定 GUI が編集して保存するので、上書きを重ねる前のもの）。上書きは overrides
+		return ok(map[string]any{"config": c.store.File(), "path": c.store.path, "overrides": c.store.Overrides()})
+	case "get_overrides", "set_override", "clear_overrides":
+		return c.overrides(id, req)
 	case "validate":
 		raw, err := configArg(req)
 		if err != nil {
@@ -546,7 +554,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
 			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "usb_state": USBState()},
 			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(), "sync": c.sync.Info(),
-			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()}})
+			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "overrides": c.store.Overrides(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()}})
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)
 		if err != nil {
@@ -681,6 +689,39 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 	default:
 		return errResp(id, errUnknownCmd, fmt.Sprintf("unknown command %q", req.Cmd), nil)
 	}
+}
+
+// overrides は get_overrides、set_override、clear_overrides を処理する（overrides.go）。
+func (c *Controller) overrides(id json.RawMessage, req request) response {
+	src := req.Source
+	if src == "" {
+		src = "unknown"
+	}
+	switch req.Cmd {
+	case "set_override":
+		if req.Key == "" || len(req.Value) == 0 {
+			return errResp(id, errBadRequest, `"key" and "value" are required`, nil)
+		}
+		if err := c.store.SetOverride(req.Key, req.Value, src); err != nil {
+			switch {
+			case errors.Is(err, errOverrideKey), errors.Is(err, errOverrideValue):
+				return errResp(id, errBadRequest, err.Error(), nil)
+			case errors.Is(err, errNoOverrides):
+				return errResp(id, errInternal, err.Error(), nil)
+			}
+			return errResp(id, errInternal, err.Error(), nil)
+		}
+	case "clear_overrides":
+		done, err := c.store.ClearOverrides(req.Keys, src)
+		if err != nil {
+			if errors.Is(err, errOverrideKey) {
+				return errResp(id, errBadRequest, err.Error(), nil)
+			}
+			return errResp(id, errInternal, err.Error(), nil)
+		}
+		return response{ID: id, OK: true, Result: map[string]any{"cleared": done, "overrides": c.store.Overrides(), "keys": overrideKeyNames()}}
+	}
+	return response{ID: id, OK: true, Result: map[string]any{"overrides": c.store.Overrides(), "keys": overrideKeyNames()}}
 }
 
 // setText は set_text（kind が text）と set_qr（kind が qr）を処理する。保存（SD カードへの書き込み）は待たずに返す。

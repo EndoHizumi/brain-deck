@@ -1307,6 +1307,23 @@ func main() {
 		return
 	}
 
+	// Brain の設定のアプリで変えた上書きの値（overrides.go）を、設定ファイルの値に重ねて使う
+	overrides := OpenOverrides(*dataDir)
+	fileCfg := cfg
+	if vals := overrides.Values(); len(vals) > 0 {
+		eff, infos := applyOverrides(fileCfg, vals)
+		if k, _, err := compileKeymap(eff); err != nil {
+			log.Printf("overrides: %v (using the config file without overrides)", err)
+		} else {
+			cfg, km = eff, k
+		}
+		for _, in := range infos {
+			if !in.Used {
+				log.Printf("overrides: %s = %v is not used: %s", in.Key, in.Value, in.Note)
+			}
+		}
+	}
+
 	// CPU が 1 つでも、描画中に入力の goroutine がすぐ動けるようにする
 	// （描画スレッドは nice 10 に下げてあるので、OS が入力側を優先する）
 	if runtime.GOMAXPROCS(0) < 2 {
@@ -1611,27 +1628,35 @@ func main() {
 		mon.TerminalChanged(term.Info())
 		dim.SetTerminal(term.Active())
 	})
+	// 設定の置き場所。設定 GUI と brain-deck（シリアル）と、Brain の設定のアプリから使う
+	cstore := &configStore{path: cfgPath, file: fileCfg, cfg: cfg, km: km, ov: overrides, apply: func(c *Config, k *Keymap) error {
+		if err := reloader(e)(c, k); err != nil {
+			return err
+		}
+		curCfg.Store(c)
+		images.Preload(preloadOrder(c)) // 新しい設定で使う画像を先に読む
+		p, _ := c.Backlight.compile()   // 検証済み
+		dim.Apply(p)
+		lid.SetAction(c.Lid.action())
+		bp, _ := c.Battery.compile() // 検証済み
+		guard.Apply(bp)
+		battery.SetCurve(bp.curve)
+		clock.SetRTCMode(c.Clock.rtcMode())
+		pp, _ := c.Photo.compile() // 検証済み
+		frame.SetParams(pp)
+		files.SetConfig(c.Files)
+		go filesUI.reload()
+		return nil
+	}, light: func(c *Config) {
+		// 上書きだけが変わった：上書きで変わる項目（自動減光とふた）だけを反映する（割り当ては変わらない）
+		curCfg.Store(c)
+		p, _ := c.Backlight.compile() // applyOverrides が確かめてある
+		dim.Apply(p)
+		lid.SetAction(c.Lid.action())
+	}}
 	if *serialPath != "" {
 		ctl := &Controller{
-			store: &configStore{path: cfgPath, cfg: cfg, km: km, apply: func(c *Config, k *Keymap) error {
-				if err := reloader(e)(c, k); err != nil {
-					return err
-				}
-				curCfg.Store(c)
-				images.Preload(preloadOrder(c)) // 新しい設定で使う画像を先に読む
-				p, _ := c.Backlight.compile()   // 検証済み
-				dim.Apply(p)
-				lid.SetAction(c.Lid.action())
-				bp, _ := c.Battery.compile() // 検証済み
-				guard.Apply(bp)
-				battery.SetCurve(bp.curve)
-				clock.SetRTCMode(c.Clock.rtcMode())
-				pp, _ := c.Photo.compile() // 検証済み
-				frame.SetParams(pp)
-				files.SetConfig(c.Files)
-				go filesUI.reload()
-				return nil
-			}},
+			store:   cstore,
 			lid:     lid,
 			engine:  e,
 			monitor: mon,

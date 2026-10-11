@@ -116,7 +116,12 @@ const usage = `使い方：
                                       （~/.config/brain-deck/sync.yaml で選ぶ。--wait は Brain の準備を待つ。--if-older は、
                                       Brain がその時間のうちに同期していれば何もしない）。終了コードは、失敗があれば 9
   brain-deck time sync                PC の時刻を Brain に送る
-  brain-deck status                   Brain の状態（版、時刻と内蔵 RTC、PC とのつながり、レイヤー、USB の形、電池）
+  brain-deck status                   Brain の状態（版、時刻と内蔵 RTC、PC とのつながり、レイヤー、USB の形、電池、
+                                      ふた、Brain の設定のアプリで変えた上書きの値）
+  brain-deck overrides [list]         Brain の設定のアプリで変えた上書きの値（設定ファイルの値と並べる）
+  brain-deck overrides clear <名前>... | all   上書きを消して、設定ファイルの値に戻す
+  brain-deck overrides set <名前> <値>   上書きを置く（backlight.level 1〜7、backlight.dim_after 3m か off、
+                                      backlight.offline.dim_after、backlight.photo true か false、lid.close off か none）
   brain-deck battery log [-n 行数]    電池だけで動かしたときの電圧の記録（CSV。Brain の battery-log.csv）
   brain-deck battery log --fit        記録から、残りの見積もりの表（設定の battery.curve）を作る
   brain-deck usb-mode [keyboard|mouse|toggle]  USB の形を見る・切り替える。keyboard はキーボードだけ（ブートキーボード。
@@ -516,6 +521,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = usbModeCommand(o)
 	case "terminal":
 		cmd, err = terminalCommand(o)
+	case "overrides":
+		cmd, err = overridesCommand(o)
 	default:
 		err = usageError("知らないコマンド " + strconv.Quote(o.args[0]))
 	}
@@ -979,8 +986,10 @@ func status(c *Client) (string, error) {
 			Count     int    `json:"count"`
 			Showing   string `json:"showing"`
 		} `json:"photo"`
-		RTC  *rtcInfo  `json:"rtc"`
-		Link *linkInfo `json:"link"`
+		RTC       *rtcInfo       `json:"rtc"`
+		Link      *linkInfo      `json:"link"`
+		Lid       *lidInfo       `json:"lid"`
+		Overrides []overrideInfo `json:"overrides"`
 	}
 	json.Unmarshal(raw, &st)
 	pcNow := time.Now()
@@ -1022,7 +1031,37 @@ func status(c *Client) (string, error) {
 		}
 		out += "\n写真\t" + p
 	}
+	if st.Lid != nil {
+		out += "\nふた\t" + st.Lid.describe()
+	}
+	if c.Hello.has("get_overrides") {
+		out += "\n上書き\t" + describeOverrides(st.Overrides)
+	}
 	return out, nil
+}
+
+// lidInfo は get_status の lid（lefthand の lid.go の LidInfo）。
+type lidInfo struct {
+	Closed bool   `json:"closed"`
+	Tablet bool   `json:"tablet"`
+	Close  string `json:"close"`
+}
+
+func (l lidInfo) describe() string {
+	s := "開いている"
+	if l.Closed {
+		s = "閉じている"
+	}
+	if l.Tablet {
+		s += "（タブレットの形）"
+	}
+	if l.Close == "none" {
+		return s + "。閉じても何もしない（lid.close: none）"
+	}
+	if l.Closed {
+		return s + "。画面を消している"
+	}
+	return s + "。閉じたら画面を消す"
 }
 
 // battery は get_status の battery（lefthand の battery.go の BatteryInfo）。

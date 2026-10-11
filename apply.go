@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -151,19 +154,37 @@ func writeFileAtomic(path string, data []byte, keepPrev bool) error {
 }
 
 // configStore は動いているデーモンの設定。設定 GUI からの読み書きを受け持つ。
+// 設定ファイルの値（file）に、Brain で変えた上書きの値（ov、overrides.go）を重ねたもの（cfg）で動く。
+// 設定 GUI と brain-deck が読み書きするのは設定ファイルの値で、上書きは別に読み書きする。
 type configStore struct {
 	mu   sync.Mutex
 	path string
-	cfg  *Config
+	file *Config // 設定ファイルの値。nil なら cfg と同じ（上書きがない）
+	cfg  *Config // 動いている設定（上書きを重ねたもの）
 	km   *Keymap
+	ov   *OverrideStore // nil なら上書きを使わない
 	// apply は新しい割り当てを動いているデーモンに反映する（Engine.Reload と画面の描き直し）。
 	apply func(*Config, *Keymap) error
+	// light は、上書きだけが変わったときに、上書きで変わる項目（自動減光、ふた）だけを反映する。nil なら apply を使う
+	light func(*Config)
+	// onOverrides は、上書きが変わったとき（設定のアプリの描き直し）。待たずに返ること
+	onOverrides func()
 }
 
-// Current は今の設定を返す。呼び出し側は書き換えないこと。
+// Current は今の設定（上書きを重ねたもの）を返す。呼び出し側は書き換えないこと。
 func (s *configStore) Current() *Config {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.cfg
+}
+
+// File は設定ファイルの値（上書きを重ねる前）を返す。get_config はこちらを返す（設定 GUI が編集して保存するので）。
+func (s *configStore) File() *Config {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file != nil {
+		return s.file
+	}
 	return s.cfg
 }
 
@@ -174,19 +195,46 @@ func (s *configStore) Keymap() *Keymap {
 	return s.km
 }
 
-// Validate は raw（YAML か JSON）を、適用せずに検証する。
+// effective は、設定ファイルの値 file に、今の上書きを重ねる。
+func (s *configStore) effective(file *Config) (*Config, []OverrideInfo) {
+	return applyOverrides(file, s.ov.Values())
+}
+
+// check は raw を読み、上書きを重ね、-check と同じ検証をする。
+func (s *configStore) check(raw []byte) (file, eff *Config, km *Keymap, warns []string, err error) {
+	file, err = parseConfig(raw)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if s.ov == nil {
+		km, warns, err = compileKeymap(file)
+		return file, file, km, warns, err
+	}
+	// 上書きで直る誤り（写真を出すのに暗くしないなど）も、設定ファイルの誤りとして断る
+	if _, err := file.Backlight.compile(); err != nil {
+		return nil, nil, nil, nil, Problems{{Path: "/backlight", Message: "backlight: " + err.Error()}}
+	}
+	eff, _ = s.effective(file)
+	km, warns, err = compileKeymap(eff)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return file, eff, km, warns, nil
+}
+
+// Validate は raw（YAML か JSON）を、適用せずに検証する。返すのは設定ファイルの値（layers の形にそろえたもの）。
 func (s *configStore) Validate(raw []byte) (*Config, *Keymap, []string, error) {
-	cfg, km, warns, err := checkConfig(raw)
+	file, eff, km, warns, err := s.check(raw)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	s.mu.Lock()
 	cur := s.cfg
 	s.mu.Unlock()
-	if p := restartProblems(cur, cfg); len(p) > 0 {
+	if p := restartProblems(cur, eff); len(p) > 0 {
 		return nil, nil, nil, p
 	}
-	return cfg, km, warns, nil
+	return file, km, warns, nil
 }
 
 // errRolledBack は、保存はできたが反映に失敗し、前の設定に戻したことを表す。
@@ -194,25 +242,28 @@ var errRolledBack = errors.New("rolled back to the previous config")
 
 // Set は raw を検証し、保存して反映する。失敗したときは前の設定のまま動き続ける。
 func (s *configStore) Set(raw []byte) ([]string, error) {
-	cfg, km, warns, err := s.Validate(raw)
+	file, eff, km, warns, err := s.check(raw)
 	if err != nil {
 		return nil, err
 	}
-	out, err := marshalConfig(cfg)
+	if p := restartProblems(s.Current(), eff); len(p) > 0 {
+		return nil, p
+	}
+	out, err := marshalConfig(file)
 	if err != nil {
 		return nil, fmt.Errorf("marshal: %w", err)
 	}
 	// 書き出した YAML を読み直し、同じ設定になることを確かめてから置き換える
 	again, _, _, err := checkConfig(out)
-	if err != nil || !reflect.DeepEqual(again, cfg) {
+	if err != nil || !reflect.DeepEqual(again, file) {
 		return nil, fmt.Errorf("internal error: the YAML to be saved does not read back the same (%v)", err)
 	}
 
-	return warns, s.save(out, cfg, km)
+	return warns, s.save(out, file, eff, km)
 }
 
-// save は out を設定ファイルに書き（前の版は .prev）、cfg と km を反映する。反映に失敗したらファイルも戻す。
-func (s *configStore) save(out []byte, cfg *Config, km *Keymap) error {
+// save は out を設定ファイルに書き（前の版は .prev）、eff と km を反映する。反映に失敗したらファイルも戻す。
+func (s *configStore) save(out []byte, file, eff *Config, km *Keymap) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old, err := os.ReadFile(s.path)
@@ -222,7 +273,7 @@ func (s *configStore) save(out []byte, cfg *Config, km *Keymap) error {
 	if err := writeFileAtomic(s.path, out, true); err != nil {
 		return fmt.Errorf("save %s: %w", s.path, err)
 	}
-	if err := s.apply(cfg, km); err != nil {
+	if err := s.apply(eff, km); err != nil {
 		aerr := err
 		// ファイルを元に戻し、前の割り当てで動かす
 		if err := writeFileAtomic(s.path, old, false); err != nil {
@@ -233,8 +284,75 @@ func (s *configStore) save(out []byte, cfg *Config, km *Keymap) error {
 		}
 		return fmt.Errorf("apply failed: %v: %w", aerr, errRolledBack)
 	}
-	s.cfg, s.km = cfg, km
+	s.file, s.cfg, s.km = file, eff, km
 	return nil
+}
+
+// Overrides は、今の上書きの様子（項目の順）。
+func (s *configStore) Overrides() []OverrideInfo {
+	if s.ov == nil {
+		return []OverrideInfo{}
+	}
+	_, info := s.effective(s.File())
+	if info == nil {
+		info = []OverrideInfo{}
+	}
+	return info
+}
+
+// errNoOverrides は、上書きを使わないデーモン（-data-dir がない）で上書きを変えようとしたこと。
+var errNoOverrides = errors.New("overrides are not available")
+
+// SetOverride は、上書き key を raw にして、すぐ反映する。
+func (s *configStore) SetOverride(key string, raw json.RawMessage, source string) error {
+	if s.ov == nil {
+		return errNoOverrides
+	}
+	if err := s.ov.Set(key, raw, source); err != nil {
+		return err
+	}
+	s.reapply()
+	log.Printf("overrides: %s = %s (by %s)", key, raw, source)
+	return nil
+}
+
+// ClearOverrides は、keys の上書きを消して（空ならすべて）、設定ファイルの値に戻す。
+func (s *configStore) ClearOverrides(keys []string, source string) ([]string, error) {
+	if s.ov == nil {
+		return nil, errNoOverrides
+	}
+	done, err := s.ov.Clear(keys, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(done) > 0 {
+		s.reapply()
+		log.Printf("overrides: cleared %s (by %s)", strings.Join(done, ", "), source)
+	}
+	return done, nil
+}
+
+// reapply は、上書きが変わったあとに、設定ファイルの値に重ね直して反映する。
+func (s *configStore) reapply() {
+	s.mu.Lock()
+	file := s.file
+	if file == nil {
+		file = s.cfg
+	}
+	eff, _ := s.effective(file)
+	s.file, s.cfg = file, eff
+	light, apply, km, on := s.light, s.apply, s.km, s.onOverrides
+	s.mu.Unlock()
+	if light != nil {
+		light(eff)
+	} else if apply != nil {
+		if err := apply(eff, km); err != nil {
+			log.Printf("overrides: apply: %v", err)
+		}
+	}
+	if on != nil {
+		on()
+	}
 }
 
 // errNeedsRestart は、put_config_text で、再起動が要る項目が変わったのに、再起動を許されていないこと。
@@ -245,7 +363,7 @@ var errNeedsRestart = errors.New("the config changes items that need a restart")
 // restart を true で返す（呼ぶ側がデーモンを再起動する）。許されていなければ、何も書かずに errNeedsRestart を返す。
 // dryRun なら、検証だけをする。
 func (s *configStore) PutText(raw []byte, allowRestart, dryRun bool) (warns []string, restart Problems, err error) {
-	cfg, km, warns, err := checkConfig(raw)
+	file, cfg, km, warns, err := s.check(raw)
 	if err != nil {
 		return nil, nil, asProblems(err) // YAML の文法の誤りなども、場所付きの誤りの形にする
 	}
@@ -264,7 +382,7 @@ func (s *configStore) PutText(raw []byte, allowRestart, dryRun bool) (warns []st
 		}
 		return warns, rp, nil
 	}
-	return warns, nil, s.save(raw, cfg, km)
+	return warns, nil, s.save(raw, file, cfg, km)
 }
 
 // Text は設定ファイルの中身（prev なら .prev）を返す。
