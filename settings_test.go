@@ -29,14 +29,16 @@ func TestSettingsUIChoose(t *testing.T) {
 	area := cell.Inset(cellGap + textMargin)
 	g := settingsGeometry(area, 0)
 	tapRow := func(id string) {
-		for i, rid := range setRowIDs {
-			if rid == id {
-				pt := g.rows[i%g.per].Min.Add(image.Pt(10, 10))
-				u.mu.Lock()
-				u.page = i / g.per
-				u.mu.Unlock()
-				u.touchDown(cell, pt)
-				u.touchUp(false)
+		for pi, ids := range settingsPages(g.per) {
+			for i, rid := range ids {
+				if rid == id {
+					pt := g.rows[i].Min.Add(image.Pt(10, 10))
+					u.mu.Lock()
+					u.page = pi
+					u.mu.Unlock()
+					u.touchDown(cell, pt)
+					u.touchUp(false)
+				}
 			}
 		}
 	}
@@ -222,5 +224,26 @@ func TestSettingsNoDeadlockWhileApplying(t *testing.T) {
 	}
 	if v := u.Snapshot(); v.Tab != setTabInfo {
 		t.Errorf("tab = %d", v.Tab)
+	}
+}
+
+// 設定のタブの 1 ページ目はよく変えるもの（明るさ、暗くなるまで、フォトフレーム、画面の向き、日本語入力）、2 ページ目はそのほか。
+// 1 ページに入らない画面では、組を続くページに分ける。
+func TestSettingsPages(t *testing.T) {
+	g := settingsGeometry(image.Rect(0, 0, 800, 480).Inset(cellGap+textMargin), 0)
+	pl := settingsPages(g.per)
+	if len(pl) != 2 || strings.Join(pl[0], ",") != "level,dim,dim_offline,photo,rotate,ime" || strings.Join(pl[1], ",") != "reader,lid,tablet,clock,reset" {
+		t.Fatalf("pages (per %d) = %q", g.per, pl)
+	}
+	pl = settingsPages(4)
+	if len(pl) != 4 || len(pl[0]) != 4 || len(pl[1]) != 2 || pl[2][0] != "reader" {
+		t.Fatalf("pages (per 4) = %q", pl)
+	}
+	n := 0
+	for _, p := range pl {
+		n += len(p)
+	}
+	if n != len(setRowIDs) {
+		t.Fatalf("%d rows in pages, want %d", n, len(setRowIDs))
 	}
 }

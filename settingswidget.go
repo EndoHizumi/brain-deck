@@ -49,8 +49,34 @@ var (
 	colSetHold    = RGB{0xd0, 0x50, 0x40}
 )
 
+// setRowGroups は、設定のタブの行（並ぶ順）と、ページの分け方。1 ページ目はよく変えるもの、2 ページ目はたまに変えるもの。
+// 1 つの組が 1 ページに入らないとき（画面が小さいとき）は、その組を続くページに分ける。
+var setRowGroups = [][]string{
+	{"level", "dim", "dim_offline", "photo", "rotate", "ime"},
+	{"reader", "lid", "tablet", "clock", "reset"},
+}
+
 // setRowIDs は、設定のタブの行（並ぶ順）。
-var setRowIDs = []string{"level", "dim", "dim_offline", "photo", "rotate", "reader", "lid", "tablet", "ime", "clock", "reset"}
+var setRowIDs = func() []string {
+	var ids []string
+	for _, g := range setRowGroups {
+		ids = append(ids, g...)
+	}
+	return ids
+}()
+
+// settingsPages は、1 ページに per 行のときの、ページごとの行。
+func settingsPages(per int) [][]string {
+	var pages [][]string
+	for _, g := range setRowGroups {
+		for len(g) > 0 {
+			n := min(per, len(g))
+			pages = append(pages, g[:n])
+			g = g[n:]
+		}
+	}
+	return pages
+}
 
 // setOverrideKey は、行の上書きの名前（上書きでない行は空）。
 var setOverrideKey = map[string]string{
@@ -466,10 +492,9 @@ func settingsGeometry(area image.Rectangle, nChoices int) setGeom {
 		g.tabs[i] = image.Rect(area.Min.X+i*w, area.Min.Y, x1, area.Min.Y+setTabH)
 	}
 	g.body = image.Rect(area.Min.X, area.Min.Y+setTabH+4, area.Max.X, area.Max.Y)
-	n := len(setRowIDs)
 	g.per = max(g.body.Dy()/setRowH, 1)
 	list := g.body
-	if n > g.per {
+	if len(setRowGroups) > 1 || len(setRowIDs) > g.per {
 		g.per = max((g.body.Dy()-setNavH)/setRowH, 1)
 		nav := image.Rect(g.body.Min.X, g.body.Max.Y-setNavH, g.body.Max.X, g.body.Max.Y)
 		g.prev = image.Rect(nav.Min.X, nav.Min.Y, nav.Min.X+nav.Dx()/3, nav.Max.Y)
@@ -635,14 +660,18 @@ func drawSettings(cv *Canvas, area image.Rectangle, env WidgetEnv) {
 }
 
 func drawSettingsRows(cv *Canvas, g setGeom, v *SettingsView) {
-	pages := (len(v.Rows) + g.per - 1) / g.per
+	pl := settingsPages(g.per)
+	pages := len(pl)
 	page := min(max(v.Page, 0), pages-1)
+	byID := map[string]SettingsRow{}
+	for _, r := range v.Rows {
+		byID[r.ID] = r
+	}
 	for i, r := range g.rows {
-		k := page*g.per + i
-		if k >= len(v.Rows) {
+		if i >= len(pl[page]) {
 			break
 		}
-		row := v.Rows[k]
+		row := byID[pl[page][i]]
 		b := r.Inset(2)
 		bg := colFilesRow
 		if v.Held == row.ID {
@@ -750,7 +779,8 @@ func (u *SettingsUI) touchDown(cell image.Rectangle, pt image.Point) {
 	}
 	switch u.tab {
 	case setTabSettings:
-		pages := (len(setRowIDs) + g.per - 1) / g.per
+		pl := settingsPages(g.per)
+		pages := len(pl)
 		switch {
 		case pt.In(g.prev):
 			u.page = max(u.page-1, 0)
@@ -759,10 +789,10 @@ func (u *SettingsUI) touchDown(cell image.Rectangle, pt image.Point) {
 			u.page = min(u.page+1, pages-1)
 			return
 		}
+		page := min(max(u.page, 0), pages-1)
 		for i, r := range g.rows {
-			k := u.page*g.per + i
-			if k < len(setRowIDs) && pt.In(r) {
-				u.held = setRowIDs[k]
+			if i < len(pl[page]) && pt.In(r) {
+				u.held = pl[page][i]
 			}
 		}
 	case setTabPower:
@@ -1060,9 +1090,13 @@ func (in settingsInfoIn) rows() []SettingsInfo {
 // renderSettingsView は、-render-settings の画面を作る（設定は cfg、上書きはなし、情報は env から）。
 func renderSettingsView(cfg *Config, tab, choice string, rot, readSize int, env WidgetEnv) (*SettingsView, error) {
 	t := map[string]int{"settings": setTabSettings, "info": setTabInfo, "power": setTabPower}
+	page := 0
+	if tab == "settings2" { // 設定のタブの 2 ページ目
+		tab, page = "settings", 1
+	}
 	ti, ok := t[tab]
 	if !ok {
-		return nil, fmt.Errorf("-render-settings must be settings, info or power, got %q", tab)
+		return nil, fmt.Errorf("-render-settings must be settings, settings2, info or power, got %q", tab)
 	}
 	u := NewSettingsUI(SettingsDeps{
 		Store:      &configStore{file: cfg, cfg: cfg},
@@ -1075,7 +1109,7 @@ func renderSettingsView(cfg *Config, tab, choice string, rot, readSize int, env 
 			return in.rows()
 		},
 	})
-	u.tab = ti
+	u.tab, u.page = ti, page
 	if choice != "" {
 		if _, ok := map[string]bool{"level": true, "dim": true, "dim_offline": true, "photo": true, "rotate": true, "reader": true, "lid": true, "tablet": true, "ime": true}[choice]; !ok {
 			return nil, fmt.Errorf("-render-settings-choice must be one of level, dim, dim_offline, photo, rotate, reader, lid, tablet, ime, got %q", choice)
