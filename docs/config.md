@@ -1090,6 +1090,15 @@ offline:
   home: true
 ```
 
+### タッチのキャリブレーション（calibrate）
+
+```yaml
+"0,3": {calibrate: touch, label: タッチ調整, span: [4, 1]}   # 5 点
+"1,3": {calibrate: touch9}                                   # 9 点（3×3）
+```
+
+押すと、画面に十字を出してタッチのキャリブレーションを始める（README の「タッチのキャリブレーション」）。結果は確かめの画面で「保存」したときだけ `/var/lib/lefthand/touch-cal.json` に置き、`touch.min_x` などより優先する。PC から外していても使える。label を省略すると「タッチ調整」（`touch9` は「タッチ調整(9点)」）。
+
 ### Brain のキーボードで入れる（input）
 
 キー、セル、ソフトキーに `input` を割り当てると、押したときに画面の下に入力欄が開く。PC がなくても使える。

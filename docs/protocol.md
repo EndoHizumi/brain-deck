@@ -746,6 +746,24 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 - 上限：1 つ 8 MiB（gzip）、戻して 32 MiB、ブロック 20 万。題名は 1〜200 文字。
 - 消すと、しおりも消す。開いていれば一覧に戻る。
 
+## タッチのキャリブレーション（calibrate）
+
+```json
+→ {"id":1,"cmd":"calibrate","mode":"start","kind":"touch9"}
+← {"id":1,"ok":true,"result":{"status":{"state":"target","point":1,"points":9,"gen":3},"calibration":{"source":"config","config":{"min_x":226,"max_x":3938,"min_y":3803,"max_y":384,"swap_xy":false}}}}
+→ {"id":2,"cmd":"calibrate"}
+← {"id":2,"ok":true,"result":{"status":{"state":"off","result":"saved","points":9,"before":{"mean":12.5,"max":30.1},"after":{"mean":1.6,"max":3.2},"gen":3},
+     "calibration":{"source":"calibration","config":{…},"file":{"version":1,"affine":[…],"w":800,"h":480,"points":[{"screen":[80,48],"raw":[612,3460]},…],"before":{…},"after":{…},…}}}}
+→ {"id":3,"cmd":"calibrate","mode":"reset"}
+← {"id":3,"ok":true,"result":{"reset":true,"calibration":{"source":"config",…}}}
+```
+
+- `mode`：`start`（`kind` は `touch` で 5 点、`touch9` で 9 点）、`cancel`（保存せずにやめる）、`reset`（保存したものをやめ、設定の min と max に戻す。ファイルは `.prev` に）、`status`（省略したとき）。
+- `status.state`：`target`（十字を押している。`point` は今の十字、1 から）、`verify`（確かめの画面。`before` と `after` は十字と押した位置のずれ、ドット）、`off`（`result` は最後に終わったときの `saved`、`cancelled`、`timeout`）。`gen` は始めるたびに増える。
+- `calibration.source`：`calibration`（保存したもの。`file` は touch-cal.json の中身）か `config`。
+- `affine`：X = a0·x + a1·y + a2、Y = a3·x + a4·y + a5（x、y はパネルの生の座標、X、Y は向き 0 の 800×480 の画面のドット）。
+- 端末モードのあいだは `start` を断る（`conflict`）。
+
 ## ファイル（list_files、get_file、delete_file）
 
 ファイルエクスプローラ（widget: files。`files.go`）と同じ、見られる場所（設定の `files.roots`）のファイル。`path` は絶対パス（`..` やシンボリックリンクを通るものは `not_allowed`）。
