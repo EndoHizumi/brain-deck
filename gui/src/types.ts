@@ -13,6 +13,7 @@ export interface ActionSpec {
   terminal?: TermMode // 端末モード（Brain の画面とキーボードで PC にログインする）の切り替え
   rotate?: string // 画面の向き（next で 90 度ずつ、0、90、180、270。rotate.go）
   input?: InputKind // Brain のキーボードで文字を入れる欄を開く（todo で Todo を足す、clock で時刻を合わせる。prompt.go）
+  calibrate?: CalibrateKind // タッチのキャリブレーションを始める（touch で 5 点、touch9 で 9 点。calibui.go）
   label?: string
   span?: [number, number] // セルの大きさ [列数, 行数]。タッチのセルだけ
   background?: string // セルの背景画像の id（Brain の /var/lib/lefthand/images/<id>.565）。タッチのセルだけ
@@ -245,6 +246,9 @@ export interface Config {
 
 // InputKind は input の欄の種類。
 export type InputKind = 'todo' | 'clock'
+
+// CalibrateKind は calibrate の点の数（touch は 5 点、touch9 は 9 点）。
+export type CalibrateKind = 'touch' | 'touch9'
 
 // BatteryConfig は設定の battery。
 export interface BatteryConfig {

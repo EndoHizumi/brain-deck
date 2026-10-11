@@ -58,6 +58,7 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
     { file: 'pda-mouse-offline-portrait.png', layer: 'mouse', portrait: true, link: 'not attached', pressed: ['3,0'] },
     // 本番の設定（config/current.yaml）。TZ=Asia/Tokyo lefthand -render-time 2026-10-06T09:41:27+09:00 -render-battery 87 -render-last-sync 2026-10-06T09:30:00+09:00
     { file: 'prod-system-charger-off.png', c: prod, layer: 'system', battery: { percent: 4, plugged: true, charging: false, charger_off: true }, lastSync: '2026-10-06T09:30:00+09:00' }, // -render-battery 4,charger-off
+    { file: 'prod-system-portrait.png', c: prod, layer: 'system', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' }, // タッチ調整
     { file: 'prod-home.png', c: prod, home: 0, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'prod-home-p2-portrait.png', c: prod, home: 1, portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'prod-read.png', c: prod, layer: 'read', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },

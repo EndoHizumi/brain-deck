@@ -7,7 +7,7 @@ import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
 import { BAR_BATT_H, BAR_BATT_TO, BAR_BATT_W, BAR_GAP, BAR_H, BAR_ITEMS_DEFAULT, BAR_PAD, BAR_SCALE, BAR_TEXT_Y, barItems, colBar, colBarRule, type BarEnv, type BarItemView } from './statusbar'
 import { HOME_ARROW, HOME_ICON_BASE, HOME_IMAGE_ICON, HOME_LABEL, HOME_NAME_GAP, HOME_SLOT_PAD, ICON_PALETTE, ICON_ROWS, homeGeometry, homeIconFit, homeName } from './home'
-import { LAYER_VERB, ROTATE_LABELS, INPUT_LABELS, OFFLINE_LABEL, linkOnline, needsPC, barShown, MEDIA_LABELS, MEDIA_OFF_LABEL, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
+import { LAYER_VERB, ROTATE_LABELS, INPUT_LABELS, CALIBRATE_LABELS, OFFLINE_LABEL, linkOnline, needsPC, barShown, MEDIA_LABELS, MEDIA_OFF_LABEL, MOUSE_LABELS, TERM_LABELS, USB_LABELS, PAD_DEFAULTS, actionKind, actionTarget, isLayerAction, layerTitle, resolveGrid, spanOf, type LayerKind } from './model'
 import { TEXT_NONE, textExpired, textInk, textLayout } from './textwidget'
 import { TODO_EMPTY, TODO_PAD, todoCaption, todoEllipsis, todoGeometry, todoOrder, type TodoGeom } from './todowidget'
 import { CAL_BAR_W, CAL_INFO, CAL_NOW, CAL_PAST, CAL_TIME_COL, calCaption, calLayout, calWidgetOf, type CalRow, type CalWidget } from './calwidget'
@@ -168,7 +168,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     }
     return v
   }
-  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'media' && k !== 'usb_mode' && k !== 'terminal' && k !== 'rotate' && k !== 'input') {
+  if (k !== 'key' && k !== 'none' && k !== 'mouse' && k !== 'media' && k !== 'usb_mode' && k !== 'terminal' && k !== 'rotate' && k !== 'input' && k !== 'calibrate') {
     const t = actionTarget(a)
     const dest = cfg.layers.find((l) => l.name === t)
     const destTitle = dest ? layerTitle(dest) : (t ?? '')
@@ -179,7 +179,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
   }
   const keys = k === 'mouse' ? (MOUSE_LABELS[a.mouse!] ?? '') : k === 'media' ? (MEDIA_LABELS[a.media!] ?? '')
     : k === 'usb_mode' ? (USB_LABELS[a.usb_mode!] ?? '') : k === 'terminal' ? (TERM_LABELS[a.terminal!] ?? '')
-    : k === 'rotate' ? (ROTATE_LABELS[a.rotate!] ?? '') : k === 'input' ? (INPUT_LABELS[a.input!] ?? '') : prettyCombo(a.key ?? '')
+    : k === 'rotate' ? (ROTATE_LABELS[a.rotate!] ?? '') : k === 'input' ? (INPUT_LABELS[a.input!] ?? '') : k === 'calibrate' ? (CALIBRATE_LABELS[a.calibrate!] ?? '') : prettyCombo(a.key ?? '')
   const v: CellView = label === '' || label === keys ? { mapped: true, layer: false, label: keys, sub: '' } : { mapped: true, layer: false, label, sub: keys }
   if (k === 'media') v.media = true
   if (k !== 'none' && needsPC(a)) v.needsPC = true

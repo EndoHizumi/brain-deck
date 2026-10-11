@@ -654,6 +654,8 @@ export function validate(cfg: Config): Problem[] {
       if (!['next', '0', '90', '180', '270'].includes(a.rotate!)) out.push({ path, message: `${where}: rotate must be next, 0, 90, 180 or 270` })
     } else if (k === 'input') {
       if (!['todo', 'clock'].includes(a.input!)) out.push({ path, message: `${where}: input must be todo or clock` })
+    } else if (k === 'calibrate') {
+      if (!['touch', 'touch9'].includes(a.calibrate!)) out.push({ path, message: `${where}: calibrate must be touch (5 points) or touch9 (9 points)` })
     } else if (k !== 'none' && k !== 'widget' && k !== 'mouse' && k !== 'usb_mode' && k !== 'terminal' && k !== 'media') {
       const t = actionTarget(a)!
       if (!names.has(t)) out.push({ path, message: `${where}: ${k} refers to unknown layer "${t}"` })

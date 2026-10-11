@@ -11,7 +11,7 @@ import {
   CLOCK_FIELDS, GRAPH_FIELDS, GRAPH_NUM_FIELDS, DEFAULT_CLOCK_FORMAT, DEFAULT_DATE_FORMAT, KIND_LABELS, LAYER_KINDS, LAYER_VERB, MEDIA_LABELS, MOUSE_LABELS, PAD_DEFAULTS, PAD_FIELDS,
   PAD_NUM_FIELDS, TERM_LABELS, USB_LABELS, WIDGET_FIELDS, ACTION_FIELDS, WIDGET_LABELS, ownsTouch, hasStateId,
   actionKind, actionTarget, addLayer, anchorOf, cellKey, cellsOutside, clean, deleteLayer, describeAction, editStack,
-  isIncomplete, gridSize, layerGrid, layerTitle, normalizeConfig, barShown, ROTATE_LABELS, ROTATE_VALUES, INPUT_LABELS, type Orient, parsePath, references, renameLayer, resolveCell, resolveGrid,
+  isIncomplete, gridSize, layerGrid, layerTitle, normalizeConfig, barShown, ROTATE_LABELS, ROTATE_VALUES, INPUT_LABELS, CALIBRATE_LABELS, type Orient, parsePath, references, renameLayer, resolveCell, resolveGrid,
   resolveKey, resolveSoft, setCellAction, setKeyAction, setSoftAction, spanOf, touchCell, type ActionKind, type LayerKind,
   type Location, type ResolvedAction,
 } from './model'
@@ -40,7 +40,7 @@ import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './por
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
   ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, PhotoListResult, ReadListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
-  BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode, InputKind,
+  BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode, InputKind, CalibrateKind,
   FileEntry,
   FileListResult,
 } from './types'
@@ -1715,6 +1715,9 @@ export class App {
       case 'input':
         a = { input: cur?.input ?? 'todo' }
         break
+      case 'calibrate':
+        a = { calibrate: cur?.calibrate ?? 'touch' }
+        break
       case 'key':
         a = { key: cur && actionKind(cur) === 'key' ? cur.key : '' }
         break
@@ -1743,6 +1746,7 @@ export class App {
     else if (kind === 'terminal') a.terminal = cur.terminal ?? 'toggle'
     else if (kind === 'rotate') a.rotate = cur.rotate ?? 'next'
     else if (kind === 'input') a.input = cur.input ?? 'todo'
+    else if (kind === 'calibrate') a.calibrate = cur.calibrate ?? 'touch'
     else if (LAYER_KINDS.includes(kind as LayerKind)) {
       const others = this.cfg!.layers.filter((_, i) => i !== this.layer && !(kind === 'layer_toggle' && i === 0))
       a[kind as LayerKind] = actionTarget(cur) || others[0]?.name || ''
@@ -3246,6 +3250,7 @@ export class App {
     if (own && act === 'terminal') body.push(...this.viewTermEditor(own))
     if (own && act === 'rotate') body.push(...this.viewRotateEditor(own))
     if (own && act === 'input') body.push(...this.viewInputEditor(own))
+    if (own && act === 'calibrate') body.push(...this.viewCalibrateEditor(own))
     if (own && LAYER_KINDS.includes(act as LayerKind)) {
       const lk = act as LayerKind
       body.push(h('label', { class: 'row' }, '行き先 ', h('select', { 'data-focus': 'target', id: 'target',
@@ -3805,6 +3810,18 @@ export class App {
         ROTATE_VALUES.map((v) => h('option', { value: v, selected: own.rotate === v }, `${desc[v]}：${ROTATE_LABELS[v]}`)))),
       h('p', { class: 'hint' }, 'Brain の画面の向きを変えます。変えた向きは Brain に残り、再起動しても続きます。縦向きでは、レイヤーの縦向きの格子を使います' +
         '（プレビューの「縦向き」で確かめられます）。画面右の帯のソフトキーは、ベゼルに印刷されているので、向きによらず同じ区画です。'),
+    ]
+  }
+
+  // viewCalibrateEditor は、タッチのキャリブレーションを始める割り当ての欄。
+  private viewCalibrateEditor(own: ActionSpec): HTMLElement[] {
+    return [
+      h('label', { class: 'row' }, '点の数 ', h('select', { 'data-focus': 'calibrate', id: 'calibrate',
+        onchange: (e: Event) => this.patchAction({ calibrate: (e.target as HTMLSelectElement).value as CalibrateKind }) },
+        ([['touch', '5 点（四隅の少し内側と真ん中。touch）'], ['touch9', '9 点（3×3。touch9）']] as const)
+          .map(([v, t]) => h('option', { value: v, selected: own.calibrate === v }, `${t}：${CALIBRATE_LABELS[v]}`)))),
+      h('p', { class: 'hint' }, '押すと Brain の画面に十字が出ます。順に押すと、押した位置と画面のずれを直す変換を決め、確かめの画面で' +
+        '「保存」を押したときだけ使います（保存しなければ前のまま）。PC がなくても使えます。PC からは brain-deck calibrate。'),
     ]
   }
 

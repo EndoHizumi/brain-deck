@@ -1,8 +1,8 @@
 // 設定の操作。透過の解決は layer.go の view / lookupKey と同じ規則にする。
 
-import type { ActionSpec, Config, GridConfig, InputKind, LayerConfig, MediaAction, MouseAction, TermMode, TouchConfig, UsbMode, WidgetKind } from './types'
+import type { ActionSpec, Config, GridConfig, InputKind, CalibrateKind, LayerConfig, MediaAction, MouseAction, TermMode, TouchConfig, UsbMode, WidgetKind } from './types'
 
-export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'media' | 'usb_mode' | 'terminal' | 'rotate' | 'input' | 'widget'
+export type ActionKind = 'key' | 'none' | 'layer_hold' | 'layer_toggle' | 'layer_oneshot' | 'layer_to' | 'mouse' | 'media' | 'usb_mode' | 'terminal' | 'rotate' | 'input' | 'calibrate' | 'widget'
 export const LAYER_KINDS = ['layer_hold', 'layer_toggle', 'layer_oneshot', 'layer_to'] as const
 export type LayerKind = (typeof LAYER_KINDS)[number]
 
@@ -19,6 +19,7 @@ export const KIND_LABELS: Record<ActionKind, string> = {
   terminal: '端末モード（Brain で PC にログインする）',
   rotate: '画面の向きを変える（rotate）',
   input: 'Brain のキーボードで入れる（Todo を足す、時刻を合わせる）',
+  calibrate: 'タッチのキャリブレーション（画面の十字を押す）',
   widget: 'ウィジェット（時計、テキスト、Todo、カレンダー、トラックパッドなど）',
 }
 
@@ -61,10 +62,12 @@ export const USB_LABELS: Record<UsbMode, string> = { keyboard: 'マウスオフ'
 export const TERM_LABELS: Record<TermMode, string> = { on: '端末', off: '端末を出る', toggle: '端末', pc: 'PC の端末', brain: 'Brain の端末' }
 
 // ACTION_FIELDS は、割り当ての種類を決める項目（ちょうど 1 つを書く）。ウィジェットのセルでは省略できる
-export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode', 'terminal', 'rotate', 'input'] as const
+export const ACTION_FIELDS = ['key', ...LAYER_KINDS, 'mouse', 'media', 'usb_mode', 'terminal', 'rotate', 'input', 'calibrate'] as const
 
 // Brain のキーボードで文字を入れる欄（prompt.go の inputLabels）。セルに出す名前
 export const INPUT_LABELS: Record<InputKind, string> = { todo: 'Todo追加', clock: '時刻合わせ' }
+// calibui.go の calibrateLabels
+export const CALIBRATE_LABELS: Record<CalibrateKind, string> = { touch: 'タッチ調整', touch9: 'タッチ調整(9点)' }
 
 // PC から外れているあいだ、休みにしたセルの下とタイルの隅に出す文字（offline.go の offlineLabel）
 export const OFFLINE_LABEL = 'PCなし'
@@ -151,6 +154,7 @@ export function actionKind(a: ActionSpec): ActionKind {
   if (a.terminal !== undefined) return 'terminal'
   if (a.rotate !== undefined) return 'rotate'
   if (a.input !== undefined) return 'input'
+  if (a.calibrate !== undefined) return 'calibrate'
   if (a.widget !== undefined) return 'widget'
   return 'none'
 }
@@ -191,6 +195,7 @@ export function describeAction(a: ActionSpec | undefined | null): string {
   else if (k === 'terminal') s = `terminal: ${a.terminal}`
   else if (k === 'rotate') s = `rotate: ${a.rotate}`
   else if (k === 'input') s = `input: ${a.input}`
+  else if (k === 'calibrate') s = `calibrate: ${a.calibrate}`
   else s = `${k}: ${actionTarget(a)}`
   if (a.widget !== undefined) {
     const opts = (['format', 'date_format', 'tz', 'id', 'rows', 'work', 'break'] as const).filter((f) => a[f]).map((f) => `${f}=${a[f]}`)
