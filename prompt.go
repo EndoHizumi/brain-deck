@@ -318,7 +318,7 @@ func (p *Prompt) openIMELocked(kind, initial string) bool {
 	if p.ime == nil {
 		return false
 	}
-	ok := p.ime.Open(p.imeCols(), initial, kind == inputClock)
+	ok := p.ime.Open(p.imeCols(), initial, p.ime.StartMode(kind))
 	p.viaIME = ok
 	if ok {
 		p.text, p.cur = nil, 0

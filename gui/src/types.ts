@@ -243,7 +243,7 @@ export interface Config {
   battery?: BatteryConfig // 電池が少ないときの知らせと電源断、記録（batteryguard.go）
   clock?: { rtc?: 'read' | 'write' | 'off' } // 内蔵 RTC の使い方（rtc.go）
   lid?: { close?: 'off' | 'none'; tablet_keys?: 'off' | 'on' } // ふたを閉じたときの動き、タブレットの形の本体キー（lid.go）
-  ime?: { method?: string; user?: string; idle?: string; terminal?: boolean } // 日本語の入力（uim-fep。ime.go）
+  ime?: { method?: string; user?: string; idle?: string; terminal?: boolean; start?: { todo?: 'kana' | 'latin' | 'last'; clock?: 'kana' | 'latin' | 'last' } } // 日本語の入力（uim-fep。ime.go）
 }
 
 // OverrideInfo は、Brain の設定のアプリで変えた上書きの値 1 つ（overrides.go。get_config、get_overrides）。

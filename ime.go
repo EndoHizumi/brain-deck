@@ -30,7 +30,8 @@ import (
 //
 // キー（uim.scm で決める。Brain のキーボードにある Ctrl と組み合わせる）：
 //   Ctrl+Space  かな と 英数 を切り替える（本体の「文字切り替え」を 1 回押すのと同じ。lefthand が NUL を送る）
-//   Ctrl+^      英数にする（時刻の欄を開くときなど、かなになっていても英数から始めたいときに lefthand が送る）
+//   Ctrl+^      英数にする（欄を開くとき、かなになっていても英数から始めたいときに lefthand が送る。かなで始める欄は、
+//               このあとに Ctrl+Space を送る。ime.start）
 //   Ctrl+]      変換中ならやめる、でなければ欄をやめる（readline のマクロで、行を消して結果を返す）
 //   Space       変換、次の候補。Enter 確定。← → 文節の移動、Shift+← → 文節の長さ、Esc 変換をやめる（uim の既定）
 //
@@ -45,6 +46,44 @@ type IMEConfig struct {
 	User     string `yaml:"user,omitempty" json:"user,omitempty"`         // uim-fep を動かすユーザー（既定 terminal.brain_user、なければ user。root は不可）
 	Idle     string `yaml:"idle,omitempty" json:"idle,omitempty"`         // 使わなくなってから止めるまで（既定 10m。0 で止めない）
 	Terminal *bool  `yaml:"terminal,omitempty" json:"terminal,omitempty"` // Brain 自身のシェル（端末モードの Brain）でも使う（既定 true）
+	// Start は、欄の種類（todo、clock）ごとの、開いたときのかなと英数（kana、latin、last＝前の欄のまま）。
+	// 書かなかった種類は imeStartDefaults（Todo はかな、時刻は英数）
+	Start map[string]string `yaml:"start,omitempty" json:"start,omitempty"`
+}
+
+const (
+	imeStartKana  = "kana"  // かなで開く
+	imeStartLatin = "latin" // 英数で開く
+	imeStartLast  = "last"  // 前の欄の状態のまま（uim-fep が動いているあいだ）
+)
+
+// imeStartDefaults は、欄の種類ごとの既定。ここにない種類（これから足す欄）は英数で開く。
+var imeStartDefaults = map[string]string{inputTodo: imeStartKana, inputClock: imeStartLatin}
+
+// startMode は、欄の種類 kind を開いたときのかなと英数。
+func (c *IMEConfig) startMode(kind string) string {
+	if c != nil {
+		if s := c.Start[kind]; s != "" {
+			return s
+		}
+	}
+	if s := imeStartDefaults[kind]; s != "" {
+		return s
+	}
+	return imeStartLatin
+}
+
+// imeStartLabel は、かなと英数の日本語の名前。
+func imeStartLabel(s string) string {
+	switch s {
+	case imeStartKana:
+		return "かな"
+	case imeStartLatin:
+		return "英数"
+	case imeStartLast:
+		return "前の欄のまま"
+	}
+	return s
 }
 
 const (
@@ -99,6 +138,14 @@ func (c *IMEConfig) validate(fail func(path, format string, args ...any)) {
 	if c.Idle != "" {
 		if d, err := time.ParseDuration(c.Idle); err != nil || d < 0 {
 			fail("/ime/idle", "ime.idle must be a duration such as 10m (0 to keep running)")
+		}
+	}
+	for kind, s := range c.Start {
+		if kind != inputTodo && kind != inputClock {
+			fail("/ime/start/"+kind, "ime.start: unknown input field %q (todo or clock)", kind)
+		}
+		if s != imeStartKana && s != imeStartLatin && s != imeStartLast {
+			fail("/ime/start/"+kind, "ime.start.%s must be kana, latin or last, got %q", kind, s)
 		}
 	}
 }
@@ -420,9 +467,35 @@ func (m *IME) writeFiles() error {
 	return nil
 }
 
-// Open は欄を開く。initial は最初に入れておく文字（英数字だけ）。latin なら英数から始める。
+// imeOpenKeys は、欄を開いたときに送るキー。initial（最初に入れておく文字）は英数で入れる。start が kana なら、
+// 英数にしてから（Ctrl+^）かなに切り替える（Ctrl+Space）ので、前の欄の状態によらずかなになる。last なら、
+// 最初の文字がなければ何も送らない。
+func imeOpenKeys(initial, start string) []byte {
+	var b []byte
+	if start != imeStartLast || initial != "" {
+		b = append(b, imeKeyLatin)
+	}
+	b = append(b, []byte(initial)...)
+	if start == imeStartKana {
+		b = append(b, imeKeyToggle)
+	}
+	return b
+}
+
+// StartMode は、欄の種類 kind を開いたときのかなと英数（設定の ime.start）。
+func (m *IME) StartMode(kind string) string {
+	var c *IMEConfig
+	if m != nil {
+		if cfg := m.cfg(); cfg != nil {
+			c = cfg.IME
+		}
+	}
+	return c.startMode(kind)
+}
+
+// Open は欄を開く。initial は最初に入れておく文字（英数字だけ）。start は、かなと英数のどちらで始めるか（imeStartKana など）。
 // uim-fep が使えなければ false（欄は prompt.go の英数字だけの入れ方になる）。
-func (m *IME) Open(cols int, initial string, latin bool) bool {
+func (m *IME) Open(cols int, initial, start string) bool {
 	if m == nil {
 		return false
 	}
@@ -448,12 +521,7 @@ func (m *IME) Open(cols int, initial string, latin bool) bool {
 		m.lastErr = ""
 	}
 	m.open = true
-	var b []byte
-	if latin || initial != "" {
-		b = append(b, imeKeyLatin)
-	}
-	b = append(b, []byte(initial)...)
-	m.sendLocked(b)
+	m.sendLocked(imeOpenKeys(initial, start))
 	return true
 }
 

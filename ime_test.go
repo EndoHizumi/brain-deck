@@ -189,7 +189,7 @@ func TestIMEFieldLifecycle(t *testing.T) {
 		t.Fatalf("info = %+v", in)
 	}
 	// 開く前に打ったキーは、起動が終わってから届く
-	if !m.Open(40, "", false) {
+	if !m.Open(40, "", imeStartLatin) {
 		t.Fatal("open failed")
 	}
 	m.Send([]byte("abc\r"))
@@ -203,7 +203,7 @@ func TestIMEFieldLifecycle(t *testing.T) {
 		}
 	}
 	// 最初の文字（英数から始める）：Ctrl+^ は readline では何もしない
-	m.Open(40, "2026-10-11 23:00", true)
+	m.Open(40, "2026-10-11 23:00", imeStartLatin)
 	waitFor(t, "ready", func() bool { v := m.View(); return v != nil && v.Busy == "" })
 	waitFor(t, "initial text", func() bool { return strings.TrimSpace(imeText(m.View().Line)) == "2026-10-11 23:00" })
 	if v := m.View(); v.Mode != "英数" || v.Cursor != 16 || v.Candidates != nil {
@@ -212,15 +212,15 @@ func TestIMEFieldLifecycle(t *testing.T) {
 	m.Send([]byte("\x7f\x7f55\r"))
 	waitResult(t, results, [2]string{"ok", "2026-10-11 23:55"})
 	// やめる：Ctrl+] のマクロ
-	m.Open(40, "", false)
+	m.Open(40, "", imeStartLatin)
 	m.Send([]byte("xyz"))
 	m.Cancel()
 	waitResult(t, results, [2]string{"cancel", ""})
 	// 結果を待たずに閉じる：行は消え、その cancel は捨てる。次に開いたときはまっさら
-	m.Open(40, "", false)
+	m.Open(40, "", imeStartLatin)
 	m.Send([]byte("left"))
 	m.Close()
-	m.Open(40, "", false)
+	m.Open(40, "", imeStartLatin)
 	m.Send([]byte("q\r"))
 	waitResult(t, results, [2]string{"ok", "q"})
 	select {
@@ -232,7 +232,7 @@ func TestIMEFieldLifecycle(t *testing.T) {
 	waitFor(t, "idle stop", func() bool { return !m.Info().Running })
 	// 方式を off にしたら開けない
 	cfg.IME.Method = imeOff
-	if m.Open(40, "", false) {
+	if m.Open(40, "", imeStartLatin) {
 		t.Fatal("opened with ime off")
 	}
 }
@@ -271,7 +271,7 @@ func imeText(cells []IMECell) string {
 
 func TestIMEProcessDies(t *testing.T) {
 	m, results := fakeIME(t, &Config{})
-	m.Open(40, "", false)
+	m.Open(40, "", imeStartLatin)
 	waitFor(t, "ready", func() bool { v := m.View(); return v != nil && v.Busy == "" })
 	m.Send([]byte("\x04")) // Ctrl+D：read が EOF で終わり、line.sh が終わる
 	waitResult(t, results, [2]string{"cancel", "uim-fep が止まりました （終了コード 0）"})
@@ -279,7 +279,7 @@ func TestIMEProcessDies(t *testing.T) {
 		t.Fatal("still running")
 	}
 	// もう一度開けば起動し直す
-	m.Open(40, "", false)
+	m.Open(40, "", imeStartLatin)
 	m.Send([]byte("again\r"))
 	waitResult(t, results, [2]string{"ok", "again"})
 }
@@ -384,5 +384,46 @@ func TestDrawIMEOverlay(t *testing.T) {
 	}
 	if imeColsFor(800) != 95 || imeColsFor(480) != 55 {
 		t.Fatalf("cols = %d %d", imeColsFor(800), imeColsFor(480))
+	}
+}
+
+// 欄の種類ごとの、開いたときのかなと英数（ime.start）。かなは「英数にしてから切り替える」ので、前の状態によらない。
+func TestIMEStartMode(t *testing.T) {
+	var none *IMEConfig
+	if none.startMode(inputTodo) != imeStartKana || none.startMode(inputClock) != imeStartLatin || none.startMode("other") != imeStartLatin {
+		t.Fatal("defaults: todo kana, clock latin, others latin")
+	}
+	c := &IMEConfig{Start: map[string]string{inputTodo: imeStartLast}}
+	if c.startMode(inputTodo) != imeStartLast || c.startMode(inputClock) != imeStartLatin {
+		t.Fatal("ime.start must override only the kinds it names")
+	}
+	for _, k := range []struct {
+		initial, start, want string
+	}{
+		{"", imeStartKana, "\x1e\x00"},
+		{"", imeStartLatin, "\x1e"},
+		{"", imeStartLast, ""},
+		{"2026-10-12 01:00", imeStartLatin, "\x1e2026-10-12 01:00"},
+		{"12:00", imeStartLast, "\x1e12:00"},
+		{"abc", imeStartKana, "\x1eabc\x00"},
+	} {
+		if got := string(imeOpenKeys(k.initial, k.start)); got != k.want {
+			t.Errorf("imeOpenKeys(%q, %s) = %q, want %q", k.initial, k.start, got, k.want)
+		}
+	}
+	// 制御の文字は 1 つずつ書く（uim-fep の癖）
+	if got := imeSplit(imeOpenKeys("abc", imeStartKana)); len(got) != 3 {
+		t.Errorf("split = %q", got)
+	}
+	for src, want := range map[string]string{
+		"ime: {start: {todo: kana, clock: latin}}": "",
+		"ime: {start: {todo: last}}":               "",
+		"ime: {start: {todo: hiragana}}":           "ime.start.todo must be kana, latin or last",
+		"ime: {start: {memo: kana}}":               "unknown input field",
+	} {
+		_, err := checkText(src)
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%s: err = %v, want %q", src, err, want)
+		}
 	}
 }
