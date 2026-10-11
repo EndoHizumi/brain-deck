@@ -53,6 +53,7 @@ func TestSetTimeLogsRTC(t *testing.T) {
 	writeRTC = func(t time.Time) error { wrote <- t; return nil }
 	setSystemClock = func(time.Time) error { return nil }
 	ts := NewTimeService(OpenStore(t.TempDir()))
+	t.Cleanup(ts.Wait) // clock.json の保存が、一時ディレクトリの後片付けと重なると落ちた（TempDir より先に呼ばれる）
 	ts.SetRTCMode(rtcWrite)
 	res, err := ts.Set(time.Now(), "brain-deck")
 	if err != nil {

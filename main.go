@@ -1292,6 +1292,7 @@ func main() {
 	}
 	go clock.KeepKnown()
 	addAtExit(clock.SaveKnown)
+	addAtExit(clock.Wait) // 時刻を合わせた直後に止めるときも、clock.json を書き終える
 	texts := NewTextService(store)
 	qrs := NewQRService(store)
 	todos := NewTodoService(store)

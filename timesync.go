@@ -103,7 +103,8 @@ const (
 // TimeService は時刻合わせと、時刻が合っているかどうかを受け持つ。
 type TimeService struct {
 	mu       sync.Mutex
-	saveMu   sync.Mutex // clock.json の書き込みを 1 つずつ行う
+	saveMu   sync.Mutex     // clock.json の書き込みを 1 つずつ行う
+	bg       sync.WaitGroup // RTC への書き戻しと clock.json の保存（別の goroutine）
 	store    *Store
 	bootID   string
 	last     *clockRecord
@@ -267,11 +268,13 @@ func (ts *TimeService) Set(t time.Time, source string) (SetResult, error) {
 	res.RTCWrite = write
 	ts.mu.Unlock()
 	if write {
-		go ts.writeBack()
+		ts.bg.Add(1)
+		go func() { defer ts.bg.Done(); ts.writeBack() }()
 	}
 	// SD カードの fsync は数秒かかることがあるので、返事を待たせない。
 	// 記録は、デーモンを再起動したときに「合わせ済み」を覚えておくためだけに使う
-	go ts.save()
+	ts.bg.Add(1)
+	go func() { defer ts.bg.Done(); ts.save() }()
 	log.Printf("time: set by %s (offset %v, stepped %v)", source, off.Round(time.Millisecond), res.Stepped)
 	if onChange != nil {
 		onChange()
@@ -366,6 +369,9 @@ func (ts *TimeService) writeBack() {
 		log.Printf("time: rtc: wrote %s", now.Format(time.DateTime))
 	}
 }
+
+// Wait は、RTC への書き戻しと clock.json の保存が終わるのを待つ（終わるときとテスト）。
+func (ts *TimeService) Wait() { ts.bg.Wait() }
 
 // RTCInfo は get_status の rtc。
 type RTCInfo struct {

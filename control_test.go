@@ -125,6 +125,7 @@ func newTestDaemon(t *testing.T, src string, setup ...func(*testDaemon)) *testDa
 	d.store = &configStore{path: d.path, cfg: cfg, km: km, apply: reloader(d.engine)}
 	d.dataDir = dataDir(t)
 	d.clock = NewTimeService(OpenStore(d.dataDir))
+	t.Cleanup(d.clock.Wait) // set_time の返事のあとに clock.json を書く。一時ディレクトリの後片付けより先に待つ
 	d.texts = NewTextService(OpenStore(d.dataDir))
 	d.qrs = NewQRService(OpenStore(d.dataDir))
 	d.gadgets = NewGadgetService(OpenStore(d.dataDir))
