@@ -436,6 +436,7 @@ func (m *Monitor) LayerChanged(st EngineStatus) {
 // Controller は設定 GUI からのリクエストを処理する。
 type Controller struct {
 	store   *configStore
+	profile *ProfileService
 	engine  *Engine
 	monitor *Monitor
 	clock   *TimeService
@@ -503,7 +504,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
 				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync", "list_files", "get_file", "delete_file", "calibrate",
-				"get_overrides", "set_override", "clear_overrides"},
+				"get_overrides", "set_override", "clear_overrides",
+				"set_pc", "get_profile", "set_profile"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -555,7 +557,10 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
 			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "usb_state": USBState()},
 			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(), "sync": c.sync.Info(),
-			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "ime": c.ime.Info(), "overrides": c.store.Overrides(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()}})
+			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "ime": c.ime.Info(), "overrides": c.store.Overrides(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()},
+			"profile": c.profileInfo()})
+	case "set_pc", "get_profile", "set_profile":
+		return c.profileCmd(id, req)
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)
 		if err != nil {
@@ -693,6 +698,37 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 }
 
 // overrides は get_overrides、set_override、clear_overrides を処理する（overrides.go）。
+// profileInfo は、今の PC ごとの設定（get_status、get_profile）。
+func (c *Controller) profileInfo() ProfileInfo {
+	in := c.profile.Info(c.store.File())
+	in.SetActive(c.store.Profile()) // 実際に重ねているもの（使えないプロファイルなら既定のまま）
+	return in
+}
+
+// profileCmd は、PC ごとの設定（profile.go）。
+func (c *Controller) profileCmd(id json.RawMessage, req request) response {
+	if c.profile == nil {
+		return errResp(id, errInternal, "profiles are not available", nil)
+	}
+	var err error
+	switch req.Cmd {
+	case "set_pc":
+		err = c.profile.SetPC(req.Name)
+	case "set_profile":
+		err = c.profile.Use(req.Name, c.store.File())
+	}
+	if err != nil {
+		if errors.Is(err, errProfileBad) {
+			return errResp(id, errBadRequest, strings.TrimPrefix(err.Error(), errProfileBad.Error()+": "), nil)
+		}
+		return errResp(id, errInternal, err.Error(), nil)
+	}
+	if req.Cmd != "get_profile" {
+		c.store.Reprofile() // 返事に新しい状態を入れる（onChange でも呼ばれるが、変わっていなければ何もしない）
+	}
+	return response{ID: id, OK: true, Result: c.profileInfo()}
+}
+
 func (c *Controller) overrides(id json.RawMessage, req request) response {
 	src := req.Source
 	if src == "" {

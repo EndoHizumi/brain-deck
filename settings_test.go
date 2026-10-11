@@ -232,7 +232,7 @@ func TestSettingsNoDeadlockWhileApplying(t *testing.T) {
 func TestSettingsPages(t *testing.T) {
 	g := settingsGeometry(image.Rect(0, 0, 800, 480).Inset(cellGap+textMargin), 0)
 	pl := settingsPages(g.per)
-	if len(pl) != 2 || strings.Join(pl[0], ",") != "level,dim,dim_offline,photo,rotate,ime" || strings.Join(pl[1], ",") != "reader,lid,tablet,clock,reset" {
+	if len(pl) != 2 || strings.Join(pl[0], ",") != "level,dim,dim_offline,photo,rotate,ime" || strings.Join(pl[1], ",") != "reader,lid,tablet,profile,clock,reset" {
 		t.Fatalf("pages (per %d) = %q", g.per, pl)
 	}
 	pl = settingsPages(4)

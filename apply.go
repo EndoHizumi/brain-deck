@@ -162,7 +162,10 @@ type configStore struct {
 	file *Config // 設定ファイルの値。nil なら cfg と同じ（上書きがない）
 	cfg  *Config // 動いている設定（上書きを重ねたもの）
 	km   *Keymap
-	ov   *OverrideStore // nil なら上書きを使わない
+	ov   *OverrideStore  // nil なら上書きを使わない
+	prof *ProfileService // nil なら PC ごとの設定を使わない
+	// profName は、今の設定に重ねているプロファイル（変わったときだけ割り当てを反映し直す）
+	profName string
 	// apply は新しい割り当てを動いているデーモンに反映する（Engine.Reload と画面の描き直し）。
 	apply func(*Config, *Keymap) error
 	// light は、上書きだけが変わったときに、上書きで変わる項目（自動減光、ふた）だけを反映する。nil なら apply を使う
@@ -195,9 +198,17 @@ func (s *configStore) Keymap() *Keymap {
 	return s.km
 }
 
-// effective は、設定ファイルの値 file に、今の上書きを重ねる。
+// effective は、設定ファイルの値 file に、今の PC ごとの設定（プロファイル）と上書きを重ねる。
 func (s *configStore) effective(file *Config) (*Config, []OverrideInfo) {
-	return applyOverrides(file, s.ov.Values())
+	base := file
+	if name := s.prof.Resolve(file); name != "" {
+		if c, err := applyProfile(file, name); err == nil {
+			base = c
+		} else {
+			log.Printf("profile: %v (using the config without the profile)", err)
+		}
+	}
+	return applyOverrides(base, s.ov.Values())
 }
 
 // check は raw を読み、上書きを重ね、-check と同じ検証をする。
@@ -206,7 +217,7 @@ func (s *configStore) check(raw []byte) (file, eff *Config, km *Keymap, warns []
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	if s.ov == nil {
+	if s.ov == nil && s.prof == nil {
 		km, warns, err = compileKeymap(file)
 		return file, file, km, warns, err
 	}
@@ -284,7 +295,7 @@ func (s *configStore) save(out []byte, file, eff *Config, km *Keymap) error {
 		}
 		return fmt.Errorf("apply failed: %v: %w", aerr, errRolledBack)
 	}
-	s.file, s.cfg, s.km = file, eff, km
+	s.file, s.cfg, s.km, s.profName = file, eff, km, eff.profile
 	return nil
 }
 
@@ -353,6 +364,48 @@ func (s *configStore) reapply() {
 	if on != nil {
 		on()
 	}
+}
+
+// Reprofile は、使うプロファイルが変わったかもしれないとき（PC が名乗った、手で選んだ、つなぎ直して名乗らなかった）に呼ぶ。
+// 変わっていれば、プロファイルを重ね直して割り当てごと反映する（最初に開くレイヤーも開き直す）。
+func (s *configStore) Reprofile() {
+	s.mu.Lock()
+	file := s.file
+	if file == nil {
+		file = s.cfg
+	}
+	name := s.prof.Resolve(file)
+	if name == s.profName {
+		s.mu.Unlock()
+		return
+	}
+	eff, _ := s.effective(file)
+	km, _, err := compileKeymap(eff)
+	if err != nil {
+		s.mu.Unlock()
+		log.Printf("profile: %q cannot be used: %v (keeping %q)", name, err, s.profName)
+		return
+	}
+	if err := s.apply(eff, km); err != nil {
+		s.mu.Unlock()
+		log.Printf("profile: applying %q: %v", name, err)
+		return
+	}
+	old := s.profName
+	s.file, s.cfg, s.km, s.profName = file, eff, km, name
+	on := s.onOverrides
+	s.mu.Unlock()
+	log.Printf("profile: %q -> %q", old, name)
+	if on != nil {
+		on()
+	}
+}
+
+// Profile は、今重ねているプロファイル（既定なら空）。
+func (s *configStore) Profile() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.profName
 }
 
 // errNeedsRestart は、put_config_text で、再起動が要る項目が変わったのに、再起動を許されていないこと。

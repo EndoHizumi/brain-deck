@@ -53,7 +53,7 @@ var (
 // 1 つの組が 1 ページに入らないとき（画面が小さいとき）は、その組を続くページに分ける。
 var setRowGroups = [][]string{
 	{"level", "dim", "dim_offline", "photo", "rotate", "ime"},
-	{"reader", "lid", "tablet", "clock", "reset"},
+	{"reader", "lid", "tablet", "profile", "clock", "reset"},
 }
 
 // setRowIDs は、設定のタブの行（並ぶ順）。
@@ -104,7 +104,9 @@ type SettingsDeps struct {
 	BrightLevel   func() int // 今のふだんの明るさ（上書きも設定ファイルにもないとき）
 	Info          func() []SettingsInfo
 	Lid           *Lid
-	IME           func() IMEInfo // 日本語入力の状態（nil なら使えない）
+	IME           func() IMEInfo          // 日本語入力の状態（nil なら使えない）
+	Profile       func() ProfileInfo      // PC ごとの設定の状態（nil なら使えない）
+	UseProfile    func(name string) error // PC ごとの設定を手で選ぶ（auto、none、プロファイルの名前）
 }
 
 // SettingsInfo は、情報のタブの 1 行。
@@ -302,6 +304,16 @@ func settingsRows(u SettingsDeps) []SettingsRow {
 		case "ime":
 			r.Label = "日本語入力"
 			r.Value = imeRowValue(eff.IME.method(), u.IME)
+		case "profile":
+			r.Label = "PC ごとの設定"
+			r.Value = "使えません"
+			if u.Profile != nil {
+				in := u.Profile()
+				r.Value = profileLabel(in)
+				if len(in.Profiles) == 0 {
+					r.Value = "なし（設定に profiles がない）"
+				}
+			}
 		case "clock":
 			r.Label = "時刻合わせ"
 			r.Value = "キーボードで入れる"
@@ -409,6 +421,32 @@ func settingsChoices(u SettingsDeps, id string) (string, []setChoice, int) {
 		title = "画面を裏返したとき（タブレットの形）の本体のキー"
 		cs = []setChoice{{Label: "使わない", Value: tabletKeysOff}, {Label: "使う", Value: tabletKeysOn}}
 		cur = map[bool]int{true: 0, false: 1}[eff.Lid.tabletKeys() == tabletKeysOff]
+	case "profile":
+		title = "PC ごとの設定（プロファイル）"
+		var in ProfileInfo
+		if u.Profile != nil {
+			in = u.Profile()
+		}
+		auto := "自動（PC の名前で選ぶ）"
+		if in.PC != "" {
+			auto = "自動（" + in.PC + "）"
+		}
+		cs = []setChoice{{Label: auto, Value: profileAuto}, {Label: "既定（使わない）", Value: profileNone}}
+		for _, p := range in.Profiles {
+			cs = append(cs, setChoice{Label: or(p.Label, p.Name), Value: p.Name})
+		}
+		switch in.Manual {
+		case "":
+			cur = 0
+		case profileNone:
+			cur = 1
+		default:
+			for i, c := range cs {
+				if c.Value == in.Manual {
+					cur = i
+				}
+			}
+		}
 	case "ime":
 		title = "日本語入力（uim-fep の入力方式）"
 		var in IMEInfo
@@ -855,6 +893,12 @@ func (u *SettingsUI) touchUp(cancel bool) {
 			return
 		}
 		u.openChoiceLocked(held)
+	case "profile":
+		if u.deps.UseProfile == nil || u.deps.Profile == nil {
+			u.sayLocked("使えません")
+			return
+		}
+		u.openChoiceLocked(held)
 	default:
 		if u.deps.Store == nil || u.deps.Store.ov == nil {
 			u.sayLocked("使えません（上書きの置き場所がありません）")
@@ -903,6 +947,8 @@ func (u *SettingsUI) choose(id string, c setChoice) {
 		d.Rotate(c.Value.(int))
 	case id == "reader":
 		d.SetReaderSize(c.Value.(int))
+	case id == "profile":
+		err = d.UseProfile(c.Value.(string))
 	case c.Reset:
 		_, err = d.Store.ClearOverrides([]string{setOverrideKey[id]}, sourceBrain)
 		msg = "設定ファイルの値に戻しました"
@@ -998,6 +1044,7 @@ type settingsInfoIn struct {
 	Synced    bool
 	Lid       LidInfo
 	IME       *IMEInfo
+	Profile   *ProfileInfo
 	Overrides []OverrideInfo
 }
 
@@ -1043,6 +1090,9 @@ func (in settingsInfoIn) rows() []SettingsInfo {
 		add("PC", "分からない")
 	default:
 		add("PC", "外れている")
+	}
+	if in.Profile != nil && len(in.Profile.Profiles) > 0 {
+		add("PC ごとの設定", profileLabel(*in.Profile))
 	}
 	switch {
 	case in.LastSync != nil:
@@ -1111,8 +1161,8 @@ func renderSettingsView(cfg *Config, tab, choice string, rot, readSize int, env 
 	})
 	u.tab, u.page = ti, page
 	if choice != "" {
-		if _, ok := map[string]bool{"level": true, "dim": true, "dim_offline": true, "photo": true, "rotate": true, "reader": true, "lid": true, "tablet": true, "ime": true}[choice]; !ok {
-			return nil, fmt.Errorf("-render-settings-choice must be one of level, dim, dim_offline, photo, rotate, reader, lid, tablet, ime, got %q", choice)
+		if _, ok := map[string]bool{"level": true, "dim": true, "dim_offline": true, "photo": true, "rotate": true, "reader": true, "lid": true, "tablet": true, "ime": true, "profile": true}[choice]; !ok {
+			return nil, fmt.Errorf("-render-settings-choice must be one of level, dim, dim_offline, photo, rotate, reader, lid, tablet, ime, profile, got %q", choice)
 		}
 		u.choice = choice
 	}

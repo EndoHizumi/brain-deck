@@ -36,6 +36,12 @@ type Config struct {
 	Files     *FilesConfig          `yaml:"files,omitempty" json:"files,omitempty"`           // ファイルエクスプローラの見られる場所（files.go）。省略すると既定の場所
 	Lid       *LidConfig            `yaml:"lid,omitempty" json:"lid,omitempty"`               // ふたを閉じたときの動き（lid.go）。省略すると画面を消す
 	IME       *IMEConfig            `yaml:"ime,omitempty" json:"ime,omitempty"`               // 日本語の入力（ime.go）。省略すると、uim-fep が入っていれば使う
+	// StartLayer は、起動したときと設定を反映したときに開くレイヤー（ホーム画面なら home）。省略すると home.start のとおり
+	StartLayer string `yaml:"start_layer,omitempty" json:"start_layer,omitempty"`
+	// Profiles は、PC ごとの設定（profile.go）。PC の brain-deck が名乗った名前で選び、設定ファイルの値に重ねる
+	Profiles []ProfileConfig `yaml:"profiles,omitempty" json:"profiles,omitempty"`
+
+	profile string // applyProfile で重ねたプロファイルの名前（設定ファイルには書かない）
 }
 
 // TouchConfig はタッチパネルそのものの設定（どのレイヤーでも共通）。
@@ -506,6 +512,11 @@ type Keymap struct {
 	cfgPortrait []bool
 	// OfflineHome は offline.home（PC から外れたらホーム画面に切り替える）
 	OfflineHome bool
+	// Start は start_layer のレイヤーの番号（HasStart が false なら書いていない）
+	Start    int
+	HasStart bool
+	// Profile は、重ねたプロファイルの名前（既定なら空）
+	Profile string
 }
 
 func (km *Keymap) area(name string) (SoftArea, bool) {
@@ -781,9 +792,43 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 	cfg.Photo.validate(fail)
 	cfg.Files.validate(defaultDataDir, fail)
 	cfg.Lid.validate(fail)
+	cfg.validateProfiles(fail)
+	km.Profile = cfg.profile
+	if cfg.StartLayer != "" {
+		at := "/start_layer"
+		if cfg.profile != "" {
+			at = "/profiles"
+		}
+		for i, l := range km.Layers {
+			if l.Name == cfg.StartLayer {
+				km.Start, km.HasStart = i, true
+			}
+		}
+		if !km.HasStart {
+			fail(at, "start_layer: no layer named %q (home is the home screen)", cfg.StartLayer)
+		}
+	}
 	if len(errs) > 0 {
 		errs.sort()
 		return nil, nil, errs
+	}
+	// プロファイルを重ねた設定も使えることを確かめる（重ねたものの中は確かめない）
+	if cfg.profile == "" {
+		for i, p := range cfg.Profiles {
+			eff, err := applyProfile(cfg, p.Name)
+			if err == nil {
+				_, _, err = compileKeymap(eff)
+			}
+			if err != nil {
+				for _, pr := range asProblems(err) {
+					fail(fmt.Sprintf("/profiles/%d", i), "profile %q: %s", p.Name, pr.Message)
+				}
+			}
+		}
+		if len(errs) > 0 {
+			errs.sort()
+			return nil, nil, errs
+		}
 	}
 
 	if err := km.checkWayBack(); err != nil {

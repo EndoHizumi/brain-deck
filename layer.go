@@ -335,6 +335,15 @@ func NewEngine(km *Keymap, out *State) *Engine {
 // startStack は、重なりを起動したときの形にする（ホーム画面から始めるなら、ホーム画面）。
 func (e *Engine) startStack() {
 	e.stack = nil
+	if e.km.HasStart { // start_layer（PC ごとの設定でも変えられる）
+		if e.km.Start > 0 {
+			e.stack = append(e.stack, stackEntry{layer: e.km.Start, kind: actTo})
+		}
+		if h := e.km.Home; h != nil && h.Layer == e.km.Start {
+			h.SetPage(0)
+		}
+		return
+	}
 	if h := e.km.Home; h != nil && h.Start {
 		e.stack = append(e.stack, stackEntry{layer: h.Layer, kind: actTo})
 		h.SetPage(0)

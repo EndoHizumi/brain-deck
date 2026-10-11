@@ -1356,8 +1356,24 @@ func main() {
 	// Brain の設定のアプリで変えた上書きの値（overrides.go）を、設定ファイルの値に重ねて使う
 	overrides := OpenOverrides(*dataDir)
 	fileCfg := cfg
+	// PC ごとの設定（profile.go）：前に名乗った PC か、手で選んだプロファイルを重ねる
+	profiles := NewProfileService(*dataDir)
+	base := fileCfg
+	if name := profiles.Resolve(fileCfg); name != "" {
+		c, err := applyProfile(fileCfg, name)
+		var k *Keymap
+		if err == nil {
+			k, _, err = compileKeymap(c)
+		}
+		if err != nil {
+			log.Printf("profile: %q: %v (using the config without the profile)", name, err)
+		} else {
+			base, cfg, km = c, c, k
+			log.Printf("profile: using %q", name)
+		}
+	}
 	if vals := overrides.Values(); len(vals) > 0 {
-		eff, infos := applyOverrides(fileCfg, vals)
+		eff, infos := applyOverrides(base, vals)
 		if k, _, err := compileKeymap(eff); err != nil {
 			log.Printf("overrides: %v (using the config file without overrides)", err)
 		} else {
@@ -1499,7 +1515,8 @@ func main() {
 	setOnline := func(on bool) {
 		e.SetOffline(!on)
 		dim.SetOffline(!on)
-		term.LinkChanged(on) // PC の端末の途中で外れたら、画面に出す（Brain のシェルはそのまま）
+		term.LinkChanged(on)     // PC の端末の途中で外れたら、画面に出す（Brain のシェルはそのまま）
+		profiles.LinkChanged(on) // つなぎ直したら、PC が名乗るのを待つ（名乗らなければ既定に戻す）
 	}
 	term.SetOnline(link.Online)
 	link.OnOnline(setOnline)
@@ -1715,7 +1732,7 @@ func main() {
 		dim.SetTerminal(term.Active())
 	})
 	// 設定の置き場所。設定 GUI と brain-deck（シリアル）と、Brain の設定のアプリから使う
-	cstore := &configStore{path: cfgPath, file: fileCfg, cfg: cfg, km: km, ov: overrides, apply: func(c *Config, k *Keymap) error {
+	cstore := &configStore{path: cfgPath, file: fileCfg, cfg: cfg, km: km, ov: overrides, prof: profiles, profName: cfg.profile, apply: func(c *Config, k *Keymap) error {
 		if err := reloader(e)(c, k); err != nil {
 			return err
 		}
@@ -1743,13 +1760,23 @@ func main() {
 		lid.SetConfig(c.Lid)
 		ime.ConfigChanged()
 	}, onOverrides: settingsUI.Changed}
+	profiles.SetOnChange(cstore.Reprofile)
 	settingsUI.SetDeps(func(d *SettingsDeps) {
 		d.Store = cstore
+		d.Profile = func() ProfileInfo {
+			in := profiles.Info(cstore.File())
+			in.SetActive(cstore.Profile())
+			return in
+		}
+		d.UseProfile = func(name string) error { return profiles.Use(name, cstore.File()) }
 		d.Info = func() []SettingsInfo {
 			in := settingsInfoIn{Version: daemonVersion(), Battery: battery.Info(), Link: link.State(), Synced: clock.Synced(),
 				Lid: lid.Info(), Overrides: cstore.Overrides(), LastSync: syncs.Info().Last, LastPCSet: clock.Info().LastPCSet}
 			ii := ime.Info()
 			in.IME = &ii
+			pi := profiles.Info(cstore.File())
+			pi.SetActive(cstore.Profile())
+			in.Profile = &pi
 			in.Free, in.Size, in.DiskErr = statfsFree(*dataDir)
 			return in.rows()
 		}
@@ -1757,6 +1784,7 @@ func main() {
 	if *serialPath != "" {
 		ctl := &Controller{
 			store:   cstore,
+			profile: profiles,
 			lid:     lid,
 			ime:     ime,
 			engine:  e,
