@@ -378,7 +378,7 @@ layers:
     status_bar: true
     touch:
       cols: 4
-      rows: 3
+      rows: 4
       cells:
         "0,0": {widget: battery, label: 電池}
         "1,0": {widget: clock, span: [2, 1]}
@@ -388,9 +388,11 @@ layers:
         "2,1": {terminal: on, label: 端末, span: [2, 1]}
         "0,2": {layer_to: rotate, label: 画面の向き, span: [2, 1]}
         "2,2": {layer_to: input, label: トラックパッド, span: [2, 1]}
+        # 画面に十字を出して、タッチの位置のずれを直す（5 点。保存したときだけ使う。PC がなくてもできる）
+        "0,3": {calibrate: touch, label: タッチ調整, span: [4, 1]}
     touch_portrait:
       cols: 2
-      rows: 4
+      rows: 5
       cells:
         "0,0": {widget: battery, label: 電池}
         "1,0": {input: clock, label: 時刻合わせ}
@@ -399,6 +401,7 @@ layers:
         "1,2": {terminal: on, label: 端末}
         "0,3": {layer_to: rotate, label: 画面の向き}
         "1,3": {layer_to: input, label: トラックパッド}
+        "0,4": {calibrate: touch, label: タッチ調整, span: [2, 1]}
   - name: rotate
     label: 画面の向き
     status_bar: true
