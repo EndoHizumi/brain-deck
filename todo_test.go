@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -510,5 +511,21 @@ func TestTodoLayoutTable(t *testing.T) {
 	}
 	if got, err := os.ReadFile(guiTodoLayoutJSON); err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("%s is out of date (%v); run LEFTHAND_UPDATE_TODOLAYOUT=1 go test -run TodoLayoutTable", guiTodoLayoutJSON, err)
+	}
+}
+
+// Flush は、保存の goroutine が知らせを受け取ったあとでも、書き終えてから返る（バックアップを作る前に呼ぶ）。
+func TestTodoFlushAfterAdd(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		dir := dataDir(t)
+		ts := NewTodoService(OpenStore(dir))
+		if _, _, err := ts.Add("牛乳", 0, time.Now(), sourceBrain); err != nil {
+			t.Fatal(err)
+		}
+		ts.Flush()
+		b, err := os.ReadFile(filepath.Join(dir, todoStoreName+".json"))
+		if err != nil || !strings.Contains(string(b), "牛乳") {
+			t.Fatalf("round %d: todo.json not written by Flush: %v %s", i, err, b)
+		}
 	}
 }

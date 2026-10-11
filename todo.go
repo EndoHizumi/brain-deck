@@ -81,6 +81,7 @@ type TodoService struct {
 	onNotify func(TodoList) // 設定 GUI への通知。notifier の goroutine から呼ぶ
 	dirty    chan struct{}
 	saveMu   sync.Mutex // todo.json を書いているあいだ（Flush が書き終わりを待つ）
+	savedRev uint64     // 最後に書いた（読んだ）rev。saveMu で守る
 	notify   chan struct{}
 	saved    chan struct{} // テスト用：保存を 1 回終えるたびに送る
 }
@@ -105,6 +106,7 @@ func NewTodoService(store *Store) *TodoService {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		log.Printf("todo: %v", err)
 	}
+	ts.savedRev = ts.list.Rev
 	go ts.saver()
 	go ts.notifier()
 	return ts
@@ -329,20 +331,27 @@ var errNothing = errors.New("nothing to change")
 func (ts *TodoService) saver() {
 	for range ts.dirty {
 		ts.saveMu.Lock()
-		ts.mu.Lock()
-		f := todoFile{Rev: ts.list.Rev, NextID: ts.nextID, Items: ts.list.Items}
-		ts.mu.Unlock()
-		if f.Items == nil {
-			f.Items = []TodoItem{}
-		}
-		if err := ts.store.Save(todoStoreName, f); err != nil {
-			log.Printf("todo: save %s: %v", todoStoreName, err)
-		}
+		ts.saveLocked()
 		ts.saveMu.Unlock()
 		if ts.saved != nil {
 			ts.saved <- struct{}{}
 		}
 	}
+}
+
+// saveLocked は、今の項目を todo.json に書く。saveMu を持って呼ぶ。
+func (ts *TodoService) saveLocked() {
+	ts.mu.Lock()
+	f := todoFile{Rev: ts.list.Rev, NextID: ts.nextID, Items: ts.list.Items}
+	ts.mu.Unlock()
+	if f.Items == nil {
+		f.Items = []TodoItem{}
+	}
+	if err := ts.store.Save(todoStoreName, f); err != nil {
+		log.Printf("todo: save %s: %v", todoStoreName, err)
+		return
+	}
+	ts.savedRev = f.Rev
 }
 
 // notifier は、変わるたびに設定 GUI に知らせる。保存（SD カード）とは別に動き、保存を待たない。
@@ -357,22 +366,16 @@ func (ts *TodoService) notifier() {
 	}
 }
 
-// Flush は、まだ書いていない変更があれば、今書く（デーモンが終わるとき）。
+// Flush は、まだ書いていない変更があれば、今書く（デーモンが終わるとき、バックアップを作る前）。
+// 保存の goroutine が知らせを受け取ってからロックを取るまでのあいだに呼ばれても書くよう、知らせではなく rev で決める。
 func (ts *TodoService) Flush() {
 	ts.saveMu.Lock()
 	defer ts.saveMu.Unlock()
-	select {
-	case <-ts.dirty:
-	default:
+	ts.mu.Lock()
+	rev := ts.list.Rev
+	ts.mu.Unlock()
+	if rev == ts.savedRev {
 		return
 	}
-	ts.mu.Lock()
-	f := todoFile{Rev: ts.list.Rev, NextID: ts.nextID, Items: ts.list.Items}
-	ts.mu.Unlock()
-	if f.Items == nil {
-		f.Items = []TodoItem{}
-	}
-	if err := ts.store.Save(todoStoreName, f); err != nil {
-		log.Printf("todo: save %s: %v", todoStoreName, err)
-	}
+	ts.saveLocked()
 }
