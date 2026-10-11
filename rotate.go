@@ -108,6 +108,7 @@ func (m touchMap) point(x, y int32) image.Point {
 // fpoint は、生の座標を論理の画面のドット（小数）にする（トラックパッド）。
 func (m touchMap) fpoint(x, y int32) fpt {
 	tc := m.tc
+	rx, ry := x, y // キャリブレーションは swap_xy の前の生の座標で決めてある
 	if tc.SwapXY {
 		x, y = y, x
 	}
@@ -117,7 +118,10 @@ func (m touchMap) fpoint(x, y int32) fpt {
 		}
 		return float64(v-lo) * float64(n) / float64(hi-lo)
 	}
-	X, Y := f(x, tc.MinX, tc.MaxX, m.pw), f(y, tc.MinY, tc.MaxY, m.ph)
+	X, Y, ok := calPhys(rx, ry, m.pw, m.ph) // キャリブレーション（touchcal.go）
+	if !ok {
+		X, Y = f(x, tc.MinX, tc.MaxX, m.pw), f(y, tc.MinY, tc.MaxY, m.ph)
+	}
 	switch m.rot {
 	case 90:
 		return fpt{Y, float64(m.pw) - X}

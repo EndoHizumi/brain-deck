@@ -396,7 +396,12 @@ func cellOf(v, min, max int32, n int) int {
 }
 
 // touchCell はタッチの生座標から cols×rows の格子のセルを求める。画面の枠も同じ境界で描く（cellSpan）。
+// キャリブレーション（touchcal.go）があれば、そちらで画面のドットにしてから割る。
 func touchCell(tc *TouchConfig, cols, rows int, x, y int32) (col, row int) {
+	if c := touchCalNow.Load(); c != nil {
+		X, Y, _ := calPhys(x, y, c.W, c.H)
+		return calCell(X, c.W, cols), calCell(Y, c.H, rows)
+	}
 	if tc.SwapXY {
 		x, y = y, x
 	}
@@ -405,6 +410,9 @@ func touchCell(tc *TouchConfig, cols, rows int, x, y int32) (col, row int) {
 
 // touchPoint は、タッチの生座標を W×H の画面のドットにする。セルの境界（touchCell）と同じ割り方。
 func touchPoint(tc *TouchConfig, x, y int32, W, H int) image.Point {
+	if X, Y, ok := calPhys(x, y, W, H); ok {
+		return image.Pt(calCell(X, W, W), calCell(Y, H, H))
+	}
 	if tc.SwapXY {
 		x, y = y, x
 	}
@@ -441,6 +449,8 @@ type touchProc struct {
 	stream        touchStream // ペンタブレット、手書きメモのセルを押している
 	lit           *TouchHit   // ハイライト中のセル
 	swallowed     bool        // 暗いときに触れたので、明るくしただけ。離すまで何もしない
+	soft          string      // キャリブレーションのあいだに押したソフトキー
+	calFirst      bool        // キャリブレーションのあいだ：押してから最初の読み
 }
 
 func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
@@ -455,6 +465,9 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 	case ev.Type == evdev.EV_KEY && ev.Code == evdev.BTN_TOUCH:
 		vlogf("touch: %s", evString(ev))
 		tp.down = ev.Value == 1
+		if tp.calibTouch(true) {
+			return
+		}
 		if !tp.down && tp.pressed && tp.swallowed {
 			tp.pressed, tp.swallowed = false, false
 			tp.dim.TouchUp()
@@ -478,6 +491,9 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 			}
 		}
 	case ev.Type == evdev.EV_SYN && ev.Code == evdev.SYN_REPORT:
+		if tp.calibTouch(false) {
+			return
+		}
 		if tp.down && tp.pressed && tp.pad {
 			e.pad.Sample(tp.x, tp.y, tp.p, t)
 			return
@@ -524,6 +540,47 @@ func (tp *touchProc) event(ev *evdev.InputEvent, t time.Time) {
 			tp.pressed = true
 		}
 	}
+}
+
+// calibTouch は、タッチのキャリブレーション（calibui.go）のあいだ、生のタッチをそちらに回す。回したら true。
+// 始める前から押していたタッチ（「タッチ調整」のセル）は、離すまでいつもどおりに扱う。
+// ソフトキーの帯は生の座標で決めるので、キャリブレーションの最中も、戻る（やめる）と決定（保存）に使える。
+// BTN_TOUCH の押し下げは、その回の座標の前に来るので、ソフトキーかどうかは最初の SYN_REPORT で決める。
+func (tp *touchProc) calibTouch(btn bool) bool {
+	c := tp.e.calib
+	if tp.pressed || !c.Active() {
+		return false
+	}
+	if btn {
+		if tp.down {
+			userActivity()
+			tp.dim.TouchDown()
+			tp.calFirst, tp.soft = true, ""
+			return true
+		}
+		tp.dim.TouchUp()
+		if tp.soft != "" {
+			soft := tp.soft
+			tp.soft = ""
+			c.SoftKey(soft)
+			return true
+		}
+		c.Touch(false, tp.x, tp.y)
+		return true
+	}
+	if !tp.down {
+		return true
+	}
+	if tp.calFirst {
+		tp.calFirst = false
+		if s, ok := tp.e.km.hitSoft(tp.x, tp.y); ok {
+			tp.soft = s
+		}
+	}
+	if tp.soft == "" {
+		c.Touch(true, tp.x, tp.y)
+	}
+	return true
 }
 
 // ---------- キャリブレーション ----------
@@ -727,6 +784,9 @@ func cellView(km *Keymap, a *Action) CellView {
 	}
 	if a.Kind == actInput {
 		keys = inputLabels[a.Spec.Input]
+	}
+	if a.Kind == actCalibrate {
+		keys = calibrateLabels[a.Spec.Calibrate]
 	}
 	v := CellView{Mapped: true, Label: label, Sub: keys, Background: a.Spec.Background, Media: a.Kind == actMedia, NeedsPC: a.needsPC()}
 	if v.Label == "" || v.Label == keys {
@@ -1334,6 +1394,17 @@ func main() {
 	prompt := NewPrompt(nil)
 	e.SetInput(prompt)
 	e.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
+	// タッチのキャリブレーション（touchcal.go、calibui.go）。保存したものがあれば、設定の min と max より優先する
+	if f, err := loadTouchCal(*dataDir); err != nil {
+		log.Printf("touch: calibration: %v (using touch.min_x etc. in the config)", err)
+	} else if f != nil {
+		log.Printf("touch: using the calibration from %s (%d points, %s)", f.Created.Format(time.DateTime), len(f.Points), f.After)
+	}
+	calib := NewCalibUI(*dataDir)
+	calib.tc = func() *TouchConfig { return curCfg.Load().Touch } // e.mu は使わない（エンジンは e.mu を取ったまま calib を呼ぶので）
+	calib.notify = func(msg string, level int) { prompt.Notify(msg, level) }
+	calib.wake = dim.Wake
+	e.calib = calib
 	guard.notify, guard.clear = prompt.NotifyFor, prompt.ClearNotice
 	gadgets.SetOnAlert(dim.Wake)
 	gadgets.SetOnBusy(dim.SetBusy) // プレゼン用タイマーが動いているあいだは暗くしない
@@ -1492,6 +1563,7 @@ func main() {
 			} else {
 				disp = d
 				addAtExit(d.Close)
+				calib.show = d.SetFullScreen
 				term.SetDisplay(d)
 				frame.SetDisplay(d)
 				clock.SetOnChange(d.Poke)
@@ -1577,6 +1649,7 @@ func main() {
 			sync:    syncs,
 			reader:  reader,
 			files:   files,
+			calib:   calib,
 			dataDir: *dataDir,
 			started: time.Now(),
 		}

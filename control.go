@@ -459,6 +459,7 @@ type Controller struct {
 	sync    *SyncService
 	reader  *ReaderService
 	files   *FilesService
+	calib   *CalibUI
 	frame   *PhotoFrame
 	dataDir string // battery-log.csv の置き場所
 	started time.Time
@@ -495,7 +496,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
-				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync", "list_files", "get_file", "delete_file"},
+				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync", "list_files", "get_file", "delete_file", "calibrate"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -634,6 +635,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return c.memo(id, req)
 	case "list_files", "get_file", "delete_file":
 		return c.file(id, req)
+	case "calibrate":
+		return c.calibrate(id, req)
 	case "set_sync":
 		if c.sync == nil {
 			return errResp(id, errInternal, "sync is not available", nil)
@@ -1639,4 +1642,59 @@ func (c *Controller) fileErr(id json.RawMessage, err error) response {
 		return errResp(id, errBadRequest, err.Error(), nil)
 	}
 	return errResp(id, errInternal, err.Error(), nil)
+}
+
+// calibrate は、タッチのキャリブレーション（calibui.go、touchcal.go）。mode：start（kind は touch か touch9）、cancel、
+// reset（保存したものをやめて設定の min と max に戻す）、status（省略したとき）。
+func (c *Controller) calibrate(id json.RawMessage, req request) response {
+	if c.calib == nil {
+		return errResp(id, errInternal, "touch calibration is not available", nil)
+	}
+	switch req.Mode {
+	case "start":
+		k := req.Kind
+		if k == "" {
+			k = "touch"
+		}
+		n, ok := calibrateKinds[k]
+		if !ok {
+			return errResp(id, errBadRequest, `kind must be "touch" (5 points) or "touch9" (9 points)`, nil)
+		}
+		if c.term.Active() {
+			return errResp(id, errConflict, "the terminal mode is on; leave it first", nil)
+		}
+		if err := c.calib.Start(n, "brain-deck"); err != nil {
+			return errResp(id, errInternal, err.Error(), nil)
+		}
+	case "cancel":
+		c.calib.Cancel()
+	case "reset":
+		c.calib.Cancel()
+		had, err := resetTouchCal(c.dataDir)
+		if err != nil {
+			return errResp(id, errInternal, err.Error(), nil)
+		}
+		return response{ID: id, OK: true, Result: map[string]any{"reset": had, "calibration": c.touchCalInfo()}}
+	case "", "status":
+	default:
+		return errResp(id, errBadRequest, `mode must be start, cancel, reset or status`, nil)
+	}
+	return response{ID: id, OK: true, Result: map[string]any{"status": c.calib.Status(), "calibration": c.touchCalInfo()}}
+}
+
+// touchCalInfo は、今使っているタッチの変換（保存したキャリブレーションか、設定の min と max）。
+func (c *Controller) touchCalInfo() map[string]any {
+	tc := c.store.Current().Touch
+	out := map[string]any{"source": "config"}
+	if tc != nil {
+		out["config"] = map[string]any{"min_x": tc.MinX, "max_x": tc.MaxX, "min_y": tc.MinY, "max_y": tc.MaxY, "swap_xy": tc.SwapXY}
+	}
+	if b, err := os.ReadFile(touchCalPath(c.dataDir)); err == nil && touchCalNow.Load() != nil {
+		var f calFile
+		if json.Unmarshal(b, &f) == nil {
+			out["source"] = "calibration"
+			out["file"] = f
+		}
+	}
+	return out
 }

@@ -217,7 +217,8 @@ type Engine struct {
 	autoHome    []stackEntry
 	notify      func(string) // 画面の下に知らせを出す。nil なら出さない
 	offNoticeAt time.Time
-	input       *Prompt // Brain のキーボードで文字を入れる欄（prompt.go）。nil なら使わない
+	input       *Prompt  // Brain のキーボードで文字を入れる欄（prompt.go）。nil なら使わない
+	calib       *CalibUI // タッチのキャリブレーション（calibui.go）。nil なら使わない。始めたら、タッチと本体キーはここに回す
 }
 
 // SetRotation は、画面の向きと、物理の画面の大きさを決める（起動したとき）。rs は向きの保存（nil なら保存しない）。
@@ -365,6 +366,10 @@ func (e *Engine) PressKey(code evdev.EvCode) {
 	}
 	if e.input.Active() {
 		e.input.Key(code, 1) // 文字を入れる欄：PC には送らない
+		return
+	}
+	if e.calib.Active() {
+		e.calib.Key(code) // タッチのキャリブレーション：PC には送らない
 		return
 	}
 	e.mu.Lock()
@@ -698,6 +703,10 @@ func (e *Engine) press(id string, a *Action) {
 			e.rotateLocked(a.Rotate)
 		case actInput:
 			e.input.Open(a.Spec.Input)
+		case actCalibrate:
+			if err := e.calib.Start(calibrateKinds[a.Spec.Calibrate], "brain"); err != nil {
+				log.Printf("touch: %v", err)
+			}
 		case actHomePage:
 			if h := e.km.Home; h != nil {
 				e.homePageLocked(h, a.Rotate, e.portraitLocked())

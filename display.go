@@ -466,6 +466,11 @@ type Display struct {
 	photo      *Image
 	photoNew   bool
 	photoShown bool // 今、写真を描いている（描画側だけが触る）
+	// 画面を全部使う画面（タッチのキャリブレーション。calibui.go）。向き 0 で描く。d.mu で守る
+	full      func(cv *Canvas) bool
+	fullNew   bool
+	fullShown bool    // 描画側だけが触る
+	fullCv    *Canvas // 向き 0 の裏画面（描画側だけが触る）
 
 	// 手書きメモの描き足し（memo.go）。d.mu で守る。描くのは描画の goroutine
 	inks   []inkOp
@@ -572,6 +577,21 @@ func (d *Display) SetPhoto(img *Image) {
 	d.photo, d.photoNew = img, true
 	if img == nil {
 		d.invalid = true // 格子を全体から描き直す
+	}
+	d.mu.Unlock()
+	d.poke()
+}
+
+// SetFullScreen は、画面を全部使って draw で描く（向き 0。格子、写真、端末の代わり）。nil でやめて、格子を描き直す。
+// 呼ぶたびに描き直す。
+func (d *Display) SetFullScreen(draw func(cv *Canvas) bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.full, d.fullNew = draw, true
+	if draw == nil {
+		d.invalid = true
 	}
 	d.mu.Unlock()
 	d.poke()
@@ -878,6 +898,12 @@ func (d *Display) reclaim() {
 // redraw は、格子が変わっていれば全体を、そうでなければ押下状態が変わったセルだけを描き直す。
 func (d *Display) redraw() bool {
 	d.mu.Lock()
+	if f := d.full; f != nil {
+		fresh := d.fullNew
+		d.fullNew = false
+		d.mu.Unlock()
+		return d.redrawFull(f, fresh)
+	}
 	if tm := d.term; tm != nil {
 		full := d.termNew
 		d.termNew = false
@@ -908,8 +934,8 @@ func (d *Display) redraw() bool {
 	if d.closed {
 		return false
 	}
-	wasTerm := d.termShown || d.photoShown // 端末モードか写真から戻った：格子を全体から描き直す
-	d.termShown, d.photoShown = false, false
+	wasTerm := d.termShown || d.photoShown || d.fullShown // 端末モード、写真、キャリブレーションから戻った：格子を全体から描き直す
+	d.termShown, d.photoShown, d.fullShown = false, false, false
 	if (next != nil || invalid || wasTerm) && ovNew {
 		d.ovShown, ovNew = ov, false // 全体を描くので、そのときに一緒に描く
 	}
@@ -973,6 +999,30 @@ func (d *Display) redraw() bool {
 			d.flushLocked(r)
 		}
 		vlogf("display: ink %d ops %v", len(inks), time.Since(t))
+	}
+	return true
+}
+
+// redrawFull は、画面を全部使う画面を描く（向き 0 の裏画面に描いて、全体を送る）。
+func (d *Display) redrawFull(draw func(cv *Canvas) bool, fresh bool) bool {
+	d.drawMu.Lock()
+	defer d.drawMu.Unlock()
+	if d.closed {
+		return false
+	}
+	d.wakeAt = time.Time{} // ウィジェットは描かない
+	if !fresh && d.fullShown {
+		return true
+	}
+	if d.fullCv == nil {
+		d.fullCv = newCanvas(d.fb, 0)
+	}
+	if !draw(d.fullCv) {
+		return true
+	}
+	d.fullShown = true
+	if d.active {
+		d.fb.Blit(d.fullCv, image.Rect(0, 0, d.fullCv.pw, d.fullCv.ph))
 	}
 	return true
 }

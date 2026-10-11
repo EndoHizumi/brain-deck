@@ -110,8 +110,10 @@ type ActionSpec struct {
 	Rotate string `yaml:"rotate,omitempty" json:"rotate,omitempty"`
 	// Input は、Brain のキーボードで文字を入れる欄を開く（todo で Todo を足す、clock で時刻を合わせる。prompt.go）
 	Input string `yaml:"input,omitempty" json:"input,omitempty"`
-	Label string `yaml:"label,omitempty" json:"label,omitempty"`
-	Span  Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
+	// Calibrate は、タッチのキャリブレーションを始める（touch で 5 点、touch9 で 9 点。calibui.go）。PC がなくても使える
+	Calibrate string `yaml:"calibrate,omitempty" json:"calibrate,omitempty"`
+	Label     string `yaml:"label,omitempty" json:"label,omitempty"`
+	Span      Span   `yaml:"span,omitempty" json:"span,omitzero"` // [列数, 行数]。タッチのセルだけ
 	// Background はセルの背景画像の id（/var/lib/lefthand/images/<id>.565）。タッチのセルだけ
 	Background string `yaml:"background,omitempty" json:"background,omitempty"`
 
@@ -186,7 +188,7 @@ var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
 	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 	"page_reset": true, "stale": true, "calendars": true, "follow": true, "week_start": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
-	"terminal": true, "rotate": true, "input": true, "work": true, "break": true, "states": true,
+	"terminal": true, "rotate": true, "input": true, "calibrate": true, "work": true, "break": true, "states": true,
 	"unit": true, "min": true, "max": true, "chart": true, "points": true, "decimals": true, "duration": true, "colors": true, "prefix": true,
 	"speed": true, "accel": true, "scroll_width": true, "scroll_direction": true, "scroll_step": true, "settle_ms": true,
 	"smooth": true, "deadzone": true, "min_pressure": true, "tap_ms": true, "tap_move": true, "drag_ms": true, "long_press": true,
@@ -204,7 +206,7 @@ func (a *ActionSpec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.MappingNode {
 		for i := 0; i < len(n.Content); i += 2 {
 			if k := n.Content[i]; !actionFields[k.Value] {
-				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, rotate, input, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, duration, colors, prefix, background, and the trackpad fields)", k.Line, k.Value)
+				return fmt.Errorf("line %d: unknown field %q (key, layer_hold, layer_toggle, layer_oneshot, layer_to, mouse, media, usb_mode, terminal, rotate, input, calibrate, label, span, widget, format, date_format, tz, id, rows, page_reset, stale, calendars, follow, week_start, work, break, states, unit, min, max, chart, points, decimals, duration, colors, prefix, background, and the trackpad fields)", k.Line, k.Value)
 			}
 		}
 	}
@@ -251,7 +253,7 @@ func (a ActionSpec) hasGraphFields() bool {
 
 func (a ActionSpec) count() int {
 	n := 0
-	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.Media, a.UsbMode, a.Terminal, a.Rotate, a.Input} {
+	for _, s := range []string{a.Key, a.LayerHold, a.LayerToggle, a.LayerOneshot, a.LayerTo, a.Mouse, a.Media, a.UsbMode, a.Terminal, a.Rotate, a.Input, a.Calibrate} {
 		if s != "" {
 			n++
 		}
@@ -407,23 +409,24 @@ func pointerEscape(s string) string {
 type ActKind uint8
 
 const (
-	actNone     ActKind = iota // 何もしない（下のレイヤーも使わない）
-	actKey                     // キーを送る
-	actHold                    // 押しているあいだレイヤーを重ねる
-	actToggle                  // 押すたびにレイヤーを重ねる・外す
-	actOneshot                 // 次の 1 キーだけレイヤーを重ねる
-	actTo                      // base とそのレイヤーだけにする
-	actWidget                  // ウィジェットのセルで、key も layer_* も書いていない（タップはウィジェットに任せる）
-	actMouse                   // マウスのボタンかスクロール
-	actUSB                     // USB の形の切り替え
-	actTerminal                // 端末モードの切り替え
-	actMedia                   // メディアキー
-	actRotate                  // 画面の向きを変える
-	actHomePage                // ホーム画面のページを送る（ホーム画面の ◀ ▶ のソフトキー。設定には書けない）
-	actInput                   // Brain のキーボードで文字を入れる欄を開く（prompt.go）
+	actNone      ActKind = iota // 何もしない（下のレイヤーも使わない）
+	actKey                      // キーを送る
+	actHold                     // 押しているあいだレイヤーを重ねる
+	actToggle                   // 押すたびにレイヤーを重ねる・外す
+	actOneshot                  // 次の 1 キーだけレイヤーを重ねる
+	actTo                       // base とそのレイヤーだけにする
+	actWidget                   // ウィジェットのセルで、key も layer_* も書いていない（タップはウィジェットに任せる）
+	actMouse                    // マウスのボタンかスクロール
+	actUSB                      // USB の形の切り替え
+	actTerminal                 // 端末モードの切り替え
+	actMedia                    // メディアキー
+	actRotate                   // 画面の向きを変える
+	actHomePage                 // ホーム画面のページを送る（ホーム画面の ◀ ▶ のソフトキー。設定には書けない）
+	actInput                    // Brain のキーボードで文字を入れる欄を開く（prompt.go）
+	actCalibrate                // タッチのキャリブレーションを始める（calibui.go）
 )
 
-var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal", "media", "rotate", "home_page", "input"}
+var actNames = [...]string{"none", "key", "layer_hold", "layer_toggle", "layer_oneshot", "layer_to", "widget", "mouse", "usb_mode", "terminal", "media", "rotate", "home_page", "input", "calibrate"}
 
 func (k ActKind) String() string { return actNames[k] }
 
@@ -642,6 +645,11 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 			a.Kind = actInput
 			if !inputKinds[s.Input] {
 				fail(path, "%s: input must be todo or clock", where)
+			}
+		case s.Calibrate != "":
+			a.Kind = actCalibrate
+			if _, ok := calibrateKinds[s.Calibrate]; !ok {
+				fail(path, "%s: calibrate must be touch (5 points) or touch9 (9 points)", where)
 			}
 		default:
 			fail(path, "%s: empty assignment", where)
