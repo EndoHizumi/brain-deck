@@ -17,8 +17,14 @@ import (
 //   - critical 以下になったら、もう一度知らせ、画面を明るくする（赤）
 //   - poweroff 以下が続いたら、60 秒後に電源を切ると知らせ、どれかのキーかタッチで取りやめなければ、
 //     データを保存して（デーモンを止めるときに保存する）電源を切る
-// USB の 5V があるあいだは何もしない。i.MX28 は、5V があるときに電源を切ると起動し直してしまうと報告されているので
-// （参考の記事の「7. ハマったこと」）、電源を切るのは 5V がないときだけにする。
+// USB の 5V があるあいだは、残り（%）では何もしない。
+//
+// 電圧で決める（warn_mv、poweroff_mv）：残りの見積もりはまだ正確でないので、電池の電圧（移動平均）で決めることもできる。
+//   - warn_mv を下回ったら知らせる（橙。画面を明るくする）
+//   - poweroff_mv を下回ったら、上と同じ 60 秒の知らせのあと、データを保存して電源を切る（キーかタッチで取りやめる）
+//   - poweroff_plugged（既定 true）なら、USB の 5V があるあいだも同じにする。Brainux では USB につないでも充電されず
+//     （README の「充電」）、つないだままでも電池は減って、切れて止まることがあった（2026-10-11）
+// USB につないだまま電源を切ることはできる（フェーズ P2 のユーザーの試験。切ったあとで USB を差し直すと起動する）。
 // 電圧は、つないだ・外した直後に跳ぶので、外してから batteryGuardMin 回読むまでは判断しない。
 //
 // 記録（battery.log、既定で行う）：電池だけで動いているあいだ、読むたびに 1 行を <data-dir>/battery-log.csv に足す
@@ -34,6 +40,7 @@ const (
 	batteryLogName      = "battery-log.csv"
 	batteryLogMax       = 512 << 10
 	batteryLogHeader    = "time,uptime_s,vbatt_mv,vbatt_avg_mv,vbus_mv,percent,plugged,backlight,event"
+	batteryMVRearm      = 50 // warn_mv の知らせは、電圧がこれだけ戻ったら、もう一度出せるようにする
 )
 
 // BatteryConfig は設定の battery。
@@ -43,6 +50,10 @@ type BatteryConfig struct {
 	Poweroff int      `yaml:"poweroff,omitempty" json:"poweroff,omitempty"` // これ以下で電源を切る（%）。既定 0（切らない）
 	Log      *bool    `yaml:"log,omitempty" json:"log,omitempty"`           // 電池だけのあいだの電圧を記録する。既定 true
 	Curve    [][2]int `yaml:"curve,omitempty" json:"curve,omitempty"`       // 電圧（mV）と残り（%）の表。省略すると既定の表
+	// 電圧で決める（mV）。0 か省略で使わない
+	WarnMV          int   `yaml:"warn_mv,omitempty" json:"warn_mv,omitempty"`                   // これを下回ったら知らせる
+	PoweroffMV      int   `yaml:"poweroff_mv,omitempty" json:"poweroff_mv,omitempty"`           // これを下回ったら電源を切る
+	PoweroffPlugged *bool `yaml:"poweroff_plugged,omitempty" json:"poweroff_plugged,omitempty"` // USB の 5V があっても電圧で切る。既定 true
 }
 
 // batteryParams は組み立てた battery。
@@ -50,12 +61,29 @@ type batteryParams struct {
 	warn, critical, poweroff int
 	log                      bool
 	curve                    [][2]int
+	warnMV, offMV            int  // 電圧で決める（0 で使わない）
+	mvPlugged                bool // USB の 5V があっても、電圧で知らせて切る
 }
 
 func (c *BatteryConfig) compile() (batteryParams, error) {
-	p := batteryParams{warn: batteryWarnDefault, critical: batteryCritDefault, log: true}
+	p := batteryParams{warn: batteryWarnDefault, critical: batteryCritDefault, log: true, mvPlugged: true}
 	if c == nil {
 		return p, nil
+	}
+	for _, v := range []struct {
+		name string
+		mv   int
+	}{{"warn_mv", c.WarnMV}, {"poweroff_mv", c.PoweroffMV}} {
+		if v.mv != 0 && (v.mv < 3000 || v.mv > 4100) {
+			return p, fmt.Errorf("battery.%s must be 3000..4100 (mV; 0 does not use it), got %d", v.name, v.mv)
+		}
+	}
+	if c.WarnMV > 0 && c.PoweroffMV > 0 && c.PoweroffMV >= c.WarnMV {
+		return p, fmt.Errorf("battery.poweroff_mv (%d) must be less than battery.warn_mv (%d)", c.PoweroffMV, c.WarnMV)
+	}
+	p.warnMV, p.offMV = c.WarnMV, c.PoweroffMV
+	if c.PoweroffPlugged != nil {
+		p.mvPlugged = *c.PoweroffPlugged
 	}
 	pct := func(name string, v *int, dst *int) error {
 		if v == nil {
@@ -124,8 +152,9 @@ type BatteryGuard struct {
 	now       func() time.Time
 	after     func(time.Duration, func()) func() bool // タイマー（止める関数を返す）。テストで差し替える
 
-	warned   int // 知らせた段階（0 なし、1 warn、2 critical）
-	below    int // poweroff 以下が続いた回数
+	warned   int  // 知らせた段階（0 なし、1 warn、2 critical）
+	warnedMV bool // warn_mv で知らせた
+	below    int  // poweroff 以下が続いた回数
 	stopOff  func() bool
 	offAt    time.Time // 電源を切る時刻（ゼロなら切ろうとしていない）
 	cancelTo time.Time // 取りやめたので、この時刻までは切らない
@@ -161,8 +190,9 @@ func (g *BatteryGuard) Sample(b BatteryInfo) {
 		pl := b.Plugged
 		g.plugged = &pl
 	}
-	if b.Plugged {
-		g.warned, g.below = 0, 0
+	mv := g.p.warnMV > 0 || g.p.offMV > 0 // 電圧で決める
+	if b.Plugged && !(mv && g.p.mvPlugged) {
+		g.warned, g.below, g.warnedMV = 0, 0, false
 		if !g.offAt.IsZero() {
 			g.cancelLocked("USB の電源につながったので、電源を切るのをやめました")
 		}
@@ -173,14 +203,42 @@ func (g *BatteryGuard) Sample(b BatteryInfo) {
 	}
 	logged := false
 	defer func() {
-		if !logged {
+		// 電池だけのあいだは毎回、USB の 5V があるあいだは出来事があったときだけ記録する
+		if !logged && (!b.Plugged || event != "") {
 			g.logLocked(now, b, event)
 		}
 	}()
 	if b.Percent < 0 || (b.Source == "lradc" && b.Samples < batteryGuardMin) {
 		return
 	}
+	if b.Plugged {
+		g.warned = 0 // 残り（%）は、電池だけのときに見る
+	}
 	pct := b.Percent
+	low := false // 電源を切る値を下回っている
+	if mv && b.VoltageMV > 0 {
+		v := b.VoltageMV
+		switch {
+		case g.p.warnMV > 0 && v >= g.p.warnMV+batteryMVRearm:
+			g.warnedMV = false
+		case g.p.warnMV > 0 && v < g.p.warnMV && !g.warnedMV:
+			g.warnedMV = true
+			event = joinEvent(event, "warn-mv")
+			msg := fmt.Sprintf("電池の電圧が低くなりました（%.2f V）。純正のファームウェアで充電してください", float64(v)/1000)
+			if b.Plugged {
+				msg = fmt.Sprintf("電池の電圧が低くなりました（%.2f V）。USB では充電されないので、純正のファームウェアで充電してください", float64(v)/1000)
+			}
+			g.say(msg, noticeWarn, 10*time.Second)
+			if g.wake != nil {
+				g.wake()
+			}
+		}
+		low = g.p.offMV > 0 && v < g.p.offMV
+	}
+	if b.Plugged {
+		g.countLocked(now, b, low, &event)
+		return
+	}
 	switch {
 	case g.p.warn > 0 && pct > g.p.warn+5:
 		g.warned = 0 // 充電して戻った（電源につながずに、電圧が戻ることもある）
@@ -196,20 +254,26 @@ func (g *BatteryGuard) Sample(b BatteryInfo) {
 		event = joinEvent(event, "warn")
 		g.say(fmt.Sprintf("電池が少なくなりました（%d%%）", pct), noticeWarn, 6*time.Second)
 	}
-	if g.p.poweroff > 0 && pct <= g.p.poweroff {
+	low = low || (g.p.poweroff > 0 && pct <= g.p.poweroff)
+	g.countLocked(now, b, low, &event)
+}
+
+// countLocked は、電源を切る値を下回った回数を数え、続いたら 60 秒の知らせを始める。
+func (g *BatteryGuard) countLocked(now time.Time, b BatteryInfo, low bool, event *string) {
+	if low {
 		g.below++
 	} else {
 		g.below = 0
 	}
 	if g.below >= batteryGuardMin && g.offAt.IsZero() && !now.Before(g.cancelTo) {
 		g.offAt = now.Add(batteryPoweroffWait)
-		event = joinEvent(event, "poweroff-countdown")
-		g.offMsg = fmt.Sprintf("電池が残りわずか（%d%%）。%s に電源を切ります（キーかタッチでやめる）", pct, g.offAt.Format("15:04:05"))
+		*event = joinEvent(*event, "poweroff-countdown")
+		g.offMsg = fmt.Sprintf("電池が残りわずか（%.2f V）。%s に電源を切ります（キーかタッチでやめる）", float64(b.VoltageMV)/1000, g.offAt.Format("15:04:05"))
 		g.say(g.offMsg, noticeError, 0)
 		if g.wake != nil {
 			g.wake()
 		}
-		log.Printf("battery: %d%% (%d mV) <= poweroff %d%%; powering off at %s unless cancelled", pct, b.VoltageMV, g.p.poweroff, g.offAt.Format(time.TimeOnly))
+		log.Printf("battery: %d%% (%d mV, plugged=%v) is low; powering off at %s unless cancelled", b.Percent, b.VoltageMV, b.Plugged, g.offAt.Format(time.TimeOnly))
 		g.stopOff = g.after(batteryPoweroffWait, g.fire)
 	}
 }
@@ -230,7 +294,8 @@ func (g *BatteryGuard) say(msg string, level int, d time.Duration) {
 // fire は、電源を切る時刻になったときに呼ぶ。
 func (g *BatteryGuard) fire() {
 	g.mu.Lock()
-	if g.offAt.IsZero() || (g.plugged != nil && *g.plugged) {
+	mvPlugged := (g.p.warnMV > 0 || g.p.offMV > 0) && g.p.mvPlugged
+	if g.offAt.IsZero() || (g.plugged != nil && *g.plugged && !mvPlugged) {
 		g.mu.Unlock()
 		return
 	}

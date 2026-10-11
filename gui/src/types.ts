@@ -251,6 +251,9 @@ export interface BatteryConfig {
   warn?: number
   critical?: number
   poweroff?: number
+  warn_mv?: number // 電圧で決める（mV）
+  poweroff_mv?: number
+  poweroff_plugged?: boolean
   log?: boolean
   curve?: [number, number][]
 }

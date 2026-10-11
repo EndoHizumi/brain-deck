@@ -720,3 +720,98 @@ func TestBacklightOffline(t *testing.T) {
 		t.Fatal("offline params without offline")
 	}
 }
+
+// 電圧で決める（battery.warn_mv、poweroff_mv）。USB の 5V があっても、充電されないので知らせて切る（フェーズ R3）
+func TestBatteryGuardVoltage(t *testing.T) {
+	cfg := &BatteryConfig{Warn: new(int), Critical: new(int), WarnMV: 3500, PoweroffMV: 3400}
+	p, err := cfg.compile()
+	if err != nil || p.warnMV != 3500 || p.offMV != 3400 || !p.mvPlugged || p.warn != 0 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	for _, bad := range []BatteryConfig{{WarnMV: 3400, PoweroffMV: 3500}, {WarnMV: 2000}, {PoweroffMV: 4500}} {
+		if _, err := bad.compile(); err == nil {
+			t.Errorf("%+v: no error", bad)
+		}
+	}
+	for _, plugged := range []bool{false, true} {
+		g, r, now := newTestGuard(t, p)
+		feed := func(mv, samples int) {
+			*now = now.Add(30 * time.Second)
+			g.Sample(BatteryInfo{Percent: 4, Plugged: plugged, Source: "lradc", Samples: samples, VoltageMV: mv, RawMV: mv, VBusMV: 4950})
+		}
+		feed(3600, 5)
+		feed(3490, 2) // 読み始めは判断しない
+		if len(r.notices) != 0 {
+			t.Fatalf("plugged=%v: judged too early: %q", plugged, r.notices)
+		}
+		feed(3490, 3)
+		feed(3480, 4)
+		if len(r.notices) != 1 || !strings.Contains(r.notices[0], "3.49 V") || !strings.Contains(r.notices[0], "純正のファームウェア") || r.wakes != 1 {
+			t.Fatalf("plugged=%v: warn %q wakes %d", plugged, r.notices, r.wakes)
+		}
+		if plugged != strings.Contains(r.notices[0], "USB では充電されない") {
+			t.Errorf("plugged=%v: %q", plugged, r.notices[0])
+		}
+		// 3.4 V を下回ったのが 3 回続いたら、60 秒の知らせ
+		feed(3390, 5)
+		feed(3390, 5)
+		if len(r.timers) != 0 {
+			t.Fatalf("plugged=%v: countdown after 2 samples", plugged)
+		}
+		feed(3385, 5)
+		if len(r.timers) != 1 || !g.PoweringOff() || !strings.Contains(r.notices[len(r.notices)-1], "3.38 V") {
+			t.Fatalf("plugged=%v: countdown %d %q", plugged, len(r.timers), r.notices)
+		}
+		// キーで取りやめる。10 分は切らない
+		g.Activity()
+		if g.PoweringOff() || r.timers[0] != nil {
+			t.Fatalf("plugged=%v: cancel", plugged)
+		}
+		for i := 0; i < 5; i++ {
+			feed(3380, 5)
+		}
+		if len(r.timers) != 1 {
+			t.Fatalf("plugged=%v: counted down again within 10 minutes", plugged)
+		}
+		for i := 0; i < 20; i++ {
+			feed(3380, 5)
+		}
+		if len(r.timers) != 2 {
+			t.Fatalf("plugged=%v: no countdown after 10 minutes", plugged)
+		}
+		r.timers[1]()
+		if r.powered != 1 {
+			t.Fatalf("plugged=%v: did not power off", plugged)
+		}
+		// 戻ったら、もう一度知らせられる
+		n := len(r.notices)
+		feed(3560, 5)
+		feed(3480, 5)
+		if len(r.notices) != n+1 {
+			t.Errorf("plugged=%v: warn was not re-armed: %q", plugged, r.notices[n:])
+		}
+	}
+	// poweroff_plugged: false なら、USB の 5V があるあいだは何もしない
+	off := false
+	cfg.PoweroffPlugged = &off
+	p2, _ := cfg.compile()
+	g, r, now := newTestGuard(t, p2)
+	for i := 0; i < 6; i++ {
+		*now = now.Add(30 * time.Second)
+		g.Sample(BatteryInfo{Percent: 4, Plugged: true, Source: "lradc", Samples: 5, VoltageMV: 3300})
+	}
+	if len(r.notices) != 0 || len(r.timers) != 0 {
+		t.Fatalf("poweroff_plugged false: %q %d", r.notices, len(r.timers))
+	}
+	// 電圧で切ろうとしているときは、USB をつないでも取りやめない（充電されないので）
+	g3, r3, now3 := newTestGuard(t, p)
+	for i := 0; i < 4; i++ {
+		*now3 = now3.Add(30 * time.Second)
+		g3.Sample(BatteryInfo{Percent: 4, Source: "lradc", Samples: 5, VoltageMV: 3380})
+	}
+	*now3 = now3.Add(30 * time.Second)
+	g3.Sample(BatteryInfo{Percent: 4, Plugged: true, Source: "lradc", Samples: 5, VoltageMV: 3380})
+	if !g3.PoweringOff() || len(r3.timers) != 1 || r3.timers[0] == nil {
+		t.Fatalf("plugging in cancelled the voltage poweroff")
+	}
+}
