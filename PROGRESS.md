@@ -14,7 +14,7 @@
 | タッチのキャリブレーション | 終わり | デーモン 6a74e57ee33d、設定 config/current.yaml（ff1c7b4） |
 | K1 ふた、設定のアプリ、ヘルプ | 終わり（ふたと再起動のボタンも実機で確かめた） | デーモン a30ea9e82e31、設定 config/current.yaml（d79939f） |
 | K2 日本語の入力（uim-fep と Anthy） | 終わり（欄はキーの注入で実機で確かめた。Brain のシェルのログインはユーザーが確かめる） | デーモン e338b6168600、設定 config/current.yaml（e338b61）。Brain の /etc/profile.d/lefthand-ime.sh |
-| K3 バックアップと復元、PC ごとの切り替え（と、ふたの描き直し、タブレットの形、日本語入力の調整） | 終わり（ふた、タブレットの形、日本語入力、設定の並びはユーザーが実機で確かめた。バックアップと復元とプロファイルは試験のデーモンで確かめた） | デーモン d7daf5ef6e33、PC の brain-deck a522fcd94003。設定は変えていない |
+| K3 バックアップと復元、PC ごとの切り替え（と、ふたの描き直し、タブレットの形、日本語入力の調整） | 終わり（ふた、タブレットの形、日本語入力、設定の並びはユーザーが実機で確かめた。バックアップと復元とプロファイルは試験のデーモンで確かめた） | デーモン 8a09379808bb、PC の brain-deck 8a09379808bb。設定は変えていない |
 
 ## 次にすること
 
@@ -23,7 +23,7 @@
 
 ## 本番の状態（最後に確かめたとき）
 
-- デーモン d7daf5ef6e33（`.prev` afa79624626a）。設定は config/current.yaml（フェーズ K2 の ime。K3 では変えていない。profiles なし）。`/var/lib/lefthand/` に overrides.json、profile.json、backup/ はない。PC の brain-deck は a522fcd94003（次に USB をつないだときの自動の同期から、PC の名前を知らせ、1 日 1 回バックアップを ~/.local/share/brain-deck/backups に取る）。Brain に /etc/profile.d/lefthand-ime.sh を置いた。
+- デーモン 8a09379808bb（`.prev` d7daf5ef6e33）。設定は config/current.yaml（フェーズ K2 の ime。K3 では変えていない。profiles なし）。`/var/lib/lefthand/` に overrides.json、profile.json、backup/ はない。PC の brain-deck は 8a09379808bb（次に USB をつないだときの自動の同期から、PC の名前を知らせ、1 日 1 回バックアップを ~/.local/share/brain-deck/backups に取る）。Brain に /etc/profile.d/lefthand-ime.sh を置いた。
 - 本番に反映しない、と決めたフェーズ：なし。
 
 ## 再開するときの注意

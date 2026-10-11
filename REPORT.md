@@ -8,7 +8,7 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 ## 追記：フェーズ K3　バックアップと復元、PC ごとの切り替え（2026-10-12）
 
-ユーザーが起きていて、「K3 を始めて」と言われて行った。最初に K1 のあとで決めたこと（タブレットの形、閉じているあいだの描き直し）を別のコミットで作って本番に入れ、続いて日本語入力の調整、K3 の本体を行った。デーモンは afa79624626a（K3 の最初の 2 つ）→ d7daf5ef6e33（`.prev` afa79624626a）、PC の brain-deck は a522fcd94003。設定（`config/current.yaml`）は変えていない（本番の設定に profiles は入れていない）。電池は始めるとき 3.85 V、終わるとき 3.70 V（USB 給電）。
+ユーザーが起きていて、「K3 を始めて」と言われて行った。最初に K1 のあとで決めたこと（タブレットの形、閉じているあいだの描き直し）を別のコミットで作って本番に入れ、続いて日本語入力の調整、K3 の本体を行った。デーモンは afa79624626a（K3 の最初の 2 つ）→ d7daf5ef6e33 → 8a09379808bb（`.prev` d7daf5ef6e33。Todo の Flush の直し）、PC の brain-deck は 8a09379808bb。設定（`config/current.yaml`）は変えていない（本番の設定に profiles は入れていない）。電池は始めるとき 3.85 V、終わるとき 3.70 V（USB 給電）。
 
 ### K3 の最初に行ったこと（K1 のあとで決めたこと）
 
@@ -38,6 +38,7 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 - **作ったもの**（9c8b4ca、44f6a5f）：設定の `profiles`（`name`、`label`、`pcs`、`start_layer`、`modifiers`、`home`、`layers`）とトップレベルの `start_layer`。PC の brain-deck が `sync` の最初に名前を知らせ（`sync.yaml` の `pc_name`、なければホスト名）、Brain は設定ファイル → プロファイル → 上書きの順に重ねる。使うプロファイルが変わったときだけ割り当てごと反映して `start_layer` を開く。知らない PC、名乗らない PC は既定。USB を抜いてつなぎ直したあと 60 秒名乗らなければ既定に戻す。手で選ぶ（`brain-deck profile use`、設定のアプリ）と、別の名前の PC が名乗るまで続く。`modifiers` はキーの名前（`LCTRL+C` → `LGUI+C`）を書き換えるので、セルの表示も合う。
 - **見えるところ**：設定のアプリの 2 ページ目「PC ごとの設定」と情報のタブ、`brain-deck profile`、`brain-deck status`。状態の帯には出していない（下の「決めてほしいこと」3）。
 - **設定 GUI**（23eb753）：profiles は編集しないが、保存しても消さない。レイヤーの名前を変えたり消したりすると、profiles と `start_layer` も合わせる。
+- **Todo の Flush**（8a09379）：保存の goroutine が知らせを受け取ってからロックを取るまでのあいだに Flush が呼ばれると、何も書かずに返っていた（デーモンが終わるときのための仕組みで、今までは目立たなかった）。バックアップを作る前に呼ぶので、直前に足した Todo が入らないことがあった。ホストのテスト（TestBackupProtocolAndHelper）がときどき失敗して見つけ、最後に書いた rev で決めるように直した。試験のデーモン（hwtest-k3c）で `config put` 2 回、上書き、プロファイルでのレイヤーの切り替え、Todo を足した直後のバックアップに入ることを確かめてから本番に入れた。
 - **あとで直したこと**（a522fcd）：自動の同期は `--if-older 10m` なので、USB を付け直して 10 分のうちだと同期を丸ごと飛ばし、名乗らないまま 60 秒で既定に戻ってしまう。飛ばすときも名乗るようにした。
 
 ### 実機で調べたこと（試験のデーモン hwtest-k3b）
@@ -54,13 +55,14 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 - ホスト：`go vet ./...`、`go test ./...`、`-race` で全体（K2 からあった TestPromptIME の競合を直した。6c5c412）、GUI の `tsc` と `vitest`（259 件）。新しいテスト：バックアップを作る・読む・壊れたものと知らない名前と置き場所の外に出る名前を断る、入れ替えと元に戻す、プロトコルと係の流れ（起動しなければ元に戻す）、設定ファイルが使えないとき、プロファイルの重ね方と検証と選び方と状態とプロトコル、PC 側の backup・restore・profile・sync のバックアップと世代・`--if-older` でも名乗る、タブレットの形のキー、描き直しの停止と再開、設定のページ、ime.start。
 - コミットは機能ごとに分け、プロファイルとバックアップの段階でもビルドとテストが通ることを確かめた。
-- 本番：`brain-deck update`（afa79624626a → d7daf5ef6e33、成功）。本番の画面と `-render-png` が 0 画素の違い。`brain-deck config get` が config/current.yaml と同じ。`brain-deck status` の「PC ごとの設定：既定。名乗った PC はない」。本番の `/var/lib/lefthand/` は `update/` のほかは変えていない（`backup/` と `profile.json` はまだない）。PC の `~/.local/bin/brain-deck` を a522fcd94003 にした。
+- 本番：`brain-deck update`（afa79624626a → d7daf5ef6e33 → 8a09379808bb、どれも成功）。どちらのあとも、本番の画面と `-render-png` が 0 画素の違い。`brain-deck config get` が config/current.yaml と同じ。`brain-deck status` の「PC ごとの設定：既定。名乗った PC はない」。本番の `/var/lib/lefthand/` は `update/` のほかは変えていない（`backup/` と `profile.json` はまだない）。PC の `~/.local/bin/brain-deck` を 8a09379808bb にした。
 
 ### 変更したファイルとコミット
 
 - 1648ad4 lid.go、lid_test.go、display.go、main.go、overrides.go、overrides_test.go、settingswidget.go、cmd/brain-deck/main.go、gui/src/types.ts、gui/src/demo.ts（ふたとタブレットの形）／ afa7962 文書
 - 80d713f ime.go、ime_test.go、prompt.go、gui/src/types.ts（ime.start）／ 7dcf943 settingswidget.go、settings_test.go、main.go（設定の並び）／ 3dce3a6 文書
 - 6c5c412 ime_test.go（テストの競合）
+- 8a09379 todo.go、todo_test.go（Flush）
 - 9c8b4ca profile.go、profile_test.go、config.go、layer.go、apply.go、settingswidget.go、settings_test.go、control.go、main.go（PC ごとの設定）
 - 871da9e backup.go、backup_test.go、update.go、updatehelper.go、control.go、main.go（バックアップと復元）
 - 44f6a5f cmd/brain-deck/backup.go、backup_test.go、profile.go、main.go、sync.go（PC のコマンド）／ 2d0a8c9 admin.go ／ a522fcd sync.go（--if-older でも名乗る）
