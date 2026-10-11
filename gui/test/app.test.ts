@@ -1242,12 +1242,14 @@ describe('上書きの値（Brain の設定のアプリ）', () => {
     expect(daemon.config).not.toHaveProperty('lid')
   })
 
-  it('設定のアプリのウィジェットを選べる', async () => {
+  it('設定のアプリとヘルプのウィジェットを選べる', async () => {
     const t = await connected()
     t.click('[data-cell="0,0"]')
     t.change('#kind', 'widget')
     t.change('#widget', 'settings')
     expect(t.app.ownAction()).toMatchObject({ widget: 'settings' })
     expect(t.$('.widget-editor').textContent).toContain('上書き')
+    t.change('#widget', 'help')
+    expect(t.app.ownAction()).toMatchObject({ widget: 'help' })
   })
 })

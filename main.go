@@ -941,6 +941,7 @@ func main() {
 	pngReadSize := flag.Int("render-read-size", 24, "-render-read の文字の大きさ（24 か 32）")
 	pngSettings := flag.String("render-settings", "", "-render-png で、widget: settings に設定のアプリのこのタブを描く（settings、info、power）")
 	pngSettingsChoice := flag.String("render-settings-choice", "", "-render-settings で、この行の選ぶ画面を出す（level、dim、dim_offline、photo、rotate、reader、lid）")
+	pngHelp := flag.Int("render-help", 0, "-render-png で、widget: help にヘルプのこのページ（1 から）を描く。-render-read-size で文字の大きさ")
 	pngReadH := flag.Bool("render-read-horizontal", false, "-render-read を横書きで出す")
 	pngMemo := flag.String("render-memo", "", "-render-png で、手書きメモのセルに出すメモ（memo の <id>.json の形のファイル。最後のページを出す）")
 	pngPhoto := flag.String("render-photo", "", "-render-png で、格子の代わりに、この写真（.565）をフォトフレームと同じく描く（向きが違えば縮めて帯を入れる）")
@@ -1273,6 +1274,10 @@ func main() {
 			}
 			env.Settings = v
 		}
+		if *pngHelp > 0 {
+			area := renderWidgetArea(cfg, km, *pngLayer, w0(*pngSize), rotOf(cfg, *pngRotate), widgetHelp)
+			env.Help = renderHelpView(area, *pngHelp, *pngReadSize)
+		}
 		for _, l := range km.Layers {
 			if l.Grid == nil {
 				continue
@@ -1485,6 +1490,8 @@ func main() {
 	filesUI.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	widgetRT.files = filesUI
 	files.SetChanged(filesUI.reload)
+	helpUI := NewHelpUI(reader.Size, reader.SetSize)
+	widgetRT.help = helpUI
 	// 設定のアプリ。設定の置き場所（cstore）と電源（更新の係）は、あとで決める
 	settingsUI := NewSettingsUI(SettingsDeps{
 		Rotation:      e.Rotation,
@@ -1528,6 +1535,7 @@ func main() {
 		env.Reader = reader.Snapshot()
 		env.Files = filesUI.Snapshot()
 		env.Settings = settingsUI.Snapshot()
+		env.Help = helpUI.Snapshot()
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1643,6 +1651,7 @@ func main() {
 				memos.SetOnChange(d.Poke)
 				reader.SetOnChange(d.Poke)
 				settingsUI.SetOnChange(d.Poke)
+				helpUI.SetOnChange(d.Poke)
 				lid.SetOnChange(d.Poke)
 				syncs.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る

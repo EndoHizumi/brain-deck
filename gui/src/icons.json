@@ -288,6 +288,24 @@
    " BBBBBBBBBBBBBB ",
    "  BBBBBBBBBBBB  "
   ],
+  "help": [
+   "  GGGGGGGGGGGG  ",
+   " GGGGGGGGGGGGGG ",
+   "GGGGGGwwwwGGGGGG",
+   "GGGGGwwGGwwGGGGG",
+   "GGGGwwGGGGwwGGGG",
+   "GGGGGGGGGGwwGGGG",
+   "GGGGGGGGGwwGGGGG",
+   "GGGGGGGGwwGGGGGG",
+   "GGGGGGGwwGGGGGGG",
+   "GGGGGGGwwGGGGGGG",
+   "GGGGGGGGGGGGGGGG",
+   "GGGGGGGwwGGGGGGG",
+   "GGGGGGGwwGGGGGGG",
+   "GGGGGGGGGGGGGGGG",
+   " GGGGGGGGGGGGGG ",
+   "  GGGGGGGGGGGG  "
+  ],
   "home": [
    "  oooooooooooo  ",
    " oooooooooooooo ",
@@ -770,6 +788,7 @@
   "files",
   "folder",
   "graph",
+  "help",
   "home",
   "info",
   "keyboard",

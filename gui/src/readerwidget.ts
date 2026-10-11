@@ -39,5 +39,6 @@ export function drawAppPlaceholder(px: Px, area: Rect, lines: string[], fit: Fit
   })
 }
 
-// 設定のアプリのプレビューの文（settingswidget.go と同じ）
+// 設定のアプリとヘルプのプレビューの文（settingswidget.go、helpwidget.go と同じ）
 export const SETTINGS_PLACEHOLDER = ['設定', 'Brain の画面で、明るさや時刻などを変える']
+export const HELP_PLACEHOLDER = ['ヘルプ', '使い方を Brain の画面で読む']

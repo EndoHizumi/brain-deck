@@ -374,7 +374,7 @@ func (e *Engine) PressKey(code evdev.EvCode) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.calcKeyLocked(code) || e.readerKeyLocked(code) {
+	if e.calcKeyLocked(code) || e.readerKeyLocked(code) || e.helpKeyLocked(code) {
 		return
 	}
 	e.press(keyID(code), e.km.lookupKey(e.layers(), code))
@@ -446,6 +446,34 @@ func (e *Engine) readerKeyLocked(code evdev.EvCode) bool {
 		return false
 	}
 	if !e.widgets.reader.key(code, held(evdev.KEY_LEFTSHIFT, evdev.KEY_RIGHTSHIFT)) {
+		return false
+	}
+	e.down[keyID(code)] = nil
+	return true
+}
+
+// helpKeyLocked は、今の画面にヘルプのセルがあるときのキー（← → スペースなど）なら、ページをめくる。
+func (e *Engine) helpKeyLocked(code evdev.EvCode) bool {
+	if e.widgets == nil || e.widgets.help == nil || e.view == nil {
+		return false
+	}
+	found := false
+	for _, a := range e.view.Cells {
+		if a != nil && a.Widget != nil && a.Widget.Kind == widgetHelp {
+			found = true
+		}
+	}
+	if !found {
+		return false
+	}
+	for _, c := range []evdev.EvCode{evdev.KEY_LEFTCTRL, evdev.KEY_RIGHTCTRL, evdev.KEY_LEFTALT, evdev.KEY_RIGHTALT} {
+		if _, ok := e.down[keyID(c)]; ok {
+			return false
+		}
+	}
+	_, ls := e.down[keyID(evdev.KEY_LEFTSHIFT)]
+	_, rs := e.down[keyID(evdev.KEY_RIGHTSHIFT)]
+	if !e.widgets.help.key(code, ls || rs) {
 		return false
 	}
 	e.down[keyID(code)] = nil
