@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -287,23 +289,28 @@ func TestIMEProcessDies(t *testing.T) {
 // Prompt が uim-fep の欄を使うときの流れ（キー → バイト列、結果 → 確定、やめる）。
 func TestPromptIME(t *testing.T) {
 	m, _ := fakeIME(t, &Config{})
-	var shown *Overlay
-	p := NewPrompt(func(o *Overlay) { shown = o })
+	var shownP atomic.Pointer[Overlay] // 欄は uim-fep を読む goroutine からも描き直される
+	sh := func() *Overlay { return shownP.Load() }
+	p := NewPrompt(func(o *Overlay) { shownP.Store(o) })
 	p.after = func(time.Duration, func()) {}
 	p.SetIME(m)
+	var cmu sync.Mutex
 	var committed []string
+	got := func() []string { cmu.Lock(); defer cmu.Unlock(); return append([]string(nil), committed...) }
 	p.SetHandlers(func(kind, text string) (string, error) {
+		cmu.Lock()
 		committed = append(committed, kind+":"+text)
+		cmu.Unlock()
 		if text == "" {
 			return "", inputError("何も入っていません")
 		}
 		return "足しました", nil
 	}, func(kind string) string { return "" })
 	p.Open(inputTodo)
-	if !p.Active() || shown == nil || shown.Input == nil || shown.Input.IME == nil || shown.Input.Title != inputTitleIME[inputTodo] {
-		t.Fatalf("overlay = %+v", shown)
+	if !p.Active() || sh() == nil || sh().Input == nil || sh().Input.IME == nil || sh().Input.Title != inputTitleIME[inputTodo] {
+		t.Fatalf("overlay = %+v", sh())
 	}
-	waitFor(t, "ready", func() bool { p.render(); return shown.Input != nil && shown.Input.IME.Busy == "" })
+	waitFor(t, "ready", func() bool { p.render(); return sh().Input != nil && sh().Input.IME.Busy == "" })
 	// 文字切り替えを 1 回：かな/英数（NUL を送る。偽の uim-fep では readline がそのまま受けて何もしない）
 	p.Key(evdev.KEY_LEFTALT, 1)
 	p.Key(evdev.KEY_LEFTALT, 0)
@@ -314,36 +321,38 @@ func TestPromptIME(t *testing.T) {
 		}
 	}
 	p.Key(evdev.KEY_LEFTSHIFT, 0)
-	waitFor(t, "typed", func() bool { p.render(); return strings.TrimSpace(imeText(shown.Input.IME.Line)) == "aB" })
-	if shown.Input.IME.Cursor != 2 {
-		t.Fatalf("cursor = %d", shown.Input.IME.Cursor)
+	waitFor(t, "typed", func() bool { p.render(); return strings.TrimSpace(imeText(sh().Input.IME.Line)) == "aB" })
+	if sh().Input.IME.Cursor != 2 {
+		t.Fatalf("cursor = %d", sh().Input.IME.Cursor)
 	}
 	p.Key(evdev.KEY_ENTER, 1)
 	waitFor(t, "committed", func() bool { return !p.Active() })
-	if len(committed) != 1 || committed[0] != "todo:aB" || shown.Notice != "足しました" {
-		t.Fatalf("committed %q notice %q", committed, shown.Notice)
+	if len(got()) != 1 || got()[0] != "todo:aB" || sh().Notice != "足しました" {
+		t.Fatalf("committed %q notice %q", got(), sh().Notice)
 	}
 	// 空で確定：エラーで開いたまま（赤い知らせ）
 	p.Open(inputTodo)
 	p.Key(evdev.KEY_ENTER, 1)
-	waitFor(t, "error", func() bool { p.render(); return shown.Input != nil && shown.Input.Err != "" })
-	if !p.Active() || shown.Input.Err != "何も入っていません" {
-		t.Fatalf("after empty commit: %+v", shown.Input)
+	waitFor(t, "error", func() bool { p.render(); return sh().Input != nil && sh().Input.Err != "" })
+	if !p.Active() || sh().Input.Err != "何も入っていません" {
+		t.Fatalf("after empty commit: %+v", sh().Input)
 	}
 	// 戻る：やめる
 	p.Key(evdev.KEY_ESC, 1)
 	waitFor(t, "cancelled", func() bool { return !p.Active() })
-	if shown != nil && shown.Input != nil {
-		t.Fatal("input still shown")
+	if sh() != nil && sh().Input != nil {
+		t.Fatal("input still sh()")
 	}
 	// 時刻の欄：最初の文字が入る
 	p.SetHandlers(func(kind, text string) (string, error) {
+		cmu.Lock()
 		committed = append(committed, kind+":"+text)
+		cmu.Unlock()
 		return "ok", nil
 	},
 		func(kind string) string { return "2026-10-11 23:00" })
 	p.Open(inputClock)
-	waitFor(t, "initial", func() bool { p.render(); return strings.TrimSpace(imeText(shown.Input.IME.Line)) == "2026-10-11 23:00" })
+	waitFor(t, "initial", func() bool { p.render(); return strings.TrimSpace(imeText(sh().Input.IME.Line)) == "2026-10-11 23:00" })
 	p.Close()
 	if p.Active() || m.Active() {
 		t.Fatal("close did not close")
