@@ -28,6 +28,7 @@
 #     HID と、そのあとの ACM 2 つのリンクを外し、属性を書いて、同じ順でリンクし直す（番号は変わらない）。
 #     ACM のファンクションそのもの（ttyGS0、ttyGS1）は消さない
 #   - 構成の名前を GADGET_TERMINAL に合わせる（端末モードでは「NCM+HID+ACM+ACM terminal」）。違えば切り離して書き換える
+#   - 構成の MaxPower（PC に求める電流）を GADGET_MAX_POWER（既定 500 mA）に合わせる。違えば切り離して書き換える
 #   - UDC が未接続なら接続し、usb0 に固定 IP を付ける
 #
 # 環境変数（動作確認用）:
@@ -36,6 +37,7 @@
 #   HID_MOUSE    0（既定）でキーボードだけ（ブートキーボード）、1 でキーボードとマウス。/etc/lefthand/gadget.env にも書ける
 #   LEFTHAND_SELF=1  lefthand から実行するとき。lefthand.service を止めない（lefthand が /dev/hidg0 を閉じてから呼ぶ）
 #   GADGET_TERMINAL  1 で端末モードの構成の名前にする（lefthand の端末モードだけが渡す。起動したときは 0）
+#   GADGET_MAX_POWER  PC に求める電流（mA。既定 500。USB 2.0 の上限）。/etc/lefthand/gadget.env にも書ける
 #   USB_WAKEUP   1（既定）で、構成にリモートウェイクアップの印（bmAttributes の 0x20）を立てる。Brain のキーで、
 #                スリープ中の PC を起こせるようにする（起こすかは PC が決める。lefthand の wakeup.go）。0 で立てない。
 #                /etc/lefthand/gadget.env にも書ける。違っていれば、UDC から切り離して書き換える
@@ -54,6 +56,12 @@ want_wakeup=${USB_WAKEUP:-}
 [ -r "$GADGET_ENV" ] && . "$GADGET_ENV"
 HID_MOUSE=${want_mouse:-${HID_MOUSE:-0}}
 USB_WAKEUP=${want_wakeup:-${USB_WAKEUP:-1}}
+want_power=${GADGET_MAX_POWER:-}
+MAX_POWER=${want_power:-500}
+case "$MAX_POWER" in
+  [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) [ "$MAX_POWER" -le 500 ] || MAX_POWER=500 ;;
+  *) echo "GADGET_MAX_POWER=$MAX_POWER は mA の数ではありません。500 にします" >&2; MAX_POWER=500 ;;
+esac
 
 G=/sys/kernel/config/usb_gadget/${GADGET_NAME:-eth}
 UDC_NAME=ci_hdrc.0
@@ -119,7 +127,7 @@ create_eth() {
   echo "SHARP" > strings/0x409/manufacturer
   echo "Brain" > strings/0x409/product
   mkdir -p configs/c.1/strings/0x409
-  echo 250 > configs/c.1/MaxPower
+  echo "$MAX_POWER" > configs/c.1/MaxPower
   mkdir functions/ncm.usb0
   echo "$NCM_DEV_ADDR" > functions/ncm.usb0/dev_addr
   echo "$NCM_HOST_ADDR" > functions/ncm.usb0/host_addr
@@ -259,6 +267,7 @@ if [ "${GADGET_CHECK:-0}" = 1 ]; then
     want_attr=0x80
     [ "$USB_WAKEUP" = 1 ] && want_attr=0xa0
     [ "$(cat "$G/configs/c.1/bmAttributes" 2>/dev/null)" = "$want_attr" ] || reason "bmAttributes differs (want $want_attr)"
+    [ "$(cat "$G/configs/c.1/MaxPower" 2>/dev/null)" = "$MAX_POWER" ] || reason "MaxPower differs (want $MAX_POWER)"
     [ -n "$(cat "$G/UDC" 2>/dev/null)" ] || reason "the gadget is not bound to the UDC"
   fi
   if [ "$need" = 1 ]; then
@@ -336,6 +345,17 @@ set_wakeup() {
   echo "bmAttributes: $want (remote wakeup $([ "$want" = 0xa0 ] && echo on || echo off))"
 }
 set_wakeup || echo "bmAttributes を書けませんでした（スリープ中の PC を起こせません）" >&2
+
+# 構成の MaxPower（mA）。PC はつないだときにこの値を読み、それより多く流さないことがある（ハブなど）。
+# 250 だった（Brainux の enable_ethernet_gadget と同じ）。電池が減り続けていたので、USB 2.0 の上限の 500 にした
+set_max_power() {
+  local f="$G/configs/c.1/MaxPower"
+  [ "$(cat "$f")" = "$MAX_POWER" ] && return 0
+  unbind_udc
+  echo "$MAX_POWER" > "$f"
+  echo "MaxPower: $MAX_POWER mA"
+}
+set_max_power || echo "MaxPower を書けませんでした" >&2
 
 if [ "${SKIP_BIND:-0}" = 1 ]; then
   echo "SKIP_BIND=1: UDC 接続と IP 設定を省略"
