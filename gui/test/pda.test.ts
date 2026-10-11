@@ -69,6 +69,11 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
     { file: 'prod-pen-portrait.png', c: prod, layer: 'pen', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'prod-sync.png', c: prod, layer: 'sync', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'prod-sync-portrait.png', c: prod, layer: 'sync', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    // フェーズ K1：設定のアプリとヘルプ（中身は Brain の状態なので、-render-settings、-render-help を書かないときの説明の絵）
+    { file: 'prod-settings.png', c: prod, layer: 'settings', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-settings-portrait.png', c: prod, layer: 'settings', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-help.png', c: prod, layer: 'help', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-help-portrait.png', c: prod, layer: 'help', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
   ]
   for (const t of cases) {
     it(`lefthand -render-png と画素単位で同じ（${t.file}）`, () => {

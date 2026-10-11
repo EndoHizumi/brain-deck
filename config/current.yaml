@@ -3,6 +3,7 @@
 # 今までのレイヤー（左手デバイスの base、メニュー、コード、ブラウザ、デバッグ、記号、ウィンドウ、ダッシュボード、入力）は
 # そのままアプリにした（変えたのは HOME のソフトキーだけ。どのレイヤーからもホーム画面に戻る）。
 # 足したアプリ：Todo、カレンダー（月の表示と予定）、天気、電卓、道具（ストップウォッチ、ポモドーロなど）、発表、本体、画面の向き。
+# フェーズ K1（2026-10-11）：設定（1 ページ目の最後。本体は 2 ページ目の先頭へ、アイコンを電池に）とヘルプ（2 ページ目の最後）、ふた。
 # PC から外したらホーム画面に切り替え、つなぎ直したら前の画面に戻す。自動減光、電池の知らせ（電源は切らない）。
 # 設定 GUI で保存するとコメントは消える。書き方は docs/config.md、本体のキーの名前は docs/keymap-pwsh2.md を参照
 hid_device: /dev/hidg0
@@ -466,6 +467,36 @@ layers:
       rows: 1
       cells:
         "0,0": {widget: files}
+  # フェーズ K1：設定のアプリとヘルプ。どちらもレイヤー全体の 1 つのセル
+  - name: settings
+    label: 設定
+    status_bar: true
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # 明るさ、暗くなるまで、フォトフレーム、画面の向き、読み物の文字、ふた、時刻合わせ。情報と電源のタブ。
+        # 変えた値は設定ファイルを書き換えず、/var/lib/lefthand/overrides.json に上書きとして置く
+        "0,0": {widget: settings}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: settings}
+  - name: help
+    label: ヘルプ
+    status_bar: true
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # 使い方（lefthand に入っている help/ja.md）。左右のタップでめくり、真ん中で目次
+        "0,0": {widget: help}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: help}
   - name: pen
     label: ペン
     status_bar: true # レイヤーの名前の札を帯に出す（右上の札がメモの「次」に重なる）
@@ -521,8 +552,9 @@ home:
     - {name: 道具, icon: stopwatch, layer: tools}
     - {name: 入力, icon: trackpad, layer: input}
     - {name: 同期, icon: sync, layer: sync}
-    - {name: 本体, icon: settings, layer: system}
+    - {name: 設定, icon: settings, layer: settings}
     # 2 ページ目
+    - {name: 本体, icon: battery, layer: system}
     - {name: ペン, icon: pentablet, layer: pen}
     - {name: ファイル, icon: files, layer: files}
     - {name: 発表, icon: presenter, layer: presen}
@@ -533,6 +565,7 @@ home:
     - {name: デバッグ, icon: command, layer: debug}
     - {name: 記号, icon: symbol, layer: symbol}
     - {name: ウィンドウ, icon: window, layer: window}
+    - {name: ヘルプ, icon: help, layer: help}
 # 状態の帯は、ホーム画面（既定で出す）と、status_bar: true を書いたレイヤー（ダッシュボードと、足したアプリ）にだけ出す。
 # キーのレイヤー（base、メニュー、コードなど）、入力、電卓、発表は、セルの大きさを優先して出さない
 status_bar:
@@ -570,6 +603,9 @@ battery:
   warn_mv: 3500
   poweroff_mv: 3400
   poweroff_plugged: true
+# ふたを閉じたら画面を消し、タッチを受け付けない（開けたら元の画面に戻す）。閉じているあいだも時計やタイマーは進む
+lid:
+  close: off
 # 時刻：起動したとき、時刻が合っていなければ内蔵 RTC の時刻に合わせる（狂っていれば使わない）。
 # PC から時刻を合わせたら、RTC にも書き戻す（フェーズ R2）
 clock:
