@@ -606,6 +606,12 @@ battery:
 # ふたを閉じたら画面を消し、タッチを受け付けない（開けたら元の画面に戻す）。閉じているあいだも時計やタイマーは進む
 lid:
   close: off
+# 日本語の入力（uim-fep。フェーズ K2）：入っている方式（この Brain では anthy-utf8）を自動で使う。Brain のシェルでも使う。
+# 10 分使わなければ uim-fep を止める。使わないなら method: off（Brain の設定のアプリでも変えられる。上書き ime.method）
+ime:
+  method: auto
+  idle: 10m
+  terminal: true
 # 時刻：起動したとき、時刻が合っていなければ内蔵 RTC の時刻に合わせる（狂っていれば使わない）。
 # PC から時刻を合わせたら、RTC にも書き戻す（フェーズ R2）
 clock:
