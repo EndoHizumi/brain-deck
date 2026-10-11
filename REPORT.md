@@ -6,6 +6,79 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ K3　バックアップと復元、PC ごとの切り替え（2026-10-12）
+
+ユーザーが起きていて、「K3 を始めて」と言われて行った。最初に K1 のあとで決めたこと（タブレットの形、閉じているあいだの描き直し）を別のコミットで作って本番に入れ、続いて日本語入力の調整、K3 の本体を行った。デーモンは afa79624626a（K3 の最初の 2 つ）→ d7daf5ef6e33（`.prev` afa79624626a）、PC の brain-deck は a522fcd94003。設定（`config/current.yaml`）は変えていない（本番の設定に profiles は入れていない）。電池は始めるとき 3.85 V、終わるとき 3.70 V（USB 給電）。
+
+### K3 の最初に行ったこと（K1 のあとで決めたこと）
+
+- **ふたの確認**（README の手順 7）：REPORT の K1 のとおり、10-11 22:11〜22:21 に本番で確かめ済みだった。今回、描き直しを止めたあとにもう一度ユーザーに開け閉めしてもらった（下）。
+- **ふたを閉じているあいだ描き直しも止める**（1648ad4）：`Display.SetPaused`。閉じたら（`lid.close: off` のとき）描画の goroutine は何も描かず、時計のために起きることもやめる。描き直す元（レイヤーの切り替え、押した印、知らせ、端末の出力など）は取っておき、開けたときに全体を一度描き直してから明るくする。時計とタイマーは進む（描かないだけ）。
+- **タブレットの形のあいだ本体のキーを使わない**（1648ad4）：`keyFilter`（runKeyboard の入口）。`SW_TABLET_MODE` が 1 のあいだ、本体のキーを PC にも brain-deck の操作（欄、端末、読み物など）にも使わず、画面も明るくしない。前から押していたキーの離しは通し（押しっぱなしにしない）、タブレットの形で押したキーは、戻したあとの離しも捨てる。設定 `lid.tablet_keys`（`off` が既定、`on` で使う）、上書き `lid.tablet_keys`、設定のアプリの行「タブレットの形の本体キー」。上書き `lid.close` が `lid` のほかの項目を消していたのも直した。
+- **実機**（試験のデーモン hwtest-k3a、本体のキーを `{input: todo}` にした試験の設定）：`config put` 2 回、上書きの設定と取り消し 3 回は止まらなかった。キーとスイッチのイベントを `/dev/input/event1` に書いて試そうとしたが、**自動の許可で止められた**（回避はしなかった）ので、ユーザーに操作してもらった。ふたを 00:33:08 に閉じて 00:34:26 に開けるまで、毎分の時計の描き直し（00:34:00）が出ず、開けたときに全体を描き直した（257 ms）。ホームのアプリを開いて HOME で戻る（レイヤーの切り替え）、タブレットの形のあいだのタッチ（電卓が動いた）、戻したあとのキー（欄が開いた）も通った。**タブレットの形のあいだ、キーのイベントは 1 つも届かなかった**（キーボードの側で止まっているか、裏返すと押せない）ので、キーを捨てる処理は実機では通っていない（安全のための網として残す）。裏返したとき USB が一度切れてつながり直した（00:35:02。ケーブルが動いたと思われる）。
+- **本番**：afa79624626a を `brain-deck update` で入れ、本番の画面と `-render-png` が 0 画素の違い。
+
+### 日本語入力の調整（K2 のあとで決めたこと）
+
+- **欄を開いたときのかなと英数**（80d713f）：設定 `ime.start`（欄の種類ごとに `kana`、`latin`、`last`）。既定は Todo が `kana`、時刻が `latin`。かなで開くときは Ctrl+^（英数にする）のあとに Ctrl+Space（切り替え）を送るので、前の欄の状態によらずかなになる。実機（試験のデーモン）でユーザーに開いてもらい、Todo の欄が［かな］（ログで `[An- Ｒ]` → `[AnあＲ]`。2 回目も同じ）、`nihongo` の変換、時刻合わせの欄が［英数］を確かめた。
+- **設定のタブの順**（7dcf943）：行の高さは変えずに 2 ページに分け、1 ページ目に 明るさ、暗くなるまで（PC あり・なし）、フォトフレーム、画面の向き、日本語入力。2 ページ目に 読み物の文字、ふた、タブレットの形の本体キー、PC ごとの設定、時刻合わせ、設定ファイルの値に戻す。画面に入らなければ組をさらに分ける。ユーザーが実機で並びを確かめた。
+- **Brain のシェル**：今のまま（uim-fep が開く非ログインの bash）。
+
+### バックアップと復元
+
+- **作ったもの**（871da9e、44f6a5f）：`brain-deck backup [-o <ファイル>]`、`backup list`、`backup show`、`restore <ファイル> [--no-config] [--no-data] [--no-anthy] [--dry-run]`、`restore --undo`。Brain が tar.gz を作り（manifest.json を最後に置き、ファイルごとの大きさと SHA-256 を書く）、PC が受け取って確かめてから保存する。既定の置き場所は `~/.local/share/brain-deck/backups`（0700、ファイルは 0600）。
+- **入れるもの**：設定ファイル（コメントもそのまま）、Todo、ウィジェットの状態、電卓、画面の向き、上書きの値、タッチの調整、PC ごとの設定の状態、手書きメモ、読み物（しおりも）、写真、背景画像、日本語入力の学習。**入れないもの**：予定、天気とアイコン、時刻の記録、テキストと QR とグラフ（PC が送る）、電池の記録、更新の記録、`ime/`。
+- **日本語入力の学習を入れるか**（K2 のあとで決めたこと）：Brain の user の `~/.anthy/` に `last-record2_default.utf8`（658 バイト。選んだ候補の記録）と `lock-file_default`（空）があった。`~/.uim.d/` は fep の一時ファイルとソケットだけ。学習は小さく、取り直せないので**入れることにした**（lock-file は入れない）。戻すときは user の持ち物（0600）で書く。
+- **復元**：PC で確かめて送り、Brain が形の版、名前（置き場所の外に出ないか、知っているものか）、SHA-256、JSON、設定ファイルが今のデーモンで使えるかを確かめる。今の状態を `/var/lib/lefthand/backup/before-restore.tar.gz` に残してから、更新の係（`lefthand -update-apply` に restore の動きを足した）がデーモンを止めて入れ替え（データはバックアップのとおり。設定ファイルは `.prev` を残す）、起動と PC のつなぎ直しを確かめる。起動しなければ入れ替えたものを元に戻す。`--undo` で復元の前の状態に戻す。
+- **同期で自動で取る**（44f6a5f）：`brain-deck sync` の最後に、前に取ってから 20 時間たっていれば取り（`brain-sync-<日時>.tar.gz`）、7 個を超えたら sync が取った古いものから消す。`sync.yaml` の `backup`（`keep`、`every`、`dir`）で変える。**既定で取る**ようにした（下の「決めてほしいこと」1）。
+- **文書**：README の「バックアップと復元、PC ごとの設定」に、扱いの注意（個人のデータが入る、暗号化、git に入れない）と、新しい SD カードに `install.sh --root` で入れ直して `restore` で戻す手順を書いた。
+
+### PC ごとの切り替え
+
+- **作ったもの**（9c8b4ca、44f6a5f）：設定の `profiles`（`name`、`label`、`pcs`、`start_layer`、`modifiers`、`home`、`layers`）とトップレベルの `start_layer`。PC の brain-deck が `sync` の最初に名前を知らせ（`sync.yaml` の `pc_name`、なければホスト名）、Brain は設定ファイル → プロファイル → 上書きの順に重ねる。使うプロファイルが変わったときだけ割り当てごと反映して `start_layer` を開く。知らない PC、名乗らない PC は既定。USB を抜いてつなぎ直したあと 60 秒名乗らなければ既定に戻す。手で選ぶ（`brain-deck profile use`、設定のアプリ）と、別の名前の PC が名乗るまで続く。`modifiers` はキーの名前（`LCTRL+C` → `LGUI+C`）を書き換えるので、セルの表示も合う。
+- **見えるところ**：設定のアプリの 2 ページ目「PC ごとの設定」と情報のタブ、`brain-deck profile`、`brain-deck status`。状態の帯には出していない（下の「決めてほしいこと」3）。
+- **設定 GUI**（23eb753）：profiles は編集しないが、保存しても消さない。レイヤーの名前を変えたり消したりすると、profiles と `start_layer` も合わせる。
+- **あとで直したこと**（a522fcd）：自動の同期は `--if-older 10m` なので、USB を付け直して 10 分のうちだと同期を丸ごと飛ばし、名乗らないまま 60 秒で既定に戻ってしまう。飛ばすときも名乗るようにした。
+
+### 実機で調べたこと（試験のデーモン hwtest-k3b）
+
+試験のユニット（lefthand-hwtest、`-data-dir /tmp/lhu/data` に本番のデータの写し 2.6 MB、設定は本体のキーを `{input: todo}` にしたものに試験のプロファイル `k3test`（pcs: k3pc、start_layer: calendar、modifiers ctrl⇔gui）を足したもの、45 分の戻すタイマー）。前後で本番の lefthand.service を確かめた。
+
+- `config put` 3 回、上書きの設定と取り消し、レイヤーの切り替え（ユーザーのタップ）：止まらなかった。
+- **プロファイル**：`profile announce k3pc` でカレンダーが開き、`config put` のあとも続いた。`profile use none` でホーム、`profile auto` でカレンダーに戻った。
+- **バックアップ**：Brain で作るのに 3.8 秒、受け取りまで 5.4 秒、1.2 MB（中身 2.5 MB、18 個のファイル。背景画像 10 個がほとんど）。
+- **復元**：Todo を 1 つ足してから `restore --no-anthy`（user の本物の `~/.anthy` を書き換えないため）：31 秒で「戻しました」、足した Todo が消えた。`restore --undo --no-anthy`：22 秒で戻った。係のログは 止める → 入れ替え（4 秒）→ 起動 → 起動の知らせ（3 秒）→ つなぎ直しの確かめ → 終わり。**日本語入力の学習を戻すのは、ホストのテストだけで確かめた**。
+- 試験のデータ（/tmp/lhu）、PC に取ったバックアップ（本番のデータの写しが入るもの）、比べた画面は消した。
+
+### 確認
+
+- ホスト：`go vet ./...`、`go test ./...`、`-race` で全体（K2 からあった TestPromptIME の競合を直した。6c5c412）、GUI の `tsc` と `vitest`（259 件）。新しいテスト：バックアップを作る・読む・壊れたものと知らない名前と置き場所の外に出る名前を断る、入れ替えと元に戻す、プロトコルと係の流れ（起動しなければ元に戻す）、設定ファイルが使えないとき、プロファイルの重ね方と検証と選び方と状態とプロトコル、PC 側の backup・restore・profile・sync のバックアップと世代・`--if-older` でも名乗る、タブレットの形のキー、描き直しの停止と再開、設定のページ、ime.start。
+- コミットは機能ごとに分け、プロファイルとバックアップの段階でもビルドとテストが通ることを確かめた。
+- 本番：`brain-deck update`（afa79624626a → d7daf5ef6e33、成功）。本番の画面と `-render-png` が 0 画素の違い。`brain-deck config get` が config/current.yaml と同じ。`brain-deck status` の「PC ごとの設定：既定。名乗った PC はない」。本番の `/var/lib/lefthand/` は `update/` のほかは変えていない（`backup/` と `profile.json` はまだない）。PC の `~/.local/bin/brain-deck` を a522fcd94003 にした。
+
+### 変更したファイルとコミット
+
+- 1648ad4 lid.go、lid_test.go、display.go、main.go、overrides.go、overrides_test.go、settingswidget.go、cmd/brain-deck/main.go、gui/src/types.ts、gui/src/demo.ts（ふたとタブレットの形）／ afa7962 文書
+- 80d713f ime.go、ime_test.go、prompt.go、gui/src/types.ts（ime.start）／ 7dcf943 settingswidget.go、settings_test.go、main.go（設定の並び）／ 3dce3a6 文書
+- 6c5c412 ime_test.go（テストの競合）
+- 9c8b4ca profile.go、profile_test.go、config.go、layer.go、apply.go、settingswidget.go、settings_test.go、control.go、main.go（PC ごとの設定）
+- 871da9e backup.go、backup_test.go、update.go、updatehelper.go、control.go、main.go（バックアップと復元）
+- 44f6a5f cmd/brain-deck/backup.go、backup_test.go、profile.go、main.go、sync.go（PC のコマンド）／ 2d0a8c9 admin.go ／ a522fcd sync.go（--if-older でも名乗る）
+- 23eb753 gui/src/types.ts、model.ts、gui/test/model.test.ts
+- d7daf5e README.md、docs/config.md、docs/protocol.md、help/ja.md
+
+### 目で確かめる手順
+
+README の「バックアップと復元、PC ごとの設定」→「目で確かめる手順（フェーズ K3）」（1〜7）。5〜7（設定の並び、日本語入力の最初の状態、ふたとタブレットの形）は試験のデーモンでユーザーが確かめた。1〜3（バックアップ、復元、同期の自動のバックアップ）は本番でまだ行っていない。
+
+### 次のフェーズ（K4 起動を速くする）に進む前に決めてほしいこと
+
+1. **同期の自動のバックアップを既定で取るか**：今は、`sync.yaml` に何も書かなくても、次に USB をつないで自動の同期が動いたときから、1 日 1 回 `~/.local/share/brain-deck/backups` に取る（7 個残す）。個人のデータを自動で PC に書くことになるので、既定は取らない（`backup.keep` を書いたときだけ）ほうがよければ変える。
+2. **本番の設定の profiles**：今は入れていない。使う PC の名前（`hostname`）と、PC ごとに変えたいこと（Mac で Ctrl と Cmd を入れ替える、最初に開くアプリなど）を教えてもらえれば、config/current.yaml に入れる。
+3. **今のプロファイルの表示**：設定のアプリと `brain-deck status` にだけ出している。状態の帯にも出すか（帯は時刻、電池、PC、マウス、同期で埋まっている）。
+4. **タブレットの形のキー**：実機では、裏返すとキーのイベントが届かなかった。裏返したまま本体のキーを押せる形があるか（あれば、もう一度試したい）。
+5. **K4 の再起動**：起動の時間を測るには、変更の前後で再起動が要る。電池は 3.70 V で、つないだままでも 1 時間に 0.1 V ほど下がっている。K4 の前に純正のファームウェアで充電してほしい。
+
 ## 追記：フェーズ K2　日本語の入力（2026-10-11）
 
 ユーザーが起きていて、「K2 から始めて」と言われて行った。デーモンは e338b6168600（`.prev` a30ea9e82e31）、設定は `config/current.yaml`（e338b61。`ime` を足した）を本番に反映した。電池は始めるとき 3.86 V、終わるとき 3.85 V（USB 給電）。
