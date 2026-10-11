@@ -350,11 +350,15 @@ func evString(ev *evdev.InputEvent) string {
 }
 
 func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor, dim *Dimmer, lid *Lid) {
+	kf := &keyFilter{lid: lid}
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
 			log.Printf("read keyboard: %v", err)
 			e.out.shutdown(1)
+		}
+		if kf.drop(ev) {
+			continue // タブレットの形：本体のキーを使わない（lid.go）
 		}
 		if ev.Type == evdev.EV_SYN || ev.Type == evdev.EV_MSC {
 			continue
@@ -384,6 +388,34 @@ func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor, dim *Dimmer, l
 			e.RepeatKey(ev.Code)
 		}
 	}
+}
+
+// keyFilter は、タブレットの形のあいだ（Lid.KeysBlocked）、本体のキーを捨てる。捨て始める前に押していたキーの離しは通し
+// （押しっぱなしにしない）、捨てているあいだに押したキーは、離しもリピートも捨てる（戻したあとに離しだけが届かないように）。
+type keyFilter struct {
+	lid     *Lid
+	dropped map[evdev.EvCode]bool
+}
+
+func (f *keyFilter) drop(ev *evdev.InputEvent) bool {
+	if ev.Type != evdev.EV_KEY {
+		return false
+	}
+	if f.dropped[ev.Code] {
+		if ev.Value == 0 {
+			delete(f.dropped, ev.Code)
+		}
+		return true
+	}
+	if ev.Value == 1 && f.lid.KeysBlocked() {
+		if f.dropped == nil {
+			f.dropped = map[evdev.EvCode]bool{}
+		}
+		f.dropped[ev.Code] = true
+		vlogf("kbd: %s ignored (tablet mode)", evString(ev))
+		return true
+	}
+	return false
 }
 
 func cellOf(v, min, max int32, n int) int {
@@ -940,7 +972,7 @@ func main() {
 	pngFilesSize := flag.Bool("render-files-by-size", false, "-render-files を大きい順に")
 	pngReadSize := flag.Int("render-read-size", 24, "-render-read の文字の大きさ（24 か 32）")
 	pngSettings := flag.String("render-settings", "", "-render-png で、widget: settings に設定のアプリのこのタブを描く（settings、info、power）")
-	pngSettingsChoice := flag.String("render-settings-choice", "", "-render-settings で、この行の選ぶ画面を出す（level、dim、dim_offline、photo、rotate、reader、lid）")
+	pngSettingsChoice := flag.String("render-settings-choice", "", "-render-settings で、この行の選ぶ画面を出す（level、dim、dim_offline、photo、rotate、reader、lid、tablet、ime）")
 	pngHelp := flag.Int("render-help", 0, "-render-png で、widget: help にヘルプのこのページ（1 から）を描く。-render-read-size で文字の大きさ")
 	pngReadH := flag.Bool("render-read-horizontal", false, "-render-read を横書きで出す")
 	pngMemo := flag.String("render-memo", "", "-render-png で、手書きメモのセルに出すメモ（memo の <id>.json の形のファイル。最後のページを出す）")
@@ -1409,7 +1441,7 @@ func main() {
 	dimP, _ := cfg.Backlight.compile() // 検証済み
 	dim := NewDimmer(dimP)
 	addAtExit(dim.Close)
-	lid := NewLid(dim, cfg.Lid.action())
+	lid := NewLid(dim, cfg.Lid)
 	batP, _ := cfg.Battery.compile() // 検証済み
 	battery.SetCurve(batP.curve)
 	guard := NewBatteryGuard(batP, *dataDir)
@@ -1667,6 +1699,7 @@ func main() {
 				settingsUI.SetOnChange(d.Poke)
 				helpUI.SetOnChange(d.Poke)
 				lid.SetOnChange(d.Poke)
+				lid.SetDisplay(d) // 閉じているあいだは描き直さない
 				syncs.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
@@ -1690,7 +1723,7 @@ func main() {
 		images.Preload(preloadOrder(c)) // 新しい設定で使う画像を先に読む
 		p, _ := c.Backlight.compile()   // 検証済み
 		dim.Apply(p)
-		lid.SetAction(c.Lid.action())
+		lid.SetConfig(c.Lid)
 		bp, _ := c.Battery.compile() // 検証済み
 		guard.Apply(bp)
 		battery.SetCurve(bp.curve)
@@ -1707,7 +1740,7 @@ func main() {
 		curCfg.Store(c)
 		p, _ := c.Backlight.compile() // applyOverrides が確かめてある
 		dim.Apply(p)
-		lid.SetAction(c.Lid.action())
+		lid.SetConfig(c.Lid)
 		ime.ConfigChanged()
 	}, onOverrides: settingsUI.Changed}
 	settingsUI.SetDeps(func(d *SettingsDeps) {

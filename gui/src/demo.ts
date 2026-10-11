@@ -11,7 +11,7 @@ import { parseDurationMs, presenceStates } from './gadgetwidget'
 import type { ActionSpec, BatteryInfo, CalendarData, Config, GraphSeries, KeymapInfo, OverrideInfo, PresenceSpec, Problem, TextEntry, TodoItem, TodoList, WeatherData, WidgetsState } from './types'
 
 // 上書きできる項目（overrides.go の overrideKeys）
-const OVERRIDE_KEYS = ['backlight.level', 'backlight.dim_after', 'backlight.offline.dim_after', 'backlight.photo', 'lid.close', 'ime.method']
+const OVERRIDE_KEYS = ['backlight.level', 'backlight.dim_after', 'backlight.offline.dim_after', 'backlight.photo', 'lid.close', 'lid.tablet_keys', 'ime.method']
 
 const keymap = keymapJSON as KeymapInfo
 const SOURCE_KEYS = new Set(keymap.keys.flatMap((k) => [k.code, k.symbol]).filter(Boolean) as string[])

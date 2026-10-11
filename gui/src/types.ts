@@ -242,7 +242,7 @@ export interface Config {
   offline?: { home?: boolean } // PC から外したときの動き（offline.go）
   battery?: BatteryConfig // 電池が少ないときの知らせと電源断、記録（batteryguard.go）
   clock?: { rtc?: 'read' | 'write' | 'off' } // 内蔵 RTC の使い方（rtc.go）
-  lid?: { close?: 'off' | 'none' } // ふたを閉じたときの動き（lid.go）
+  lid?: { close?: 'off' | 'none'; tablet_keys?: 'off' | 'on' } // ふたを閉じたときの動き、タブレットの形の本体キー（lid.go）
   ime?: { method?: string; user?: string; idle?: string; terminal?: boolean } // 日本語の入力（uim-fep。ime.go）
 }
 

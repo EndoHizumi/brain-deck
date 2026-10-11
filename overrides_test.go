@@ -196,7 +196,7 @@ func TestConfigStoreOverrides(t *testing.T) {
 func TestControlOverrides(t *testing.T) {
 	d := newTestDaemon(t, testConfig, func(d *testDaemon) {
 		d.store.ov = OpenOverrides(t.TempDir())
-		d.ctl.lid = NewLid(nil, lidOff)
+		d.ctl.lid = NewLid(nil, nil)
 		d.ctl.battery = NewBatteryService(t.TempDir())
 		d.ctl.term = NewTermMode(func() *Config { return d.store.Current() }, nil, nil, "")
 		d.ctl.usb = NewUSBMode(nil, nil, "", "")

@@ -184,10 +184,33 @@ var overrideKeys = []*overrideKey{
 			return s, nil
 		},
 		apply: func(c, _ *Config, v any) {
-			c.Lid = &LidConfig{Close: v.(string)}
+			lc := LidConfig{}
+			if c.Lid != nil {
+				lc = *c.Lid
+			}
+			lc.Close = v.(string)
+			c.Lid = &lc
 		},
 		fileValue: func(f *Config) string { return lidLabel(f.Lid.action()) },
 		show:      func(v any) string { return lidLabel(v.(string)) }},
+	{Key: "lid.tablet_keys", Label: "タブレットの形の本体キー",
+		parse: func(raw json.RawMessage) (any, error) {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil || (s != tabletKeysOff && s != tabletKeysOn) {
+				return nil, fmt.Errorf("%w: lid.tablet_keys must be off or on", errOverrideValue)
+			}
+			return s, nil
+		},
+		apply: func(c, _ *Config, v any) {
+			lc := LidConfig{}
+			if c.Lid != nil {
+				lc = *c.Lid
+			}
+			lc.TabletKeys = v.(string)
+			c.Lid = &lc
+		},
+		fileValue: func(f *Config) string { return tabletKeysLabel(f.Lid.tabletKeys()) },
+		show:      func(v any) string { return tabletKeysLabel(v.(string)) }},
 }
 
 func or(a, b string) string {

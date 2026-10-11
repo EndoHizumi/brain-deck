@@ -476,6 +476,10 @@ type Display struct {
 	inks   []inkOp
 	inkGen uint64
 
+	// ふたを閉じているあいだ（lid.go）は描き直さない。paused は d.mu で守る。描き直す元（next、want、invalid など）は
+	// 取っておき、開けたときに全体を一度描き直す
+	paused bool
+
 	// ウィジェット（描画の goroutine だけが触る）
 	env    func() WidgetEnv // 今の時刻など。nil なら時刻だけ
 	wkeys  []string         // セルごとに、前に描いたウィジェットの中身（widgetKey）
@@ -697,6 +701,26 @@ func (d *Display) updateOverlayLocked(o *Overlay) {
 	vlogf("display: overlay redraw %v", time.Since(t))
 }
 
+// SetPaused は、画面の描き直しを止める（true）か、再び始めて全体を一度描き直す（false）。描画は待たない。
+func (d *Display) SetPaused(on bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	if d.paused == on {
+		d.mu.Unlock()
+		return
+	}
+	d.paused = on
+	if !on {
+		// 止めているあいだに変わったものを、全体を描き直して出す（今出している画面の種類ごと）
+		d.invalid, d.termNew, d.photoNew, d.fullNew = true, true, true, true
+	}
+	d.mu.Unlock()
+	log.Printf("display: redraws %s", map[bool]string{true: "paused (lid closed)", false: "resumed"}[on])
+	d.poke()
+}
+
 // Invalidate は、画面全体を描き直させる（背景画像を受け取った、消したなど）。描画は待たない。
 func (d *Display) Invalidate() {
 	if d == nil {
@@ -898,6 +922,13 @@ func (d *Display) reclaim() {
 // redraw は、格子が変わっていれば全体を、そうでなければ押下状態が変わったセルだけを描き直す。
 func (d *Display) redraw() bool {
 	d.mu.Lock()
+	if d.paused {
+		d.mu.Unlock()
+		d.drawMu.Lock()
+		defer d.drawMu.Unlock()
+		d.wakeAt = time.Time{} // 時計などのために起きない（開けたときに起こされる）
+		return !d.closed
+	}
 	if f := d.full; f != nil {
 		fresh := d.fullNew
 		d.fullNew = false

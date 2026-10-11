@@ -50,12 +50,12 @@ var (
 )
 
 // setRowIDs は、設定のタブの行（並ぶ順）。
-var setRowIDs = []string{"level", "dim", "dim_offline", "photo", "rotate", "reader", "lid", "ime", "clock", "reset"}
+var setRowIDs = []string{"level", "dim", "dim_offline", "photo", "rotate", "reader", "lid", "tablet", "ime", "clock", "reset"}
 
 // setOverrideKey は、行の上書きの名前（上書きでない行は空）。
 var setOverrideKey = map[string]string{
 	"level": "backlight.level", "dim": "backlight.dim_after", "dim_offline": "backlight.offline.dim_after",
-	"photo": "backlight.photo", "lid": "lid.close", "ime": "ime.method",
+	"photo": "backlight.photo", "lid": "lid.close", "tablet": "lid.tablet_keys", "ime": "ime.method",
 }
 
 // setChoice は、選ぶ画面の 1 つ。
@@ -270,6 +270,9 @@ func settingsRows(u SettingsDeps) []SettingsRow {
 		case "lid":
 			r.Label = "ふたを閉じたとき"
 			r.Value = lidLabel(eff.Lid.action())
+		case "tablet":
+			r.Label = "タブレットの形の本体キー"
+			r.Value = tabletKeysLabel(eff.Lid.tabletKeys())
 		case "ime":
 			r.Label = "日本語入力"
 			r.Value = imeRowValue(eff.IME.method(), u.IME)
@@ -376,6 +379,10 @@ func settingsChoices(u SettingsDeps, id string) (string, []setChoice, int) {
 		title = "ふたを閉じたとき"
 		cs = []setChoice{{Label: "画面を消す", Value: lidOff}, {Label: "何もしない", Value: lidNone}}
 		cur = map[bool]int{true: 0, false: 1}[eff.Lid.action() == lidOff]
+	case "tablet":
+		title = "画面を裏返したとき（タブレットの形）の本体のキー"
+		cs = []setChoice{{Label: "使わない", Value: tabletKeysOff}, {Label: "使う", Value: tabletKeysOn}}
+		cur = map[bool]int{true: 0, false: 1}[eff.Lid.tabletKeys() == tabletKeysOff]
 	case "ime":
 		title = "日本語入力（uim-fep の入力方式）"
 		var in IMEInfo
@@ -928,6 +935,8 @@ func overrideEqualsFile(key string, v any, f *Config) bool {
 		return b != nil && (b.Photo != nil && *b.Photo) == v.(bool) && (b.Offline == nil || b.Offline.Photo == nil || *b.Offline.Photo == v.(bool))
 	case "lid.close":
 		return f.Lid.action() == v.(string)
+	case "lid.tablet_keys":
+		return f.Lid.tabletKeys() == v.(string)
 	}
 	return false
 }
@@ -1028,6 +1037,9 @@ func (in settingsInfoIn) rows() []SettingsInfo {
 	}
 	if in.Lid.Tablet {
 		lid += "（タブレットの形）"
+		if in.Lid.KeysOff {
+			lid += "。本体のキーは使っていない"
+		}
 	}
 	add("ふた", lid+"、閉じたら"+lidLabel(in.Lid.Close))
 	if in.IME != nil {
@@ -1065,8 +1077,8 @@ func renderSettingsView(cfg *Config, tab, choice string, rot, readSize int, env 
 	})
 	u.tab = ti
 	if choice != "" {
-		if _, ok := map[string]bool{"level": true, "dim": true, "dim_offline": true, "photo": true, "rotate": true, "reader": true, "lid": true, "ime": true}[choice]; !ok {
-			return nil, fmt.Errorf("-render-settings-choice must be one of level, dim, dim_offline, photo, rotate, reader, lid, ime, got %q", choice)
+		if _, ok := map[string]bool{"level": true, "dim": true, "dim_offline": true, "photo": true, "rotate": true, "reader": true, "lid": true, "tablet": true, "ime": true}[choice]; !ok {
+			return nil, fmt.Errorf("-render-settings-choice must be one of level, dim, dim_offline, photo, rotate, reader, lid, tablet, ime, got %q", choice)
 		}
 		u.choice = choice
 	}
