@@ -268,6 +268,7 @@ type Dimmer struct {
 	holding bool // 指が触れている
 	term    bool // 端末モードのあいだ
 	busy    bool // プレゼン用タイマーが動いているあいだ
+	lid     bool // ふたが閉じていて画面を消している（lid.go）。タッチを捨て、何があっても点けない
 	timer   *time.Timer
 	gen     uint64 // タイマーを数え直すたびに増やす（古いタイマーを無効にする）
 	writes  chan int
@@ -361,10 +362,13 @@ func (d *Dimmer) Apply(p *dimParams) {
 	p = d.effectiveLocked()
 	d.p = p
 	if p == nil {
-		if old != nil && d.bl != nil {
+		d.stopTimerLocked()
+		switch {
+		case d.bl != nil && d.lid:
+			d.queueLocked(0) // ふたが閉じている：消したまま
+		case old != nil && d.bl != nil:
 			d.setLocked(dimBright) // 自動減光をやめたら、明るくしておく
 		}
-		d.stopTimerLocked()
 		return
 	}
 	for _, q := range []*dimParams{d.base, d.base.offline} {
@@ -430,7 +434,7 @@ func (d *Dimmer) levelOf(st int) int {
 
 // brightLevel は、ふだんの明るさ。
 func (d *Dimmer) brightLevel() int {
-	if d.p.level > 0 {
+	if d.p != nil && d.p.level > 0 {
 		return d.p.level
 	}
 	return d.bl.orig
@@ -501,8 +505,13 @@ func (d *Dimmer) stopTimerLocked() {
 	}
 }
 
-// activeLocked は、明るくして、時間を数え直す。
+// activeLocked は、明るくして、時間を数え直す。ふたが閉じているあいだは、消したままにする。
 func (d *Dimmer) activeLocked() {
+	if d.lid {
+		d.stopTimerLocked()
+		d.setLocked(dimOff)
+		return
+	}
 	d.setLocked(dimBright)
 	d.stopTimerLocked()
 	if d.holding || d.busy || (d.term && !d.p.inTerminal) {
@@ -555,6 +564,9 @@ func (d *Dimmer) TouchDown() bool {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.lid {
+		return true // ふたが閉じている：タッチを受け付けない
+	}
 	if d.p == nil || d.closed {
 		return false
 	}
@@ -574,7 +586,8 @@ func (d *Dimmer) TouchUp() {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.p == nil || d.closed {
+	if d.p == nil || d.closed || d.lid {
+		d.holding = false
 		return
 	}
 	d.holding = false
@@ -641,6 +654,41 @@ func (d *Dimmer) SetBusy(on bool) {
 	}
 }
 
+// SetLid は、ふたを閉じて画面を消す（true）・開けて点ける（false）ときに呼ぶ（lid.go）。
+// 閉じているあいだは、タッチ、キー、知らせ、設定の反映があっても点けない。開けたら明るくして、時間を数え直す。
+// 自動減光を使っていない（backlight を書いていない）ときも、最初のバックライトを消して、開けたら元の明るさに戻す。
+func (d *Dimmer) SetLid(off bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lid == off || d.closed {
+		return
+	}
+	d.lid = off
+	if d.p == nil {
+		if d.bl == nil {
+			bl, err := openBacklight("")
+			if err != nil {
+				log.Printf("backlight: %v (the screen stays on with the lid closed)", err)
+				return
+			}
+			d.bl = bl
+		}
+		lv := d.bl.orig
+		if off {
+			lv = 0
+		}
+		d.queueLocked(lv)
+		return
+	}
+	if !off {
+		d.state = -1 // 消す前と同じ段階でも、明るさを書く
+	}
+	d.activeLocked()
+}
+
 // DimInfo は get_status の backlight。
 type DimInfo struct {
 	Enabled bool   `json:"enabled"`
@@ -649,6 +697,7 @@ type DimInfo struct {
 	Level   int    `json:"level,omitempty"`   // 今の明るさ
 	Max     int    `json:"max,omitempty"`
 	Device  string `json:"device,omitempty"`
+	Lid     bool   `json:"lid,omitempty"` // ふたが閉じていて画面を消している
 }
 
 // Info は今の状態。
@@ -659,11 +708,11 @@ func (d *Dimmer) Info() DimInfo {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.p == nil || d.bl == nil || d.state < 0 {
-		return DimInfo{}
+		return DimInfo{Lid: d.lid}
 	}
 	lv := d.levelOf(d.state)
 	return DimInfo{Enabled: true, State: dimNames[d.state], Level: lv, Max: d.bl.max, Device: d.bl.dir,
-		Offline: d.offline && d.base != nil && d.p == d.base.offline}
+		Offline: d.offline && d.base != nil && d.p == d.base.offline, Lid: d.lid}
 }
 
 // Close は、起動したときの明るさに戻す（デーモンが終わるとき）。

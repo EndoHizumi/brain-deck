@@ -349,7 +349,7 @@ func evString(ev *evdev.InputEvent) string {
 	return fmt.Sprintf("%s %s %d", ev.TypeName(), ev.CodeName(), ev.Value)
 }
 
-func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor, dim *Dimmer) {
+func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor, dim *Dimmer, lid *Lid) {
 	for {
 		ev, err := dev.ReadOne()
 		if err != nil {
@@ -357,6 +357,11 @@ func runKeyboard(dev *evdev.InputDevice, e *Engine, mon *Monitor, dim *Dimmer) {
 			e.out.shutdown(1)
 		}
 		if ev.Type == evdev.EV_SYN || ev.Type == evdev.EV_MSC {
+			continue
+		}
+		if ev.Type == evdev.EV_SW { // ふたの開け閉め、タブレットの形（lid.go）
+			vlogf("kbd: %s", evString(ev))
+			lid.Switch(ev.Code, ev.Value)
 			continue
 		}
 		if ev.Type != evdev.EV_KEY {
@@ -1369,6 +1374,7 @@ func main() {
 	dimP, _ := cfg.Backlight.compile() // 検証済み
 	dim := NewDimmer(dimP)
 	addAtExit(dim.Close)
+	lid := NewLid(dim, cfg.Lid.action())
 	batP, _ := cfg.Battery.compile() // 検証済み
 	battery.SetCurve(batP.curve)
 	guard := NewBatteryGuard(batP, *dataDir)
@@ -1546,6 +1552,7 @@ func main() {
 	if err := kbd.Grab(); err != nil {
 		log.Printf("grab keyboard: %v", err)
 	}
+	lid.Init(kbd) // デーモンを起動し直したときに、ふたが閉じていれば
 	log.Printf("keyboard: %s", describe(kbd))
 	logLayers(km)
 	var disp *Display
@@ -1589,6 +1596,7 @@ func main() {
 				widgetRT.SetInk(d.Ink)
 				memos.SetOnChange(d.Poke)
 				reader.SetOnChange(d.Poke)
+				lid.SetOnChange(d.Poke)
 				syncs.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
@@ -1613,6 +1621,7 @@ func main() {
 				images.Preload(preloadOrder(c)) // 新しい設定で使う画像を先に読む
 				p, _ := c.Backlight.compile()   // 検証済み
 				dim.Apply(p)
+				lid.SetAction(c.Lid.action())
 				bp, _ := c.Battery.compile() // 検証済み
 				guard.Apply(bp)
 				battery.SetCurve(bp.curve)
@@ -1623,6 +1632,7 @@ func main() {
 				go filesUI.reload()
 				return nil
 			}},
+			lid:     lid,
 			engine:  e,
 			monitor: mon,
 			clock:   clock,
@@ -1687,7 +1697,7 @@ func main() {
 		go runTouch(touch, e, disp, mon, dim)
 	}
 	writeReady(*readyFile) // 更新の係は、これで新しい版が起動したことを知る
-	runKeyboard(kbd, e, mon, dim)
+	runKeyboard(kbd, e, mon, dim, lid)
 }
 
 // w0 は、-render-size の大きさ。
