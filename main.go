@@ -860,7 +860,7 @@ func main() {
 	serialPath := flag.String("serial", "/dev/ttyGS1", "設定 GUI と通信するシリアル。空なら使わない")
 	gadgetSetup := flag.String("gadget-setup", defaultGadgetSetup, "USB の形（キーボードだけ、キーボードとマウス）を切り替えるときに実行する gadget-setup.sh")
 	pngMouseOff := flag.Bool("render-mouse-off", false, "-render-png で、USB にマウスがないとき（キーボードだけの形）のトラックパッドを描く")
-	pngBattery := flag.String("render-battery", "", "-render-png で、電池のウィジェットに出す状態（87、87,charging、87,plugged。省略すると読めないとき）")
+	pngBattery := flag.String("render-battery", "", "-render-png で、電池のウィジェットに出す状態（87、87,charging、87,plugged、87,charger-off（USB 給電で充電していない）。省略すると読めないとき）")
 	pngGadgets := flag.String("render-widgets", "", "-render-png で、ストップウォッチ、ポモドーロ、カウンター、在席ランプの状態（widgets.json の形のファイル）")
 	pngCalc := flag.String("render-calc", "", "-render-png で、電卓のセルに出す状態（{\"<id>\": CalcState} の JSON。get_widgets の calculator と同じ形）")
 	pngCalcPressed := flag.String("render-calc-pressed", "", "-render-png で、電卓で押しているボタン（行,列。例: 4,4 は =）")
@@ -1745,8 +1745,10 @@ func parseRenderBattery(s string) (*BatteryInfo, error) {
 		b.Plugged = true
 	case "charging":
 		b.Plugged, b.Charging = true, true
+	case "charger-off":
+		b.Plugged, b.ChargerOff = true, true
 	default:
-		return nil, errors.New("use 87, 87,plugged or 87,charging")
+		return nil, errors.New("use 87, 87,plugged, 87,charging or 87,charger-off")
 	}
 	return b, nil
 }

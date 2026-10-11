@@ -1023,12 +1023,13 @@ func status(c *Client) (string, error) {
 
 // battery は get_status の battery（lefthand の battery.go の BatteryInfo）。
 type battery struct {
-	Percent   int    `json:"percent"`
-	VoltageMV int    `json:"voltage_mv"`
-	Plugged   bool   `json:"plugged"`
-	Charging  bool   `json:"charging"`
-	Estimated bool   `json:"estimated"`
-	Source    string `json:"source"`
+	Percent    int    `json:"percent"`
+	VoltageMV  int    `json:"voltage_mv"`
+	Plugged    bool   `json:"plugged"`
+	Charging   bool   `json:"charging"`
+	Estimated  bool   `json:"estimated"`
+	Source     string `json:"source"`
+	ChargerOff bool   `json:"charger_off"`
 }
 
 func (b battery) describe() string {
@@ -1039,6 +1040,8 @@ func (b battery) describe() string {
 	switch {
 	case b.Charging:
 		s += "、充電中"
+	case b.ChargerOff:
+		s += "、USB 給電、充電していない（i.MX28 の充電器が止まっている。README の「充電」）"
 	case b.Plugged:
 		s += "、USB 給電"
 	}

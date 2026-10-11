@@ -168,6 +168,7 @@ export function batteryLines(b: BatteryInfo | null | undefined, ink: RGB, colSub
   let c = ink
   let sub = '電池'
   if (b.charging) [sub, c] = ['充電中', colInkOK]
+  else if (b.charger_off) sub = '充電していない'
   else if (b.plugged) sub = 'USB 給電'
   if (!b.charging) {
     if (b.percent <= 15) c = colInkError

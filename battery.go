@@ -18,9 +18,10 @@ import (
 // - i.MX28 の LRADC が IIO（/sys/bus/iio/devices/iio:deviceN、名前 mxs-lradc-adc）に出ていて、
 //   ch7 が電池の電圧（VBATT）、ch15 が USB の 5V（VDD5V）。値は in_voltageN_raw × in_voltageN_scale（mV）。
 //   USB で PC につないだとき、ch7 は 4171 mV、ch15 は 4943 mV だった。
-// - i.MX28 の内蔵の充電回路は止めてある（HW_POWER_CHARGE の PWD_BATTCHRG が 1）。充電は外付けの IC が行い、
-//   その状態はソフトウェアからは読めない（GPIO にも出ていない）。
-// そこで、残りは電圧から見積もり、「充電中」は USB の 5V があって満充電の電圧より低いときとみなす（推定）。
+// - i.MX28 の内蔵の充電回路は止まっている（HW_POWER_CHARGE の PWD_BATTCHRG が 1、電流 0。power.go で読む）。
+//   前は「充電は外付けの IC が行う」とみなしていたが、USB につないだままでも電圧は下がり続け、電池が切れた（2026-10-11）。
+// そこで、残りは電圧から見積もり、「充電中」は、USB の 5V があり、満充電の電圧より低く、内蔵の充電器が動いているときだけにする。
+// 充電器が止まっていれば「USB 給電（充電していない）」（ChargerOff）。
 // USB につないでいるあいだは電圧が高めに出るので、残りも多めに出る。
 //
 // power_supply がある機種（ほかのカーネル）では、そちらの capacity と status を使う。
@@ -49,9 +50,11 @@ type BatteryInfo struct {
 	Charging  bool   `json:"charging"`             // 充電中（lradc では推定）
 	Source    string `json:"source"`               // power_supply か lradc
 	Estimated bool   `json:"estimated,omitempty"`  // 残りと充電中を電圧から見積もった
-	VBusMV    int    `json:"vbus_mv,omitempty"`    // USB の 5V（lradc）
-	RawMV     int    `json:"-"`                    // 今回読んだ電池の電圧（平均する前）
-	Samples   int    `json:"-"`                    // 平均に使った回数（つないだ・外したときに数え直す）
+	// ChargerOff は、USB の 5V があるのに、i.MX28 の内蔵の充電器が止まっている（HW_POWER_CHARGE。充電していない）
+	ChargerOff bool `json:"charger_off,omitempty"`
+	VBusMV     int  `json:"vbus_mv,omitempty"` // USB の 5V（lradc）
+	RawMV      int  `json:"-"`                 // 今回読んだ電池の電圧（平均する前）
+	Samples    int  `json:"-"`                 // 平均に使った回数（つないだ・外したときに数え直す）
 }
 
 // voltagePercent は、電圧から残りを見積もる。
@@ -270,8 +273,13 @@ func (bs *BatteryService) poll() {
 		}
 		b.Percent = curvePercent(curve, b.VoltageMV)
 		b.Charging = b.Plugged && b.VoltageMV < batteryFullMV
+		if b.Plugged {
+			if c, err := readPowerCharge(); err == nil && chargerOff(c) {
+				b.Charging, b.ChargerOff = false, true
+			}
+		}
 	}
-	changed := bs.info == nil || bs.info.Percent != b.Percent || bs.info.Plugged != b.Plugged || bs.info.Charging != b.Charging
+	changed := bs.info == nil || bs.info.Percent != b.Percent || bs.info.Plugged != b.Plugged || bs.info.Charging != b.Charging || bs.info.ChargerOff != b.ChargerOff
 	bs.info = &b
 	f, ps := bs.onChange, bs.onPoll
 	bs.mu.Unlock()

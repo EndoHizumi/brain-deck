@@ -126,7 +126,7 @@ func barItems(items []string, env WidgetEnv) []barItem {
 			}
 			ink := colText
 			switch {
-			case b.Plugged:
+			case b.Plugged && !b.ChargerOff: // 充電していなければ、つないでいても残りで色を変える
 				ink = colInkOK
 			case b.Percent <= 10:
 				ink = colInkError

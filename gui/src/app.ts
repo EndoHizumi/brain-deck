@@ -3399,7 +3399,7 @@ export class App {
       case 'battery': {
         const b = this.brainBattery
         if (this.connected) out.push(h('p', { class: 'hint gadget-now' }, b && b.percent >= 0
-          ? `今：${b.percent}%${b.charging ? '、充電中' : b.plugged ? '、USB 給電' : ''}${b.voltage_mv ? `（${(b.voltage_mv / 1000).toFixed(2)} V）` : ''}`
+          ? `今：${b.percent}%${b.charging ? '、充電中' : b.charger_off ? '、USB 給電（充電していない）' : b.plugged ? '、USB 給電' : ''}${b.voltage_mv ? `（${(b.voltage_mv / 1000).toFixed(2)} V）` : ''}`
           : '今：Brain で電池を読めません'))
         out.push(h('p', { class: 'hint' }, '電池の残りと、USB から給電しているか（充電中）を出します。PW-SH2 では、残りと充電中は電池の電圧からの見積もりで、' +
           'USB につないでいるあいだは多めに出ます。30 秒ごとに読みます。タップしたときの動き（キーなど）も書けます。'))

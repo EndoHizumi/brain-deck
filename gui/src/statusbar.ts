@@ -66,7 +66,7 @@ export function barItems(items: BarItem[], env: BarEnv): BarItemView[] {
         out.push({ kind: k, text: '電池?', ink: colBarDim })
         continue
       }
-      const ink = b.plugged ? colOK : b.percent <= 10 ? colError : b.percent <= 25 ? colWarn : colText
+      const ink = b.plugged && !b.charger_off ? colOK : b.percent <= 10 ? colError : b.percent <= 25 ? colWarn : colText
       out.push({ kind: k, text: `${b.percent}%`, ink, batt: b })
     } else if (k === 'pc') {
       const [t, c] = linkText(env.link)

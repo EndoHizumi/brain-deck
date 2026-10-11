@@ -317,6 +317,8 @@ func batteryLines(b *BatteryInfo, ink RGB) (main, sub string, c RGB, pct int) {
 	switch {
 	case b.Charging:
 		sub, c = "充電中", colInkOK
+	case b.ChargerOff:
+		sub = "充電していない"
 	case b.Plugged:
 		sub = "USB 給電"
 	default:

@@ -370,6 +370,7 @@ export interface BatteryInfo {
   charging: boolean
   source?: string
   estimated?: boolean
+  charger_off?: boolean // USB の 5V があるのに、i.MX28 の内蔵の充電器が止まっている（充電していない）
 }
 
 export interface GetWidgetsResult {

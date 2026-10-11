@@ -1,10 +1,16 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// テストでは /dev/mem を読まない（HW_POWER_CHARGE が読めないときは、前と同じ推定）
+func init() {
+	readPowerCharge = func() (uint32, error) { return 0, errors.New("no /dev/mem in tests") }
+}
 
 // ---------- 電池 ----------
 
@@ -70,6 +76,31 @@ func TestBatteryLRADC(t *testing.T) {
 	bs.poll()
 	if in := bs.Info(); !in.Plugged || !in.Charging || in.Percent != 85 {
 		t.Errorf("charging = %+v", in)
+	}
+	// 内蔵の充電器が止まっている（実機の HW_POWER_CHARGE 0x00010000）：充電していない
+	old := readPowerCharge
+	defer func() { readPowerCharge = old }()
+	readPowerCharge = func() (uint32, error) { return 0x00010000, nil }
+	bs.poll()
+	if in := bs.Info(); !in.Plugged || in.Charging || !in.ChargerOff {
+		t.Errorf("charger off = %+v", in)
+	}
+	if _, sub, _, _ := batteryLines(bs.Info(), colText); sub != "充電していない" {
+		t.Errorf("widget = %q", sub)
+	}
+	// 充電器が動いている（電流 200 mA）
+	readPowerCharge = func() (uint32, error) { return 0x10, nil }
+	bs.poll()
+	if in := bs.Info(); !in.Charging || in.ChargerOff {
+		t.Errorf("charger on = %+v", in)
+	}
+}
+
+func TestChargerOff(t *testing.T) {
+	for v, want := range map[uint32]bool{0x00010000: true, 0x00010010: true, 0x0: true, 0x10: false, 0x00000108: false} {
+		if chargerOff(v) != want {
+			t.Errorf("%#x: %v", v, !want)
+		}
 	}
 }
 
