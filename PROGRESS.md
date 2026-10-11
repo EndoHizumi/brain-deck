@@ -18,7 +18,7 @@
 
 ## 本番の状態（最後に確かめたとき）
 
-- デーモン ae7af4cdef23（`.prev` 78d5533a7115）。設定は config/current.yaml（フェーズ R3 のアプリとフォトフレーム）。設定は config/current.yaml（8fdc3c3、clock.rtc: write）。
+- デーモン ae7af4cdef23（`.prev` 78d5533a7115）。設定は config/current.yaml（フェーズ R3 のアプリとフォトフレーム）。
 - 本番に反映しない、と決めたフェーズ：なし。
 
 ## 再開するときの注意
