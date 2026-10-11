@@ -47,7 +47,7 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc, widgetPenTab, widgetMemo, widgetReader, widgetFiles}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc, widgetPenTab, widgetMemo, widgetReader, widgetFiles, widgetSettings}
 
 // ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
@@ -117,6 +117,7 @@ type WidgetEnv struct {
 	Syncing      bool                   // 状態の帯：PC の brain-deck sync が同期している
 	SyncFailed   bool                   // 状態の帯：最後の同期に失敗したものがあった
 	Files        *FilesView             // files：ファイルエクスプローラの状態（写し）
+	Settings     *SettingsView          // settings：設定のアプリの状態（写し）。nil なら説明だけ描く
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
@@ -136,6 +137,11 @@ func compileWidget(s ActionSpec) (*WidgetDef, error) {
 			return nil, fmt.Errorf("widget: files has no settings here (the places are files.roots)")
 		}
 		return compileFiles(s)
+	case widgetSettings:
+		if s.Map != "" || s.PCScreen != "" || s.Region != nil || s.Pressure != nil || s.PressureRange != nil || s.hasPadFields() {
+			return nil, fmt.Errorf("widget: %s has no settings", s.Widget)
+		}
+		return compileSettings(s)
 	}
 	if s.Map != "" || s.PCScreen != "" || s.Region != nil || s.Pressure != nil || s.PressureRange != nil {
 		return nil, fmt.Errorf("map, pc_screen, region, pressure and pressure_range are for widget: pentablet")
@@ -430,6 +436,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return readerKey(env)
 	case widgetFiles:
 		return filesKey(env)
+	case widgetSettings:
+		return settingsKey(env)
 	}
 	return gadgetKey(v, env)
 }
@@ -460,6 +468,8 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		return graphNext(v.Widget, env)
 	case widgetHome, widgetPenTab, widgetMemo, widgetReader, widgetFiles:
 		return time.Time{}
+	case widgetSettings:
+		return settingsNext(env)
 	}
 	return gadgetNext(v, env)
 }
@@ -492,6 +502,8 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		drawReader(cv, area, env)
 	case widgetFiles:
 		drawFiles(cv, area, env)
+	case widgetSettings:
+		drawSettings(cv, area, env)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {

@@ -1,7 +1,7 @@
 // Brain の画面のプレビュー。display.go の drawAll と同じ配置・配色・字形で描く。
 
 import { drawMemo, drawPenTab, penTabOf, type PenTabDef } from './penwidget'
-import { drawReaderEmpty, drawFilesPlaceholder } from './readerwidget'
+import { drawReaderEmpty, drawFilesPlaceholder, drawAppPlaceholder, SETTINGS_PLACEHOLDER } from './readerwidget'
 import { FONT_H, type BitmapFont } from './font'
 import { prettyCombo } from './keys'
 import { clockDef, clockLines, type ClockDef } from './clock'
@@ -108,6 +108,7 @@ export interface CellView {
   memo?: boolean // 手書きメモ
   reader?: boolean // 読み物のアプリ
   files?: boolean // ファイルエクスプローラ
+  settings?: boolean // 設定のアプリ
   padScroll?: number // トラックパッドのスクロールの帯の幅（0 なら帯なし）
   background?: string // セルの背景画像の id
   gadget?: Gadget // 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプ
@@ -161,6 +162,7 @@ function cellView1(cfg: Config, a: ActionSpec): CellView {
     if (a.widget === 'memo') v.memo = true
     if (a.widget === 'reader') v.reader = true
     if (a.widget === 'files') v.files = true
+    if (a.widget === 'settings') v.settings = true
     if (a.widget === 'trackpad') v.padScroll = typeof a.scroll_width === 'number' ? a.scroll_width : PAD_DEFAULTS.scroll_width
     if (['battery', 'stopwatch', 'pomodoro', 'counter', 'qr', 'presence', 'presenter'].includes(a.widget)) {
       v.gadget = { kind: a.widget as Gadget['kind'], id: stateId(a), work: pomoDurations(a).work, states: presenceStates(a.states) }
@@ -636,6 +638,10 @@ function drawWidget(font: BitmapFont, px: Pixels, inner: Rect, v: CellView, env:
   }
   if (v.files) {
     drawFilesPlaceholder(px, area, fitF, centeredF)
+    return
+  }
+  if (v.settings) {
+    drawAppPlaceholder(px, area, SETTINGS_PLACEHOLDER, fitF, centeredF)
     return
   }
   if (v.gadget) {

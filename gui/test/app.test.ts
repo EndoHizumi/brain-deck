@@ -1241,4 +1241,13 @@ describe('上書きの値（Brain の設定のアプリ）', () => {
     // 保存しても、上書きは設定ファイルに入らない（get_config の config は設定ファイルの値）
     expect(daemon.config).not.toHaveProperty('lid')
   })
+
+  it('設定のアプリのウィジェットを選べる', async () => {
+    const t = await connected()
+    t.click('[data-cell="0,0"]')
+    t.change('#kind', 'widget')
+    t.change('#widget', 'settings')
+    expect(t.app.ownAction()).toMatchObject({ widget: 'settings' })
+    expect(t.$('.widget-editor').textContent).toContain('上書き')
+  })
 })

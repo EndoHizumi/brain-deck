@@ -939,6 +939,8 @@ func main() {
 	pngFiles := flag.String("render-files", "", "-render-png で、widget: files にこのフォルダの一覧を出す（「/」なら場所の一覧。ファイルなら中を見ている画面）")
 	pngFilesSize := flag.Bool("render-files-by-size", false, "-render-files を大きい順に")
 	pngReadSize := flag.Int("render-read-size", 24, "-render-read の文字の大きさ（24 か 32）")
+	pngSettings := flag.String("render-settings", "", "-render-png で、widget: settings に設定のアプリのこのタブを描く（settings、info、power）")
+	pngSettingsChoice := flag.String("render-settings-choice", "", "-render-settings で、この行の選ぶ画面を出す（level、dim、dim_offline、photo、rotate、reader、lid）")
 	pngReadH := flag.Bool("render-read-horizontal", false, "-render-read を横書きで出す")
 	pngMemo := flag.String("render-memo", "", "-render-png で、手書きメモのセルに出すメモ（memo の <id>.json の形のファイル。最後のページを出す）")
 	pngPhoto := flag.String("render-photo", "", "-render-png で、格子の代わりに、この写真（.565）をフォトフレームと同じく描く（向きが違えば縮めて帯を入れる）")
@@ -1264,6 +1266,13 @@ func main() {
 			}
 			env.Files = v
 		}
+		if *pngSettings != "" {
+			v, err := renderSettingsView(cfg, *pngSettings, *pngSettingsChoice, rotOf(cfg, *pngRotate), *pngReadSize, env)
+			if err != nil {
+				log.Fatal(err)
+			}
+			env.Settings = v
+		}
 		for _, l := range km.Layers {
 			if l.Grid == nil {
 				continue
@@ -1476,6 +1485,25 @@ func main() {
 	filesUI.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	widgetRT.files = filesUI
 	files.SetChanged(filesUI.reload)
+	// 設定のアプリ。設定の置き場所（cstore）と電源（更新の係）は、あとで決める
+	settingsUI := NewSettingsUI(SettingsDeps{
+		Rotation:      e.Rotation,
+		Rotate:        func(r int) { dim.Wake(); e.Rotate(r) },
+		ReaderSize:    reader.Size,
+		SetReaderSize: reader.SetSize,
+		OpenClock:     func() { prompt.Open(inputClock) },
+		BrightLevel: func() int {
+			if in := dim.Info(); in.Enabled && in.State == dimNames[dimBright] {
+				return in.Level
+			}
+			if v := currentBacklight(); v > 0 {
+				return v
+			}
+			return 7
+		},
+		Lid: lid,
+	})
+	widgetRT.settings = settingsUI
 	memos.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	reader.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	syncs.SetNotify(func(msg string, ok bool) {
@@ -1499,6 +1527,7 @@ func main() {
 		env.Memo = memos.Snapshot()
 		env.Reader = reader.Snapshot()
 		env.Files = filesUI.Snapshot()
+		env.Settings = settingsUI.Snapshot()
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1613,6 +1642,7 @@ func main() {
 				widgetRT.SetInk(d.Ink)
 				memos.SetOnChange(d.Poke)
 				reader.SetOnChange(d.Poke)
+				settingsUI.SetOnChange(d.Poke)
 				lid.SetOnChange(d.Poke)
 				syncs.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
@@ -1646,6 +1676,7 @@ func main() {
 		frame.SetParams(pp)
 		files.SetConfig(c.Files)
 		go filesUI.reload()
+		settingsUI.Changed()
 		return nil
 	}, light: func(c *Config) {
 		// 上書きだけが変わった：上書きで変わる項目（自動減光とふた）だけを反映する（割り当ては変わらない）
@@ -1653,7 +1684,16 @@ func main() {
 		p, _ := c.Backlight.compile() // applyOverrides が確かめてある
 		dim.Apply(p)
 		lid.SetAction(c.Lid.action())
-	}}
+	}, onOverrides: settingsUI.Changed}
+	settingsUI.SetDeps(func(d *SettingsDeps) {
+		d.Store = cstore
+		d.Info = func() []SettingsInfo {
+			in := settingsInfoIn{Version: daemonVersion(), Battery: battery.Info(), Link: link.State(), Synced: clock.Synced(),
+				Lid: lid.Info(), Overrides: cstore.Overrides(), LastSync: syncs.Info().Last, LastPCSet: clock.Info().LastPCSet}
+			in.Free, in.Size, in.DiskErr = statfsFree(*dataDir)
+			return in.rows()
+		}
+	})
 	if *serialPath != "" {
 		ctl := &Controller{
 			store:   cstore,
@@ -1692,6 +1732,7 @@ func main() {
 		ctl.updater = upd
 		if upd.Unit != "" {
 			powerOff = func() error { return upd.Power("poweroff") }
+			settingsUI.SetDeps(func(d *SettingsDeps) { d.Power = upd.Power })
 		}
 		ctl.uploads = NewUploads()
 		ctl.uploads.Register("update", upd.UploadKind())

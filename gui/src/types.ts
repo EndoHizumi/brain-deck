@@ -65,7 +65,7 @@ export interface ActionSpec {
   pressure_range?: [number, number] // 筆圧の 0 と最大にする押す強さ（既定 [400, 2400]）
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo' | 'reader' | 'files'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo' | 'reader' | 'files' | 'settings'
 
 // プレゼン用タイマーの色の区切り 1 つ（presenter.go の PresenterColorSpec）
 export interface PresenterColorSpec {

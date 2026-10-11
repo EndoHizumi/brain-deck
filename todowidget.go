@@ -87,18 +87,19 @@ func (s *pagerState) setPage(page int, now time.Time) {
 
 // WidgetRT は、ウィジェットがタップを処理するのに使う、外の状態。
 type WidgetRT struct {
-	mu      sync.Mutex
-	w, h    int // 画面の大きさ（論理）。画面を使わないときは 800x480
-	todos   *TodoService
-	gadgets *GadgetService                      // ストップウォッチなどの状態。nil ならタップしても何もしない
-	calc    *CalcService                        // 電卓。nil ならボタンを押しても何もしない
-	envFn   func() WidgetEnv                    // 今の時刻とデータ。nil なら Todo だけ
-	poke    func()                              // 画面の描き直し。待たずに返ること
-	pen     *Pen                                // ペンタブレットの出力。nil なら送らない
-	memos   *MemoService                        // 手書きメモ。nil なら書けない
-	reader  *ReaderService                      // 読み物のアプリ。nil なら読めない
-	files   *FilesUI                            // ファイルエクスプローラ。nil なら見られない
-	ink     func(func(*Canvas) image.Rectangle) // 手書きメモの線を描き足す（Display.Ink）。nil なら描き足さない
+	mu       sync.Mutex
+	w, h     int // 画面の大きさ（論理）。画面を使わないときは 800x480
+	todos    *TodoService
+	gadgets  *GadgetService                      // ストップウォッチなどの状態。nil ならタップしても何もしない
+	calc     *CalcService                        // 電卓。nil ならボタンを押しても何もしない
+	envFn    func() WidgetEnv                    // 今の時刻とデータ。nil なら Todo だけ
+	poke     func()                              // 画面の描き直し。待たずに返ること
+	pen      *Pen                                // ペンタブレットの出力。nil なら送らない
+	memos    *MemoService                        // 手書きメモ。nil なら書けない
+	reader   *ReaderService                      // 読み物のアプリ。nil なら読めない
+	files    *FilesUI                            // ファイルエクスプローラ。nil なら見られない
+	settings *SettingsUI                         // 設定のアプリ。nil なら使えない
+	ink      func(func(*Canvas) image.Rectangle) // 手書きメモの線を描き足す（Display.Ink）。nil なら描き足さない
 }
 
 func NewWidgetRT(todos *TodoService) *WidgetRT { return &WidgetRT{w: 800, h: 480, todos: todos} }
@@ -171,7 +172,7 @@ type widgetTouch struct {
 
 // ownsTouch は、ウィジェットがタップを自分で処理し、押した位置で働くか（セル全体を光らせない）。
 func (w *WidgetDef) ownsTouch() bool {
-	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc || w.Kind == widgetHome || w.Kind == widgetPenTab || w.Kind == widgetMemo || w.Kind == widgetReader || w.Kind == widgetFiles)
+	return w != nil && (w.Kind == widgetTodo || w.Kind == widgetCal || w.Kind == widgetPad || w.Kind == widgetMonth || w.Kind == widgetCalc || w.Kind == widgetHome || w.Kind == widgetPenTab || w.Kind == widgetMemo || w.Kind == widgetReader || w.Kind == widgetFiles || w.Kind == widgetSettings)
 }
 
 // todoGeom は、Todo のセルの中の配置。
@@ -363,6 +364,10 @@ func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
 		rt.files.touchDown(t.cell, t.pt)
 		return
 	}
+	if w != nil && w.Kind == widgetSettings && rt != nil && rt.settings != nil {
+		rt.settings.touchDown(t.cell, t.pt)
+		return
+	}
 	if !w.ownsTouch() || rt == nil || w.pager == nil { // トラックパッドは Pad が処理する
 		return
 	}
@@ -446,6 +451,12 @@ func (w *WidgetDef) touchUp(rt *WidgetRT, cancel bool) {
 	if w != nil && w.Kind == widgetFiles {
 		if rt != nil && rt.files != nil {
 			rt.files.touchUp(cancel)
+		}
+		return
+	}
+	if w != nil && w.Kind == widgetSettings {
+		if rt != nil && rt.settings != nil {
+			rt.settings.touchUp(cancel)
 		}
 		return
 	}

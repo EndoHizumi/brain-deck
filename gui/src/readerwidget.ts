@@ -25,11 +25,19 @@ export function drawReaderEmpty(px: Px, area: Rect, fit: Fit, centered: Centered
 
 // drawFilesPlaceholder は、ファイルエクスプローラ（widget: files）のプレビュー。中身は Brain のファイルなので、説明だけ。
 export function drawFilesPlaceholder(px: Px, area: Rect, fit: Fit, centered: Centered): void {
+  drawAppPlaceholder(px, area, ['ファイル', 'Brain のファイルを見る（「ファイル」のタブ）'], fit, centered)
+}
+
+// drawAppPlaceholder は、中身が Brain の状態で決まるアプリ（設定、ヘルプ）のプレビュー。説明だけ描く
+// （settingswidget.go の drawAppPlaceholder と同じ。-render-png で -render-settings、-render-help を書かないとき）。
+export function drawAppPlaceholder(px: Px, area: Rect, lines: string[], fit: Fit, centered: Centered): void {
   px.fill(area, colReadBar)
-  const lines = ['ファイル', 'Brain のファイルを見る（「ファイル」のタブ）']
   const y = area.y0 + Math.trunc((area.y1 - area.y0) / 2) - FONT_H * 2
   lines.forEach((l, i) => {
     const s = Math.min(fit([l], area.x1 - area.x0 - 8, FONT_H * 2, 2), 2)
     centered(area, y + i * FONT_H * 2 + 4 * i, l, s, colReadSub)
   })
 }
+
+// 設定のアプリのプレビューの文（settingswidget.go と同じ）
+export const SETTINGS_PLACEHOLDER = ['設定', 'Brain の画面で、明るさや時刻などを変える']

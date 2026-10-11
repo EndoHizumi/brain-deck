@@ -594,6 +594,28 @@ func (r *ReaderService) key(code evdev.EvCode, shift bool) bool {
 	return true
 }
 
+// Size は、文字の大きさ（24 か 32）。
+func (r *ReaderService) Size() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.size
+}
+
+// SetSize は、文字の大きさを n（24 か 32）にする（設定のアプリ、ヘルプ）。ページは数え直す。
+func (r *ReaderService) SetSize(n int) {
+	if n != 24 && n != 32 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.size == n {
+		return
+	}
+	r.size = n
+	r.store.SetSettings(r.size, r.vertical, r.docID)
+	r.changedLocked()
+}
+
 // Closed は、読み物 id を消したとき（開いていれば一覧に戻る）。
 func (r *ReaderService) Closed(id string) {
 	if r == nil {
