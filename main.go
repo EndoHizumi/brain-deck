@@ -1383,6 +1383,10 @@ func main() {
 	curCfg.Store(cfg)
 	term := NewTermMode(curCfg.Load, usb, s, *gadgetSetup)
 	e.SetTerm(term)
+	// 日本語入力（ime.go）。文字を入れる欄と、Brain のシェルで uim-fep を通す
+	ime := NewIME(*dataDir, curCfg.Load)
+	term.ime = ime
+	addAtExit(ime.Stop)
 	if !clock.Synced() {
 		log.Printf("time: not set since boot (the clock widget shows %q until the settings GUI connects)", unsyncedText)
 	}
@@ -1429,6 +1433,7 @@ func main() {
 	}
 	userActivity = guard.Activity
 	prompt := NewPrompt(nil)
+	prompt.SetIME(ime)
 	e.SetInput(prompt)
 	e.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
 	// タッチのキャリブレーション（touchcal.go、calibui.go）。保存したものがあれば、設定の min と max より優先する
@@ -1509,6 +1514,7 @@ func main() {
 			return 7
 		},
 		Lid: lid,
+		IME: ime.Info,
 	})
 	widgetRT.settings = settingsUI
 	memos.SetNotify(func(msg string) { prompt.Notify(msg, noticeWarn) })
@@ -1638,6 +1644,14 @@ func main() {
 				graphs.SetOnChange(d.Poke)
 				calc.SetOnChange(d.Poke)
 				link.SetOnChange(d.Poke)
+				prompt.SetWidth(first.W)
+				e.SetOnRotate(func(r int) { // 向きが変わったら、欄の桁数も変える（表示が変わる前に呼ばれるので、向きから決める）
+					pw, ph := d.PhysSize()
+					if r == 90 || r == 270 {
+						pw = ph
+					}
+					prompt.SetWidth(pw)
+				})
 				prompt.SetShow(d.SetOverlay)
 				if pw, ph := d.PhysSize(); pw != 800 || ph != 480 {
 					e.SetRotation(e.Rotation(), pw, ph, rotStore)
@@ -1685,20 +1699,24 @@ func main() {
 		frame.SetParams(pp)
 		files.SetConfig(c.Files)
 		go filesUI.reload()
+		ime.ConfigChanged()
 		settingsUI.Changed()
 		return nil
 	}, light: func(c *Config) {
-		// 上書きだけが変わった：上書きで変わる項目（自動減光とふた）だけを反映する（割り当ては変わらない）
+		// 上書きだけが変わった：上書きで変わる項目（自動減光、ふた、日本語入力）だけを反映する（割り当ては変わらない）
 		curCfg.Store(c)
 		p, _ := c.Backlight.compile() // applyOverrides が確かめてある
 		dim.Apply(p)
 		lid.SetAction(c.Lid.action())
+		ime.ConfigChanged()
 	}, onOverrides: settingsUI.Changed}
 	settingsUI.SetDeps(func(d *SettingsDeps) {
 		d.Store = cstore
 		d.Info = func() []SettingsInfo {
 			in := settingsInfoIn{Version: daemonVersion(), Battery: battery.Info(), Link: link.State(), Synced: clock.Synced(),
 				Lid: lid.Info(), Overrides: cstore.Overrides(), LastSync: syncs.Info().Last, LastPCSet: clock.Info().LastPCSet}
+			ii := ime.Info()
+			in.IME = &ii
 			in.Free, in.Size, in.DiskErr = statfsFree(*dataDir)
 			return in.rows()
 		}
@@ -1707,6 +1725,7 @@ func main() {
 		ctl := &Controller{
 			store:   cstore,
 			lid:     lid,
+			ime:     ime,
 			engine:  e,
 			monitor: mon,
 			clock:   clock,

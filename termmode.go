@@ -123,12 +123,15 @@ type TermMode struct {
 	choosing bool   // 「PC」と「Brain」を選ぶ画面を出している
 	online   func() bool
 	pcGone   bool // PC の端末の途中で PC から外れた（知らせた）
+	ime      *IME // 日本語入力（Brain のシェルで uim-fep を通す。nil なら使わない）
+	imeOn    bool // 今の端末（Brain のシェル）で uim-fep を通している（文字切り替えを 1 回押すと かな/英数）
+	altAlone bool // 文字切り替え（Alt）を押してから、ほかのキーを押していない
 
 	// テストで差し替える
 	systemctl  func(args ...string) error
 	openPort   func(path string) (termConn, error)
 	startCmd   func(tc TerminalConfig, cols, rows int) (termConn, error)
-	startLogin func(user string, cols, rows int) (termConn, error)
+	startLogin func(user string, cols, rows int, env []string) (termConn, error)
 }
 
 // NewTermMode は端末モードを作る。cfg は今の設定を返す関数。
@@ -428,7 +431,11 @@ func (m *TermMode) enter() {
 		if user == "" {
 			user = defaultBrainUser
 		}
-		c, err := m.startLogin(user, m.geom.Cols, m.geom.Rows)
+		env := m.ime.TerminalEnv()
+		m.mu.Lock()
+		m.imeOn = env != nil
+		m.mu.Unlock()
+		c, err := m.startLogin(user, m.geom.Cols, m.geom.Rows, env)
 		if err != nil {
 			log.Printf("terminal: brain login: %v", err)
 			m.feedNote("Brain のログインを始められません：" + err.Error())
@@ -739,7 +746,7 @@ func (m *TermMode) restartCommand() {
 		if user == "" {
 			user = defaultBrainUser
 		}
-		c, err = m.startLogin(user, m.geom.Cols, m.geom.Rows)
+		c, err = m.startLogin(user, m.geom.Cols, m.geom.Rows, m.ime.TerminalEnv())
 	} else {
 		c, err = m.startCmd(tc, m.geom.Cols, m.geom.Rows)
 	}
@@ -852,6 +859,20 @@ func (m *TermMode) KeyEvent(code evdev.EvCode, value int32) {
 	}
 	app := m.term != nil && m.term.AppCursor()
 	r := m.keys.event(code, value, app, time.Now())
+	// Brain のシェルで uim-fep を通しているとき：文字切り替え（Alt）を押して、ほかのキーを押さずに離したら、
+	// かな/英数 の切り替え（Ctrl+Space と同じ NUL）。押しながらほかのキーを押せば、今までどおり Alt
+	if code == evdev.KEY_LEFTALT || code == evdev.KEY_RIGHTALT {
+		if value == 1 {
+			m.altAlone = true
+		} else if value == 0 && m.altAlone {
+			m.altAlone = false
+			if m.imeOn && m.state == termOn {
+				r.out = []byte{imeKeyToggle}
+			}
+		}
+	} else if value == 1 {
+		m.altAlone = false
+	}
 	var poke bool
 	if r.scroll != 0 && m.term != nil {
 		poke = m.term.Scroll(r.scroll * max(m.geom.Rows-1, 1))

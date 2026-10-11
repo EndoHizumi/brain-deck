@@ -35,6 +35,7 @@ type Config struct {
 	Photo     *PhotoConfig          `yaml:"photo,omitempty" json:"photo,omitempty"`           // フォトフレーム（photo.go。backlight.photo で使う）
 	Files     *FilesConfig          `yaml:"files,omitempty" json:"files,omitempty"`           // ファイルエクスプローラの見られる場所（files.go）。省略すると既定の場所
 	Lid       *LidConfig            `yaml:"lid,omitempty" json:"lid,omitempty"`               // ふたを閉じたときの動き（lid.go）。省略すると画面を消す
+	IME       *IMEConfig            `yaml:"ime,omitempty" json:"ime,omitempty"`               // 日本語の入力（ime.go）。省略すると、uim-fep が入っていれば使う
 }
 
 // TouchConfig はタッチパネルそのものの設定（どのレイヤーでも共通）。
@@ -559,6 +560,7 @@ func compileKeymap(cfg *Config) (km *Keymap, warns []string, err error) {
 		errs = append(errs, Problem{Path: path, Message: fmt.Sprintf(format, args...)})
 	}
 	cfg.Terminal.validate(fail)
+	cfg.IME.validate(fail)
 	cfg.Backlight.validate(fail)
 
 	action := func(path, where string, self int, s ActionSpec, cell bool) *Action {

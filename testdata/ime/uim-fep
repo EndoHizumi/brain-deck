@@ -1,0 +1,14 @@
+#!/bin/sh
+# テスト用の偽の uim-fep（ime_test.go）。uim-fep と同じ引数（-u 方式 -s lastline -e コマンド…）を受け取り、
+# uim-fep と同じ形の状態の行を 2 行目に描いてから、コマンドを動かす。
+im=direct
+while [ $# -gt 0 ]; do
+  case $1 in
+    -e) shift; break ;;
+    -u) im=$2; shift 2 ;;
+    -s|-b|-w|-t|-C|-f) shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '\033[1;1r\033[2;1H%s[An- \357\274\262]\033[K\033[1;1H' "$im"
+exec "$@"

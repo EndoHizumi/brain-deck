@@ -157,6 +157,24 @@ var overrideKeys = []*overrideKey{
 			return onOff(f.Backlight != nil && f.Backlight.Photo != nil && *f.Backlight.Photo)
 		},
 		show: func(v any) string { return onOff(v.(bool)) }},
+	{Key: "ime.method", Label: "日本語入力",
+		parse: func(raw json.RawMessage) (any, error) {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil || (s != imeAuto && s != imeOff && !imeMethodName.MatchString(s)) {
+				return nil, fmt.Errorf("%w: ime.method must be auto, off, or a uim input method name", errOverrideValue)
+			}
+			return s, nil
+		},
+		apply: func(c, _ *Config, v any) {
+			ic := IMEConfig{}
+			if c.IME != nil {
+				ic = *c.IME
+			}
+			ic.Method = v.(string)
+			c.IME = &ic
+		},
+		fileValue: func(f *Config) string { return imeMethodLabel(f.IME.method()) },
+		show:      func(v any) string { return imeMethodLabel(v.(string)) }},
 	{Key: "lid.close", Label: "ふたを閉じたとき",
 		parse: func(raw json.RawMessage) (any, error) {
 			var s string

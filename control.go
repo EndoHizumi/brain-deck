@@ -465,6 +465,7 @@ type Controller struct {
 	files   *FilesService
 	calib   *CalibUI
 	lid     *Lid
+	ime     *IME
 	frame   *PhotoFrame
 	dataDir string // battery-log.csv の置き場所
 	started time.Time
@@ -554,7 +555,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
 			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "usb_state": USBState()},
 			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(), "sync": c.sync.Info(),
-			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "overrides": c.store.Overrides(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()}})
+			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "ime": c.ime.Info(), "overrides": c.store.Overrides(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()}})
 	case "set_terminal":
 		on, err := c.term.Request(req.Mode)
 		if err != nil {

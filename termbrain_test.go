@@ -28,7 +28,7 @@ func brainRig(t *testing.T) (*termRig, *bool, *[]*fakeLogin) {
 	online := true
 	r.m.SetOnline(func() bool { return online })
 	var logins []*fakeLogin
-	r.m.startLogin = func(user string, cols, rows int) (termConn, error) {
+	r.m.startLogin = func(user string, cols, rows int, env []string) (termConn, error) {
 		pr, pw := io.Pipe()
 		f := &fakeLogin{r: pr, w: pw, user: user}
 		logins = append(logins, f)
@@ -146,7 +146,7 @@ func TestTerminalBrainUserNotRoot(t *testing.T) {
 	if _, _, err := compileKeymap(cfg); err == nil || !strings.Contains(err.Error(), "must not be root") {
 		t.Errorf("brain_user root: %v", err)
 	}
-	if _, err := startLoginPTY("root", 80, 24); err == nil {
+	if _, err := startLoginPTY("root", 80, 24, nil); err == nil {
 		t.Error("startLoginPTY opened root")
 	}
 }

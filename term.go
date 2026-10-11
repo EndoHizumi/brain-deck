@@ -85,6 +85,9 @@ type Term struct {
 	lastPrint rune
 	reply     func([]byte) // 問い合わせへの答え（PC に送る）
 	Title     string
+	// OnOSC は、OSC（ESC ] 番号 ; 中身 BEL）を受け取ったときに先に呼ぶ。true を返せば、端末では扱わない
+	// （日本語入力の欄の、行を読むプログラムからの結果など。ime.go）
+	OnOSC func(num, rest string) bool
 
 	// パーサ
 	pstate  int
@@ -703,6 +706,9 @@ func (t *Term) oscDone() {
 	t.pstate = psGround
 	s := string(t.osc)
 	num, rest, _ := cut(s, ';')
+	if t.OnOSC != nil && t.OnOSC(num, rest) {
+		return
+	}
 	switch num {
 	case "0", "2":
 		t.Title = rest

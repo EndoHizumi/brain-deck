@@ -989,6 +989,7 @@ func status(c *Client) (string, error) {
 		RTC       *rtcInfo       `json:"rtc"`
 		Link      *linkInfo      `json:"link"`
 		Lid       *lidInfo       `json:"lid"`
+		IME       *imeInfo       `json:"ime"`
 		Overrides []overrideInfo `json:"overrides"`
 	}
 	json.Unmarshal(raw, &st)
@@ -1034,6 +1035,9 @@ func status(c *Client) (string, error) {
 	if st.Lid != nil {
 		out += "\nふた\t" + st.Lid.describe()
 	}
+	if st.IME != nil {
+		out += "\n日本語入力\t" + st.IME.describe()
+	}
 	if c.Hello.has("get_overrides") {
 		out += "\n上書き\t" + describeOverrides(st.Overrides)
 	}
@@ -1041,6 +1045,45 @@ func status(c *Client) (string, error) {
 }
 
 // lidInfo は get_status の lid（lefthand の lid.go の LidInfo）。
+// imeInfo は get_status の ime（日本語入力。lefthand の ime.go）。
+type imeInfo struct {
+	Method    string   `json:"method"`
+	Setting   string   `json:"setting"`
+	Installed []string `json:"installed"`
+	UimFep    bool     `json:"uim_fep"`
+	Running   bool     `json:"running"`
+	Terminal  bool     `json:"terminal"`
+	Error     string   `json:"error"`
+}
+
+func (i imeInfo) describe() string {
+	switch {
+	case !i.UimFep:
+		return "使えない（Brain に uim-fep がない）"
+	case i.Method == "":
+		return "使わない（設定 " + i.Setting + "）"
+	}
+	s := i.Method
+	if i.Setting == "auto" {
+		s += "（自動）"
+	}
+	if i.Running {
+		s += "、uim-fep は動いている"
+	} else {
+		s += "、uim-fep は止まっている"
+	}
+	if i.Terminal {
+		s += "、Brain のシェルでも使う"
+	}
+	if len(i.Installed) > 0 {
+		s += "、入っている方式：" + strings.Join(i.Installed, " ")
+	}
+	if i.Error != "" {
+		s += "、" + i.Error
+	}
+	return s
+}
+
 type lidInfo struct {
 	Closed bool   `json:"closed"`
 	Tablet bool   `json:"tablet"`

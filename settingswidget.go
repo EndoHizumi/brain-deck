@@ -50,12 +50,12 @@ var (
 )
 
 // setRowIDs は、設定のタブの行（並ぶ順）。
-var setRowIDs = []string{"level", "dim", "dim_offline", "photo", "rotate", "reader", "lid", "clock", "reset"}
+var setRowIDs = []string{"level", "dim", "dim_offline", "photo", "rotate", "reader", "lid", "ime", "clock", "reset"}
 
 // setOverrideKey は、行の上書きの名前（上書きでない行は空）。
 var setOverrideKey = map[string]string{
 	"level": "backlight.level", "dim": "backlight.dim_after", "dim_offline": "backlight.offline.dim_after",
-	"photo": "backlight.photo", "lid": "lid.close",
+	"photo": "backlight.photo", "lid": "lid.close", "ime": "ime.method",
 }
 
 // setChoice は、選ぶ画面の 1 つ。
@@ -78,6 +78,7 @@ type SettingsDeps struct {
 	BrightLevel   func() int // 今のふだんの明るさ（上書きも設定ファイルにもないとき）
 	Info          func() []SettingsInfo
 	Lid           *Lid
+	IME           func() IMEInfo // 日本語入力の状態（nil なら使えない）
 }
 
 // SettingsInfo は、情報のタブの 1 行。
@@ -269,6 +270,9 @@ func settingsRows(u SettingsDeps) []SettingsRow {
 		case "lid":
 			r.Label = "ふたを閉じたとき"
 			r.Value = lidLabel(eff.Lid.action())
+		case "ime":
+			r.Label = "日本語入力"
+			r.Value = imeRowValue(eff.IME.method(), u.IME)
 		case "clock":
 			r.Label = "時刻合わせ"
 			r.Value = "キーボードで入れる"
@@ -372,6 +376,25 @@ func settingsChoices(u SettingsDeps, id string) (string, []setChoice, int) {
 		title = "ふたを閉じたとき"
 		cs = []setChoice{{Label: "画面を消す", Value: lidOff}, {Label: "何もしない", Value: lidNone}}
 		cur = map[bool]int{true: 0, false: 1}[eff.Lid.action() == lidOff]
+	case "ime":
+		title = "日本語入力（uim-fep の入力方式）"
+		var in IMEInfo
+		if u.IME != nil {
+			in = u.IME()
+		}
+		cs = []setChoice{{Label: "使わない", Value: imeOff}, {Label: "自動（入っているもの）", Value: imeAuto}}
+		for _, m := range in.Installed {
+			cs = append(cs, setChoice{Label: imeMethodLabel(m), Value: m})
+		}
+		for i, c := range cs {
+			if c.Value == eff.IME.method() {
+				cur = i
+			}
+		}
+		if cur < 0 { // 設定の方式が入っていない
+			cs = append(cs, setChoice{Label: imeMethodLabel(eff.IME.method()) + "（入っていない）", Value: eff.IME.method()})
+			cur = len(cs) - 1
+		}
 	case "rotate":
 		title = "画面の向き"
 		r := 0
@@ -935,6 +958,7 @@ type settingsInfoIn struct {
 	LastPCSet *time.Time
 	Synced    bool
 	Lid       LidInfo
+	IME       *IMEInfo
 	Overrides []OverrideInfo
 }
 
@@ -1006,6 +1030,9 @@ func (in settingsInfoIn) rows() []SettingsInfo {
 		lid += "（タブレットの形）"
 	}
 	add("ふた", lid+"、閉じたら"+lidLabel(in.Lid.Close))
+	if in.IME != nil {
+		add("日本語入力", imeInfoLabel(*in.IME))
+	}
 	if len(in.Overrides) == 0 {
 		add("上書き", "なし（設定ファイルの値で動いています）")
 	} else {
@@ -1038,8 +1065,8 @@ func renderSettingsView(cfg *Config, tab, choice string, rot, readSize int, env 
 	})
 	u.tab = ti
 	if choice != "" {
-		if _, ok := map[string]bool{"level": true, "dim": true, "dim_offline": true, "photo": true, "rotate": true, "reader": true, "lid": true}[choice]; !ok {
-			return nil, fmt.Errorf("-render-settings-choice must be one of level, dim, dim_offline, photo, rotate, reader, lid, got %q", choice)
+		if _, ok := map[string]bool{"level": true, "dim": true, "dim_offline": true, "photo": true, "rotate": true, "reader": true, "lid": true, "ime": true}[choice]; !ok {
+			return nil, fmt.Errorf("-render-settings-choice must be one of level, dim, dim_offline, photo, rotate, reader, lid, ime, got %q", choice)
 		}
 		u.choice = choice
 	}

@@ -274,6 +274,16 @@ var termPadPages = []struct {
 			{Label: "^R", Send: "\x12"}, {Label: "Ctrl", Mod: "ctrl"}, {Label: "Alt", Mod: "alt"},
 			{Label: "←", Send: "\x1b[D"}, {Label: "↓", Send: "\x1b[B"}, {Label: "↑", Send: "\x1b[A"}, {Label: "→", Send: "\x1b[C"}, {Label: "Del", Send: "\x1b[3~"}},
 	}},
+	// 3 ページ目は日本語入力（uim-fep。Brain のシェルで使う。PC の端末でも uim-fep があれば同じキー）。
+	// かな：Ctrl+Space（かな/英数）、英数：Ctrl+^（英数にする）。F6〜F10 は uim の変換中の形（ひらがな、カタカナ、半角カナ、
+	// 全角英数、半角英数）。伸ばす・縮める は Shift+→ ←（文節の長さ）。
+	{"日本語", [2][12]termPadKey{
+		{{Label: "かな", Send: "\x00"}, {Label: "英数", Send: "\x1e"}, {Label: "変換", Send: " "}, {Label: "確定", Send: "\r"}, {Label: "取消", Send: "\x1b"},
+			{Label: "←文節", Send: "\x1b[D"}, {Label: "文節→", Send: "\x1b[C"}, {Label: "縮める", Send: "\x1b[1;2D"}, {Label: "伸ばす", Send: "\x1b[1;2C"},
+			{Label: "前候補", Send: "\x1b[A"}, {Label: "次候補", Send: "\x1b[B"}, {Label: "BS", Send: "\x7f"}},
+		{{Label: "ひらがな", Send: "\x1b[17~"}, {Label: "カタカナ", Send: "\x1b[18~"}, {Label: "半角カナ", Send: "\x1b[19~"}, {Label: "全角英数", Send: "\x1b[20~"}, {Label: "半角英数", Send: "\x1b[21~"},
+			{Label: "Esc", Send: "\x1b"}, {Label: "Tab", Send: "\t"}, {Label: "Ctrl", Mod: "ctrl"}, {Label: "^C", Send: "\x03"}, {Label: "^D", Send: "\x04"}, {Label: "^L", Send: "\x0c"}, {Label: "Del", Send: "\x1b[3~"}},
+	}},
 }
 
 func pk(s string) termPadKey { return termPadKey{Label: s, Send: s} }

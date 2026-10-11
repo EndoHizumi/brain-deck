@@ -13,7 +13,16 @@ import (
 //
 // 知らせ（「PC につながっていません」「電池が少なくなりました」など）は、画面の下に数秒だけ出す。
 // 文字を入れる欄（input: todo、input: clock）は、開いているあいだ本体キーをすべて受け取る（PC には送らない）。
-// 入れられるのは英数字と記号（US 配列。端末モードと同じく「記号」とシフトで全部の記号が打てる）。日本語は入れられない。
+// 日本語入力（ime.go の uim-fep）が使えるときは、欄は uim-fep の 1 行の端末になり、かなと漢字が打てる。
+// 使えないときは、英数字と記号だけ（US 配列。端末モードと同じく「記号」とシフトで全部の記号が打てる）。
+//
+// 日本語入力のとき（キーは端末モードと同じバイト列にして uim-fep に送る）：
+//	決定        確定する（変換中なら変換を確定）
+//	戻る/調べる  変換中なら変換をやめる。でなければ欄をやめる
+//	文字切り替え  1 回押すと、かなと英数を切り替える（Ctrl+Space と同じ）
+//	スペース     変換、次の候補。← → 文節を移す（Shift で長さを変える）。後退、Delete、↑↓（Home、End）は readline
+//
+// 英数字だけのとき：
 //
 //	決定        確定する（Todo を足す、時刻を合わせる）
 //	戻る/調べる  やめる
@@ -55,9 +64,10 @@ type Overlay struct {
 type InputView struct {
 	Title  string
 	Text   string
-	Cursor int    // 文字の位置（rune）
-	Hint   string // 下に出す操作の説明
-	Err    string // 確定できなかった理由（Hint の代わりに赤で出す）
+	Cursor int      // 文字の位置（rune）
+	Hint   string   // 下に出す操作の説明
+	Err    string   // 確定できなかった理由（Hint の代わりに赤で出す）
+	IME    *IMEView // 日本語入力のとき（Text と Cursor の代わりに、端末の桁を描く。候補は Hint の代わりに出す）
 }
 
 // 欄の配置（論理の画面のドット）
@@ -65,7 +75,8 @@ const (
 	ovMargin  = 8
 	ovPad     = 8
 	ovNoticeH = 12*2 + 2*ovPad + 4 // 倍率 2 の 1 行
-	ovTextS   = 3                  // 入れている文字の倍率
+	ovTextS   = 3                  // 入れている文字の倍率（英数字だけのとき）
+	imeScale  = 2                  // 日本語入力のときの文字の倍率（k8x12 の全角 8 ドットが 16 ドットに）
 	ovInputH  = 2*ovPad + 24 + 6 + 12*ovTextS + 6 + 24
 	ovBorder  = 2
 )
@@ -124,16 +135,31 @@ func drawOverlay(cv *Canvas, o *Overlay) image.Rectangle {
 		cv.fill(in, colOverlay)
 		cv.frame(in, ovBorder, colOverlayBorder)
 		inner := in.Inset(ovPad)
-		cv.text(inner.Min.X, inner.Min.Y, fitText(iv.Title, inner.Dx(), 2), 2, colText, inner)
+		title := iv.Title
+		if iv.IME != nil && iv.IME.Mode != "" {
+			title += "　［" + iv.IME.Mode + "］"
+		}
+		cv.text(inner.Min.X, inner.Min.Y, fitText(title, inner.Dx(), 2), 2, colText, inner)
 		box := image.Rect(inner.Min.X, inner.Min.Y+24+6-4, inner.Max.X, inner.Min.Y+24+6+12*ovTextS+4)
 		cv.fill(box, colInputBox)
 		cv.frame(box, 1, colSub)
-		drawInputText(cv, box.Inset(4), iv)
 		hint, ink := iv.Hint, colSub
+		if iv.IME != nil {
+			drawIMELine(cv, box.Inset(4), iv.IME)
+			if iv.IME.Busy != "" {
+				hint = iv.IME.Busy
+			}
+		} else {
+			drawInputText(cv, box.Inset(4), iv)
+		}
 		if iv.Err != "" {
 			hint, ink = iv.Err, colInkError
 		}
-		cv.text(inner.Min.X, inner.Max.Y-24, fitText(hint, inner.Dx(), 2), 2, ink, inner)
+		if iv.IME != nil && iv.Err == "" && len(iv.IME.Candidates) > 0 {
+			drawIMECells(cv, image.Rect(inner.Min.X, inner.Max.Y-24, inner.Max.X, inner.Max.Y), iv.IME.Candidates, -1)
+		} else {
+			cv.text(inner.Min.X, inner.Max.Y-24, fitText(hint, inner.Dx(), 2), 2, ink, inner)
+		}
 	}
 	return n.Union(in)
 }
@@ -152,6 +178,53 @@ func drawInputText(cv *Canvas, r image.Rectangle, iv *InputView) {
 	cv.text(r.Min.X, r.Min.Y, string(rs[start:end]), ovTextS, colText, r)
 	x := r.Min.X + font.textWidth(string(rs[start:cur]))*ovTextS
 	cv.fill(image.Rect(x, r.Min.Y, min(x+3, r.Max.X), r.Min.Y+12*ovTextS), colCursor)
+}
+
+// imeColsFor は、幅 W の画面で、日本語入力の欄（1 行の端末）に入る桁数。
+func imeColsFor(W int) int {
+	return max((W-2*ovMargin-2*ovPad-2*4)/(4*imeScale), 10)
+}
+
+// drawIMELine は、日本語入力の欄の 1 行（端末の桁）とカーソルを、r の中に倍率 imeScale で描く（縦は真ん中に）。
+func drawIMELine(cv *Canvas, r image.Rectangle, v *IMEView) {
+	y := r.Min.Y + (r.Dy()-12*imeScale)/2
+	row := image.Rect(r.Min.X, y, r.Max.X, y+12*imeScale)
+	drawIMECells(cv, row, v.Line, v.Cursor)
+}
+
+// drawIMECells は、端末の桁を r の左から描く。cursor が 0 以上なら、その桁の左にカーソルを描く。
+// 下線は変換中の文字、反転は選んでいる文節か候補。
+func drawIMECells(cv *Canvas, r image.Rectangle, cells []IMECell, cursor int) {
+	cw := 4 * imeScale
+	x := r.Min.X
+	for i, c := range cells {
+		if c.Width == 0 {
+			continue
+		}
+		w := cw * c.Width
+		if x+w > r.Max.X {
+			break
+		}
+		cell := image.Rect(x, r.Min.Y, x+w, r.Max.Y)
+		fg, bg := colText, colInputBox
+		if c.Reverse { // 選んでいる文節、候補
+			fg, bg = colText, colOverlayBorder
+			cv.fill(cell, bg)
+		}
+		if c.R != ' ' && c.R != 0 {
+			cv.text(x, r.Min.Y, string(c.R), imeScale, fg, cell)
+		}
+		if c.Underline {
+			cv.fill(image.Rect(x, r.Max.Y-imeScale, x+w, r.Max.Y), fg)
+		}
+		if i == cursor {
+			cv.fill(image.Rect(x, r.Min.Y, x+2, r.Max.Y), colCursor)
+		}
+		x += w
+	}
+	if cursor >= len(cells) && cursor >= 0 && x+2 <= r.Max.X {
+		cv.fill(image.Rect(x, r.Min.Y, x+2, r.Max.Y), colCursor)
+	}
 }
 
 // fitText は、倍率 scale で幅 w に入るように後ろを切る（切ったら … を付ける）。
@@ -184,6 +257,14 @@ type Prompt struct {
 	onCommit func(kind, text string) (string, error) // 確定。成功なら知らせる文を返す
 	initial  func(kind string) string                // 開いたときに入れておく文字
 	after    func(time.Duration, func())             // テストで差し替える
+
+	// 日本語入力（ime.go）。nil なら英数字だけ
+	ime      *IME
+	viaIME   bool // 今開いている欄が uim-fep を使っているか
+	width    int  // 画面の幅（欄の桁数を決める）
+	ctrl     int
+	altDown  bool // 文字切り替え（Alt）を押している
+	altAlone bool // 押してから、ほかのキーを押していない（離したら かな/英数 の切り替え）
 }
 
 // NewPrompt は係を作る。show は、重ねて描くものが変わったときに呼ぶ（待たずに返ること）。
@@ -206,6 +287,139 @@ func (p *Prompt) SetShow(f func(*Overlay)) {
 	p.render()
 }
 
+// SetWidth は、画面の論理の幅を設定する（日本語入力の欄の桁数に使う。向きが変わったときも）。
+func (p *Prompt) SetWidth(w int) {
+	p.mu.Lock()
+	p.width = w
+	p.mu.Unlock()
+}
+
+// SetIME は、日本語入力の係を設定する。
+func (p *Prompt) SetIME(m *IME) {
+	if p == nil || m == nil {
+		return
+	}
+	p.mu.Lock()
+	p.ime = m
+	p.mu.Unlock()
+	m.SetHandlers(p.imeResult, p.render)
+}
+
+func (p *Prompt) imeCols() int {
+	w := p.width
+	if w == 0 {
+		w = 800
+	}
+	return imeColsFor(w)
+}
+
+// openIMELocked は、欄を uim-fep で開く。使えなければ false（英数字だけの欄にする）。p.mu を持って呼ぶ
+func (p *Prompt) openIMELocked(kind, initial string) bool {
+	if p.ime == nil {
+		return false
+	}
+	ok := p.ime.Open(p.imeCols(), initial, kind == inputClock)
+	p.viaIME = ok
+	if ok {
+		p.text, p.cur = nil, 0
+	}
+	return ok
+}
+
+// imeResult は、uim-fep の欄の結果（ok：確定した文字。でなければやめた。text があればエラー）。
+func (p *Prompt) imeResult(ok bool, text string) {
+	p.mu.Lock()
+	if p.kind == "" || !p.viaIME {
+		p.mu.Unlock()
+		return
+	}
+	kind := p.kind
+	switch {
+	case ok:
+		p.mu.Unlock()
+		if err := p.commit(kind, text); err != nil {
+			p.mu.Lock()
+			if p.kind == kind {
+				p.err = err.Error()
+				if !p.openIMELocked(kind, text) { // 直せるように、同じ文字で開き直す
+					p.text, p.cur = []rune(text), len([]rune(text))
+				}
+			}
+			p.mu.Unlock()
+			p.render()
+		}
+		return
+	case text != "":
+		// uim-fep が止まった：英数字だけの欄にして続ける
+		p.viaIME = false
+		p.text, p.cur, p.err = nil, 0, ""
+		p.mu.Unlock()
+		p.Notify(text, noticeWarn)
+		return
+	default:
+		p.kind, p.viaIME = "", false
+	}
+	p.mu.Unlock()
+	p.render()
+}
+
+// commit は確定する。成功なら欄を閉じて知らせる。
+func (p *Prompt) commit(kind, text string) error {
+	p.mu.Lock()
+	f := p.onCommit
+	p.mu.Unlock()
+	if f == nil {
+		return nil
+	}
+	msg, err := f(kind, text)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	if p.kind == kind {
+		p.kind, p.viaIME = "", false
+	}
+	p.mu.Unlock()
+	if msg != "" {
+		p.Notify(msg, noticeInfo) // render も行う
+	} else {
+		p.render()
+	}
+	return nil
+}
+
+// imeKeyLocked は、uim-fep の欄での本体キー（端末モードと同じバイト列にして送る）。p.mu を持って呼ぶ。
+// 欄をやめる（戻る）のも uim-fep に送り、結果（cancel）が imeResult に届いたときに閉じる。
+func (p *Prompt) imeKeyLocked(code evdev.EvCode, value int32) {
+	switch code {
+	case evdev.KEY_LEFTCTRL, evdev.KEY_RIGHTCTRL:
+		p.ctrl = max(p.ctrl+map[int32]int{1: 1, 0: -1}[value], 0)
+		return
+	case evdev.KEY_LEFTALT, evdev.KEY_RIGHTALT:
+		switch value {
+		case 1:
+			p.altDown, p.altAlone = true, true
+		case 0:
+			if p.altDown && p.altAlone {
+				p.ime.Send([]byte{imeKeyToggle}) // 文字切り替えを 1 回：かな/英数
+			}
+			p.altDown, p.altAlone = false, false
+		}
+		return
+	}
+	if value == 0 {
+		return
+	}
+	p.altAlone = false
+	if code == evdev.KEY_ESC {
+		p.ime.Cancel() // 変換中なら変換をやめる。でなければ欄をやめる（結果は imeResult に届く）
+		return
+	}
+	if b := keyBytes(code, p.shift > 0, p.ctrl > 0, false, false); len(b) > 0 {
+		p.ime.Send(b)
+	}
+}
+
 // Active は、欄が開いているか。
 func (p *Prompt) Active() bool {
 	if p == nil {
@@ -222,10 +436,17 @@ func (p *Prompt) Open(kind string) {
 		return
 	}
 	p.mu.Lock()
-	p.kind, p.err, p.shift = kind, "", 0
+	if p.kind != "" && p.viaIME {
+		p.ime.Close() // ほかの欄に切り替える：uim-fep の行を消す
+	}
+	p.kind, p.err, p.shift, p.ctrl, p.altDown = kind, "", 0, 0, false
 	p.text = nil
+	initial := ""
 	if p.initial != nil {
-		p.text = []rune(p.initial(kind))
+		initial = p.initial(kind)
+	}
+	if !p.openIMELocked(kind, initial) {
+		p.text = []rune(initial)
 	}
 	p.cur = len(p.text)
 	p.mu.Unlock()
@@ -238,7 +459,10 @@ func (p *Prompt) Close() {
 		return
 	}
 	p.mu.Lock()
-	p.kind = ""
+	if p.kind != "" && p.viaIME {
+		p.ime.Close()
+	}
+	p.kind, p.viaIME = "", false
 	p.mu.Unlock()
 	p.render()
 }
@@ -301,12 +525,21 @@ func (p *Prompt) overlayLocked() *Overlay {
 	o := &Overlay{Notice: p.notice, Level: p.level}
 	if p.kind != "" {
 		o.Input = &InputView{Title: inputTitle[p.kind], Text: string(p.text), Cursor: p.cur, Hint: inputHint[p.kind], Err: p.err}
+		if p.viaIME {
+			o.Input.Title, o.Input.Hint = inputTitleIME[p.kind], inputHintIME[p.kind]
+			o.Input.IME = p.ime.View()
+			if o.Input.IME == nil {
+				o.Input.IME = &IMEView{Busy: "日本語入力を準備しています…"}
+			}
+		}
 	}
 	return o
 }
 
 var inputTitle = map[string]string{inputTodo: "Todo を足す（英数字と記号）", inputClock: "時刻を合わせる（年-月-日 時:分）"}
 var inputHint = map[string]string{inputTodo: "決定：足す　戻る：やめる　後退：1 字消す", inputClock: "決定：合わせる　戻る：やめる　例 2026-10-10 09:41"}
+var inputTitleIME = map[string]string{inputTodo: "Todo を足す", inputClock: "時刻を合わせる（年-月-日 時:分）"}
+var inputHintIME = map[string]string{inputTodo: "決定：足す　戻る：やめる　文字切り替え：かな/英数　スペース：変換", inputClock: "決定：合わせる　戻る：やめる　例 2026-10-10 09:41"}
 
 func (p *Prompt) render() {
 	p.mu.Lock()
@@ -330,6 +563,11 @@ func (p *Prompt) Key(code evdev.EvCode, value int32) {
 	switch code {
 	case evdev.KEY_LEFTSHIFT, evdev.KEY_RIGHTSHIFT:
 		p.shift = max(p.shift+map[int32]int{1: 1, 0: -1}[value], 0)
+		p.mu.Unlock()
+		return
+	}
+	if p.viaIME {
+		p.imeKeyLocked(code, value)
 		p.mu.Unlock()
 		return
 	}
@@ -376,19 +614,14 @@ func (p *Prompt) Key(code evdev.EvCode, value int32) {
 		p.cur++
 	}
 	p.err = ""
-	kind, text, f := p.kind, string(p.text), p.onCommit
+	kind, text := p.kind, string(p.text)
 	p.mu.Unlock()
-	if commit && f != nil {
-		msg, err := f(kind, text)
-		p.mu.Lock()
-		if err != nil {
+	if commit {
+		if err := p.commit(kind, text); err != nil {
+			p.mu.Lock()
 			p.err = err.Error()
-		} else if p.kind == kind {
-			p.kind = ""
-		}
-		p.mu.Unlock()
-		if err == nil && msg != "" {
-			p.Notify(msg, noticeInfo) // render も行う
+			p.mu.Unlock()
+		} else {
 			return
 		}
 	}
