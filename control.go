@@ -188,6 +188,11 @@ type request struct {
 	OK      *bool      `json:"ok,omitempty"`
 	Summary string     `json:"summary,omitempty"`
 	Steps   []SyncStep `json:"steps,omitempty"`
+	// バックアップと復元（backup.go）
+	Backup  string          `json:"backup,omitempty"`  // backup_read、backup_done：backup_create が返した名前
+	Restore string          `json:"restore,omitempty"` // restore_apply：upload_end（kind: backup）が返した名前
+	Undo    bool            `json:"undo,omitempty"`    // restore_apply：復元の前の状態に戻す
+	Items   *RestoreOptions `json:"items,omitempty"`   // restore_apply：戻すもの（省略するとすべて）
 }
 
 type response struct {
@@ -436,6 +441,7 @@ func (m *Monitor) LayerChanged(st EngineStatus) {
 // Controller は設定 GUI からのリクエストを処理する。
 type Controller struct {
 	store   *configStore
+	backup  *BackupService
 	profile *ProfileService
 	engine  *Engine
 	monitor *Monitor
@@ -505,7 +511,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
 				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync", "list_files", "get_file", "delete_file", "calibrate",
 				"get_overrides", "set_override", "clear_overrides",
-				"set_pc", "get_profile", "set_profile"},
+				"backup_create", "backup_read", "backup_done", "restore_apply", "set_pc", "get_profile", "set_profile"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -558,7 +564,9 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "usb_state": USBState()},
 			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(), "sync": c.sync.Info(),
 			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "ime": c.ime.Info(), "overrides": c.store.Overrides(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()},
-			"profile": c.profileInfo()})
+			"profile": c.profileInfo(), "backup": c.backup.Info()})
+	case "backup_create", "backup_read", "backup_done", "restore_apply":
+		return c.backupCmd(id, req)
 	case "set_pc", "get_profile", "set_profile":
 		return c.profileCmd(id, req)
 	case "set_terminal":
@@ -698,6 +706,44 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 }
 
 // overrides は get_overrides、set_override、clear_overrides を処理する（overrides.go）。
+// backupCmd は、バックアップと復元（backup.go）。
+func (c *Controller) backupCmd(id json.RawMessage, req request) response {
+	if c.backup == nil {
+		return errResp(id, errInternal, "backup is not available (no -data-dir)", nil)
+	}
+	var res any
+	var err error
+	switch req.Cmd {
+	case "backup_create":
+		res, err = c.backup.Create()
+	case "backup_read":
+		var off int64
+		if req.Offset != nil {
+			off = *req.Offset
+		}
+		res, err = c.backup.Read(req.Backup, off, req.Length)
+	case "backup_done":
+		res = map[string]any{"removed": c.backup.Done(req.Backup)}
+	case "restore_apply":
+		opt := RestoreOptions{Config: true, Data: true, Anthy: true}
+		if req.Items != nil {
+			opt = *req.Items
+		}
+		if !req.Undo && req.Restore == "" {
+			return errResp(id, errBadRequest, `restore_apply needs "restore" (from upload_end) or "undo": true`, nil)
+		}
+		var p *updatePlan
+		var sum BackupSummary
+		if p, sum, err = c.backup.Apply(req.Restore, req.Undo, opt); err == nil {
+			res = map[string]any{"stage": p.Stage, "action": p.Action, "helper": updateHelperUnit, "summary": sum, "items": opt}
+		}
+	}
+	if err != nil {
+		return c.updateErr(id, err)
+	}
+	return response{ID: id, OK: true, Result: res}
+}
+
 // profileInfo は、今の PC ごとの設定（get_status、get_profile）。
 func (c *Controller) profileInfo() ProfileInfo {
 	in := c.profile.Info(c.store.File())

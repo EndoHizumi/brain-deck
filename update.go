@@ -635,6 +635,8 @@ type updatePlan struct {
 	HIDMouse  bool   `json:"hid_mouse"`
 	ReadyFile string `json:"ready_file"`
 	Config    string `json:"config,omitempty"` // restart：起動しなければ、この設定を .prev に戻す（put_config_text で再起動するとき）
+	// Restore は、restore：デーモンを止めているあいだに入れ替えるバックアップ（backup.go）
+	Restore *restorePlan `json:"restore,omitempty"`
 }
 
 // Apply は、確かめ終えた更新の入れ替えを、係に始めさせる。
@@ -684,6 +686,23 @@ func (u *Updater) Restart(rebind bool, config string) (*updatePlan, error) {
 		From: daemonVersion(), Rebind: rebind, HIDMouse: u.usb.Mouse(), ReadyFile: u.ReadyFile, Config: config}
 	if err := u.start(p); err != nil {
 		os.RemoveAll(filepath.Join(u.Dir, stage))
+		return nil, err
+	}
+	return p, nil
+}
+
+// startRestore は、バックアップの復元（stage に置いたもの）を、係に始めさせる。PC からの update_confirm を待ち、
+// 新しいデーモンが起動しなければ、入れ替えたものを元に戻す。
+func (u *Updater) startRestore(stage string, rp *restorePlan) (*updatePlan, error) {
+	if err := u.canChange(); err != nil {
+		return nil, err
+	}
+	u.mu.Lock()
+	u.clearStagesLocked(stage)
+	u.mu.Unlock()
+	p := &updatePlan{Stage: stage, Action: "restore", Dir: u.Dir, Unit: u.Unit, Bin: u.Bin, Gadget: u.Gadget,
+		From: daemonVersion(), Confirm: true, HIDMouse: u.usb.Mouse(), ReadyFile: u.ReadyFile, Restore: rp}
+	if err := u.start(p); err != nil {
 		return nil, err
 	}
 	return p, nil

@@ -77,6 +77,9 @@ func (h *helper) run() bool {
 	os.Remove(p.ReadyFile) // 前のデーモンの知らせと取り違えない
 
 	// 入れ替える
+	if p.Action == "restore" {
+		return h.restore(stage)
+	}
 	var done []installed
 	rebind := p.Rebind
 	if p.Action != "restart" {
@@ -117,6 +120,35 @@ func (h *helper) run() bool {
 		h.undo(done, gadgetChanged)
 		return h.finish(false, "rolled_back", err.Error())
 	}
+	return h.finish(true, "done", "")
+}
+
+// restore は、バックアップを入れ替えて起動し直す。起動しなければ（PC がつなぎ直せなければ）、元に戻して起動し直す。
+func (h *helper) restore(stage string) bool {
+	rp := h.p.Restore
+	if rp == nil {
+		h.sys.systemctl("start", h.p.Unit)
+		return h.finish(false, "failed", "the plan has no restore section")
+	}
+	h.phase("restoring", restoreItemsLabel(rp.RestoreOptions))
+	u, err := applyRestore(*rp)
+	if err != nil {
+		h.sys.systemctl("start", h.p.Unit)
+		return h.finish(false, "rolled_back", "restoring: "+err.Error())
+	}
+	if err := h.startAndWait(stage); err != nil {
+		h.phase("rolling_back", "")
+		h.sys.systemctl("stop", h.p.Unit)
+		msg := err.Error()
+		if uerr := u.undo(); uerr != nil {
+			msg += "; undoing the restore also failed: " + uerr.Error()
+		}
+		if _, err := h.sys.systemctl("start", h.p.Unit); err != nil {
+			h.logf("update-apply: starting %s after undoing the restore: %v", h.p.Unit, err)
+		}
+		return h.finish(false, "rolled_back", msg)
+	}
+	u.finish()
 	return h.finish(true, "done", "")
 }
 

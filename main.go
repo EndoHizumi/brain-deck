@@ -1761,6 +1761,13 @@ func main() {
 		ime.ConfigChanged()
 	}, onOverrides: settingsUI.Changed}
 	profiles.SetOnChange(cstore.Reprofile)
+	// バックアップと復元（backup.go）。復元は更新の係が行う（あとで決める）
+	backups := NewBackupService(*dataDir, cfgPath)
+	backups.store = cstore
+	backups.flush = func() { todos.Flush(); memos.Flush(); reads.FlushState() }
+	backups.anthy = func() string { return anthyDirOf(ime.userName()) }
+	backups.profile = cstore.Profile
+	backups.stopIME = ime.Stop
 	settingsUI.SetDeps(func(d *SettingsDeps) {
 		d.Store = cstore
 		d.Profile = func() ProfileInfo {
@@ -1784,6 +1791,7 @@ func main() {
 	if *serialPath != "" {
 		ctl := &Controller{
 			store:   cstore,
+			backup:  backups,
 			profile: profiles,
 			lid:     lid,
 			ime:     ime,
@@ -1819,6 +1827,7 @@ func main() {
 		}
 		upd := NewUpdater(*dataDir, *updateBin, *updateGadget, *unitName, cfgPath, imagesDir, *readyFile, usb, term)
 		ctl.updater = upd
+		backups.updater = upd
 		if upd.Unit != "" {
 			powerOff = func() error { return upd.Power("poweroff") }
 			settingsUI.SetDeps(func(d *SettingsDeps) { d.Power = upd.Power })
@@ -1838,6 +1847,7 @@ func main() {
 		}
 		ctl.uploads.Register("read", rk)
 		ctl.uploads.Register("file", files.UploadKind(filepath.Join(*dataDir, "files-tmp")))
+		ctl.uploads.Register("backup", backups.UploadKind())
 		ctl.uploads.Register(iconUploadKnd, icons.UploadKind())
 		icons.SetWanted(ctl.iconBoxes) // 上限を超えたら、今の設定で使わない大きさのアイコンから消す
 		if upd.Unit == "" {
