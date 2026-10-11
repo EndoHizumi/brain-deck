@@ -124,6 +124,12 @@ func runSync(o *options, stdout, stderr io.Writer) int {
 		}
 	}
 	recent := false
+	on := func(p *bool, def bool) bool {
+		if p == nil {
+			return def
+		}
+		return *p
+	}
 	// 始めたことを Brain に知らせる（古いデーモンなら飛ばす）
 	if code := connectAndRun(o, io.Discard, stderr, func(c *Client) (string, error) {
 		if older > 0 {
@@ -142,6 +148,12 @@ func runSync(o *options, stdout, stderr io.Writer) int {
 			json.Unmarshal(raw, &st)
 			if st.Sync.Running || st.Sync.Last != nil && time.Since(st.Sync.Last.At) < older {
 				recent = true
+				// 同期は飛ばしても、PC の名前は知らせる（USB を付け直したあと名乗らないと、Brain は既定の設定に戻すので）
+				if on(cfg.Profile, true) && c.Hello.has("set_pc") {
+					if name, err := pcName(cfg); err == nil {
+						announcePC(c, name)
+					}
+				}
 				return "", nil
 			}
 		}
@@ -158,12 +170,6 @@ func runSync(o *options, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "Brain は %v のうちに同期しているので、何もしません（--if-older）\n", older)
 		}
 		return exitOK
-	}
-	on := func(p *bool, def bool) bool {
-		if p == nil {
-			return def
-		}
-		return *p
 	}
 	var steps []syncStep
 	sub := func(name string, args ...string) {

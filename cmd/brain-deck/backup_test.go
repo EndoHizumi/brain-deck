@@ -57,6 +57,7 @@ type fakeBackups struct {
 	profile   string
 	manual    string
 	backupCmd bool // backup_create に対応している
+	lastSync  string
 }
 
 func (b *fakeBackups) handle(req map[string]any) (any, bool) {
@@ -105,6 +106,10 @@ func (b *fakeBackups) handle(req map[string]any) (any, bool) {
 		return b.profileInfo(), true
 	case "get_profile":
 		return b.profileInfo(), true
+	case "get_status":
+		if b.lastSync != "" {
+			return map[string]any{"sync": map[string]any{"running": false, "last": map[string]any{"at": b.lastSync}}}, true
+		}
 	}
 	return b.fakeUpdater.handle(req)
 }
@@ -286,5 +291,17 @@ func TestProfileAgainstFakeBrain(t *testing.T) {
 	}
 	if code, _, _ := runCLI(t, "--port", f.slave, "profile", "use"); code != exitUsage {
 		t.Fatal("usage")
+	}
+}
+
+// sync --if-older で同期を飛ばすときも、PC の名前は知らせる（USB を付け直したあとに既定に戻らないように）。
+func TestSyncIfOlderStillAnnounces(t *testing.T) {
+	f, b := newBackupFake(t)
+	os.MkdirAll(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "brain-deck"), 0o755)
+	os.WriteFile(syncPath(), []byte("pc_name: macbook\n"), 0o644)
+	b.lastSync = time.Now().Add(-time.Minute).Format(time.RFC3339)
+	code, out, errs := runCLI(t, "--port", f.slave, "sync", "--if-older", "10m")
+	if code != exitOK || !strings.Contains(out, "何もしません") || b.pcName != "macbook" {
+		t.Fatalf("%d %q %q pc %q", code, out, errs, b.pcName)
 	}
 }

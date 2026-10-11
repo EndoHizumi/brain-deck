@@ -1780,7 +1780,7 @@ brain-deck sync --if-older 10m     # Brain が 10 分のうちに同期してい
 
 | 順 | すること | 既定 |
 | --- | --- | --- |
-| 0 | PC の名前を知らせる（`profile announce`。[PC ごとの設定](#pc-ごとの設定profiles)）。名前は `sync.yaml` の `pc_name`、なければホスト名（最初の `.` まで） | する（`profile: false` で知らせない） |
+| 0 | PC の名前を知らせる（`profile announce`。[PC ごとの設定](#pc-ごとの設定profiles)）。名前は `sync.yaml` の `pc_name`、なければホスト名（最初の `.` まで）。`--if-older` で同期を飛ばすときも、これだけは行う（USB を付け直したあと名乗らないと、Brain は 60 秒で既定の設定に戻すので） | する（`profile: false` で知らせない） |
 | 1 | 時刻を合わせる（`time sync`）。内蔵 RTC にも書き戻す（`clock.rtc: write`）。**書き戻す前の RTC と PC の差**を出し、Brain に記録する | する |
 | 2 | 予定（`calendar sync`） | `~/.config/brain-deck/calendars.yaml` があれば |
 | 3 | 天気（`weather sync`） | `weather.yaml` があれば |
