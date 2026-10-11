@@ -28,6 +28,8 @@ battery: { ... }            # 電池が少ないときの知らせと電源断�
 clock: { ... }              # 内蔵 RTC の使い方。省略すると読むだけ（下の「時刻と内蔵 RTC（clock）」）
 lid: { ... }                # ふたを閉じたときの動き。省略すると画面を消す（下の「ふた（lid）」）
 ime: { ... }                # 日本語の入力（uim-fep）。省略すると、入っていれば使う（下の「日本語の入力（ime）」）
+start_layer: home           # 起動と設定の反映で開くレイヤー。省略すると home.start のとおり（下の「PC ごとの設定（profiles）」）
+profiles: [ ... ]           # PC ごとの設定。省略すると使わない（下の「PC ごとの設定（profiles）」）
 ```
 
 | 項目 | 型 | 内容 |
@@ -45,6 +47,9 @@ ime: { ... }                # 日本語の入力（uim-fep）。省略すると�
 | battery | オブジェクト | warn、critical、poweroff、log、curve。下の「電池（battery）」 |
 | clock | オブジェクト | rtc（read、write、off）。下の「時刻と内蔵 RTC（clock）」 |
 | lid | オブジェクト | close（off、none）、tablet_keys（off、on）。下の「ふた（lid）」 |
+| ime | オブジェクト | method、user、idle、terminal、start。下の「日本語の入力（ime）」 |
+| start_layer | 文字列 | 起動したときと、設定を反映したとき（とプロファイルが変わったとき）に開くレイヤーの名前（`home` はホーム画面）。下の「PC ごとの設定（profiles）」 |
+| profiles | 配列 | PC ごとの設定。下の「PC ごとの設定（profiles）」 |
 
 設定ファイルの値のうち、明るさ、暗くなるまでの時間、フォトフレーム、ふたを閉じたときの動き、タブレットの形の本体キー、日本語入力の方式は、Brain の設定のアプリ（`widget: settings`）で変えられる。変えた値は設定ファイルを書き換えず、`/var/lib/lefthand/overrides.json` に「上書き」として置き、設定ファイルの値の代わりに使う（下の「上書きの値（overrides.json）」）。
 
@@ -687,6 +692,7 @@ Brain だけで、よく変える設定を変える画面（`settingswidget.go`�
 | 2 | 読み物の文字 | ふつう（24）、大きい（32） | Brain の状態（読み物のしおりと同じ `reader/`。ヘルプも同じ大きさ） |
 | 2 | ふたを閉じたとき | 画面を消す、何もしない | 上書き `lid.close` |
 | 2 | タブレットの形の本体キー | 使わない、使う | 上書き `lid.tablet_keys` |
+| 2 | PC ごとの設定 | 自動（PC の名前で選ぶ）、既定（使わない）、設定にあるプロファイル | Brain の状態（`profile.json`。`brain-deck profile use` と同じ。下の「PC ごとの設定（profiles）」） |
 | 2 | 時刻合わせ | 画面の下の入力欄を開く（`{input: clock}` と同じ） | システムの時計と内蔵 RTC |
 | 2 | 設定ファイルの値に戻す | 上書きをすべて消す（聞いてから） | |
 
@@ -1258,6 +1264,45 @@ ime:
 - **Brain のシェル**（`terminal: true`）：`/bin/login -p` に `BRAIN_IME=<method>` と `LIBUIM_USER_SCM_FILE` を渡し、`/etc/profile.d/lefthand-ime.sh`（install.sh が置く。`contrib/brain/lefthand-ime.sh`）が、ログインしたシェルを `uim-fep -u <method> -s lastline` の中で開き直す。ssh やコンソールからのログインでは何もしない。
 - **入っている方式**：`/usr/share/uim/installed-modules.scm` の `installed-im-list`。Brain の設定のアプリ（「日本語入力」の行）で、使わない・自動・入っている方式から選べる（上書き `ime.method`）。`brain-deck status` の「日本語入力」、プロトコルの `get_status` の `ime`。
 
+## PC ごとの設定（profiles）
+
+PC の brain-deck が名乗った名前（`brain-deck sync` の最初、`brain-deck profile announce`。プロトコルの `set_pc`）で、設定ファイルの値に重ねる内容を選ぶ（`profile.go`）。知らない PC、名乗らない PC は既定（設定ファイルのとおり）。
+
+```yaml
+start_layer: home               # 起動と設定の反映で開くレイヤー（プロファイルで変えられる）
+profiles:
+  - name: mac                   # 名前（英数字と _ . -。none と auto は使えない）
+    label: Mac                  # 画面に出す名前（省略すると name）
+    pcs: [macbook-air, imac]    # この名前の PC で使う（大文字と小文字は区別しない。省略すると name と同じ名前の PC）
+    start_layer: code           # この PC のときに開くレイヤー
+    modifiers: { ctrl: gui, gui: ctrl }   # 割り当ての修飾キーを入れ替える（ctrl、shift、alt、gui。左右はそのまま）
+    home: { apps: [ ... ] }     # ホーム画面を差し替える（home を丸ごと。書き方は「ホーム画面（home）」）
+    layers:                     # 今のレイヤーに重ねる（name で選ぶ。新しいレイヤーは作れない）
+      - name: base
+        keys: { KEY_Q: LGUI+Q } # 書いたキーだけ差し替える
+        soft_keys: { menu: { layer_to: code } }
+        touch:                  # cols か rows を書くと格子ごと差し替え、書かなければセルだけ重ねる
+          cells: { "1,0": { key: LGUI+C, label: コピー } }
+        touch_portrait: { cells: { ... } }
+        label: 基本（Mac）
+        status_bar: true
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| name | プロファイルの名前。`brain-deck profile use <名前>` で使う。同じ名前は書けない |
+| label | 設定のアプリと brain-deck に出す名前 |
+| pcs | このプロファイルを使う PC の名前の一覧。1 つの PC の名前を 2 つのプロファイルには書けない |
+| start_layer | 最初に開くレイヤー（トップレベルの `start_layer` の代わり） |
+| modifiers | 割り当てのキー（`key: LCTRL+C` など。ウィジェットのセルの `key` も）の修飾キーの名前を入れ替える。`{ctrl: gui, gui: ctrl}` で Ctrl と Cmd（Windows キー）を入れ替える。テキストの入力やマウスは変えない |
+| home | ホーム画面を差し替える |
+| layers | レイヤーごとの重ね書き（keys、soft_keys、touch、touch_portrait、label、status_bar） |
+
+- **重ねる順**：設定ファイルの値 → プロファイル → 上書きの値（overrides.json）。`get_config`（設定 GUI、`brain-deck config get`）は設定ファイルの値のまま。
+- **選び方**：手で選んだもの（`set_profile`、設定のアプリ）があれば、それ。なければ、最後に名乗った PC の名前が `pcs` にあるもの。どちらもなければ既定。手で選んだものは、別の名前の PC が名乗るとやめる（`auto` でもやめる）。USB を抜いてつなぎ直したあと 60 秒名乗らなければ、名乗らない PC とみなす（スリープからの復帰と、USB の形の切り替えでは待たない）。
+- **反映**：使うプロファイルが変わったときだけ、割り当てごと反映し直す（押しているキーは離し、`start_layer` を開く）。設定ファイルを入れ直したとき（`config put`、設定 GUI の保存）も、プロファイルを重ね直す。状態は `/var/lib/lefthand/profile.json`（バックアップに入る）。
+- **検証**：プロファイルを重ねた設定もそれぞれ確かめる。誤りは `/profiles/<番号>` に「profile "mac": …」の形で出る（重ねた先のレイヤーがない、キーの名前が違うなど）。
+
 ## 上書きの値（overrides.json）
 
 Brain の設定のアプリで変えた値は、設定ファイルを書き換えず、`/var/lib/lefthand/overrides.json` に置く（`overrides.go`）。コメント付きの設定ファイルを壊さないため。デーモンは、設定ファイルを読んだあとに上書きを重ねて使う。
@@ -1269,6 +1314,7 @@ Brain の設定のアプリで変えた値は、設定ファイルを書き換�
 | `backlight.offline.dim_after` | 5s〜24h か off | `backlight.offline.dim_after` |
 | `backlight.photo` | true か false | `backlight.photo`（と、書いていれば `backlight.offline.photo`） |
 | `lid.close` | off か none | `lid.close` |
+| `lid.tablet_keys` | off か on | `lid.tablet_keys` |
 | `ime.method` | auto、off、方式の名前 | `ime.method` |
 
 - **設定ファイルを変えても残る**：設定 GUI の保存、`brain-deck config put` は設定ファイルだけを書き換え、上書きはそのまま重ねる。設定 GUI と `get_config` が返すのは設定ファイルの値（上書きを重ねる前）で、上書きは別に返す。

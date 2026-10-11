@@ -179,6 +179,8 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 
 `lid` はふた（`lid.go`）：`{"closed":false,"tablet":false,"tablet_keys":"off","keys_off":false,"close":"off","since":"…"}`。`closed` はふたが閉じている、`tablet` は画面を裏返したタブレットの形、`tablet_keys` はタブレットの形のときに本体のキーを使うか（設定の `lid.tablet_keys`、上書き）、`keys_off` は今、本体のキーを使っていない（タブレットの形で `tablet_keys` が `off`）、`close` は閉じたときの動き（設定の `lid.close`、上書き）、`screen` は閉じて画面を消しているとき `off`。`overrides` は上書きの値（`get_overrides` と同じ）。`backlight.lid` は、ふたが閉じていて画面を消している。どれもなければ、フェーズ K1 より前の版。
 
+`profile` は PC ごとの設定（下の「PC ごとの設定」の結果と同じ）、`backup` はバックアップの状態（下の「バックアップと復元」）。どれもなければ、フェーズ K3 より前の版。
+
 `ime` は日本語の入力（`ime.go`。設定の `ime`）：`{"method":"anthy-utf8","setting":"auto","installed":["anthy-utf8"],"uim_fep":true,"running":false,"terminal":true}`。`method` は使う入力方式（空なら使わない）、`setting` は設定の値（上書きを重ねたもの）、`installed` は uim に登録されている方式、`uim_fep` は uim-fep が入っているか、`running` は uim-fep が動いているか、`terminal` は Brain のシェルでも使うか、`error` は最後に起動できなかった理由。この項目がなければ、フェーズ K2 より前の版。
 
 `link` は PC とのつながり（`link.go`）。この項目がなければ、フェーズ P2 より前の版。
@@ -682,6 +684,7 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 | `image` | 768,008 バイト | `{"id":"<画像の id>"}`。`image_begin` と違い、幅と高さは受け取ったファイルのヘッダから読む。合計の上限と SD カードの空きは同じ |
 | `photo` | 768,008 バイト | `{"id":"<写真の id>","count":3,"max":10}`。800×480 か 480×800 の LHI1 だけ。`upload_begin` に `"of":"<横向きの写真の id>"` を付けると、その写真を縦向きに切り抜き直したもの（480×800 だけ）。枚数が `photo.max` に達していれば `quota_exceeded`、SD カードの空きが足りなければ `no_space`（同じ写真は数えない） |
 | `read` | 8 MiB | `{"id":"<読み物の id>","title":"…","chars":3127}`。gzip した読み物の JSON（下の「読み物」）。確かめて断るものは `bad_request`、合計が 32 MiB を超えるときは `quota_exceeded`、SD カードの空きが足りなければ `no_space` |
+| `backup` | 192 MiB | `{"restore":"<名前>","summary":{…}}`。復元するバックアップ（下の「バックアップと復元」）。確かめて断るものは `update_rejected` |
 | `weather_icon` | 460,808 バイト | `{"name":"101-87x58","w":77,"h":58,"bytes":13406}`（消したものがあれば `removed`）。`name` は `<番号>-<幅>x<高さ>`（箱の大きさ）。形は上の `get_weather_icon` の `.lha` |
 
 - **順番**：`offset` は、それまでに受け取った大きさと同じでなければ `bad_request`（受け取りは続く）。言った大きさを超えたら捨てる。
@@ -808,6 +811,49 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 - `get_status` の `sync`：`{"running":false,"last":{…}}`。最後の結果は `sync.json` に残る。`done` が 10 分来なければ「同期中」をやめる。
 - `set_time` の結果の `rtc`：書き戻す前の内蔵 RTC と送られた時刻の差 `{"at":…,"offset_ms":-1500,"since_write_sec":172800,"source":"brain-deck"}`（RTC を読めるときだけ）と、`rtc_write`（書き戻すか）。`get_status` の `rtc.log` に新しい 30 回。
 
+## バックアップと復元（backup_create、backup_read、backup_done、restore_apply）
+
+設定ファイル、データ、日本語入力の学習を 1 つの tar.gz にして渡す・戻す（`backup.go`。README の「バックアップと復元、PC ごとの設定」）。
+
+```json
+→ {"id":1,"cmd":"backup_create"}
+← {"id":1,"ok":true,"result":{"backup":"48172d7160aa","bytes":1246179,"sha256":"…","chunk_bytes":98304,"name":"brain-20261012-011038.tar.gz",
+   "summary":{"created":"2026-10-11T16:10:38Z","version":"…","host":"brain","profile":"mac","config":true,"anthy":1,"bytes":2621440,
+     "items":[{"name":"todo.json","label":"Todo","files":1,"bytes":1501},{"name":"memo","label":"手書きメモ","files":0,"bytes":0},…]}}}
+→ {"id":2,"cmd":"backup_read","backup":"48172d7160aa","offset":0}
+← {"id":2,"ok":true,"result":{"backup":"48172d7160aa","offset":0,"total":1246179,"data":"H4sIAAAA…"}}
+→ {"id":3,"cmd":"backup_done","backup":"48172d7160aa"}
+← {"id":3,"ok":true,"result":{"removed":true}}
+   …（upload_* の kind: backup で送る）
+← {"id":9,"ok":true,"result":{"restore":"5d1c0e2a9b33","summary":{…,"problems":[]}}}
+→ {"id":10,"cmd":"restore_apply","restore":"5d1c0e2a9b33","items":{"config":true,"data":true,"anthy":true}}
+← {"id":10,"ok":true,"result":{"stage":"3b02fa1587bc","action":"restore","helper":"lefthand-update","summary":{…},"items":{…}}}
+→ {"id":11,"cmd":"restore_apply","undo":true,"items":{"config":true,"data":true,"anthy":true}}
+```
+
+- **backup_create**：`<data-dir>/backup/.out-<名前>.tar.gz` に作る（gzip は速さ優先）。作るあいだ返事を待たせる（2.5 MB のデータで 4 秒ほど）。まだ書いていない Todo、メモの線、しおりを先に書く。前に作ったものは消す。SD カードの空きが足りなければ `no_space`。
+- **backup_read**：96 KiB ずつ base64（`length` で小さくできる）。`total` までくり返す。`backup_done` か、10 分読まなければ消える。違う名前は `not_found`。
+- **ファイルの形**：`config/config.yaml`、`data/<名前>`（`todo.json`、`widgets.json`、`calc.json`、`display.json`、`overrides.json`、`touch-cal.json`、`profile.json`、`memo/…`、`reader/…`、`photos/…`、`images/…`）、`anthy/<名前>`、最後に `manifest.json`（`format`、`kind: brain-deck-backup`、`created`、`version`、`host`、`profile`、`files`（`path`、`bytes`、`sha256`））。
+- **受け取り**（kind: backup）：gzip と tar、名前（上のものだけ。`..`、`/` で始まる、`.` で始まる名前は断る）、manifest.json と中身の大きさと SHA-256、`.json` が JSON か、を確かめる。形の版が新しすぎれば断る。設定ファイルが今のデーモンで使えなければ `summary.problems` に書く（そのときは `items.config: false` でなければ restore_apply を断る）。確かめたものは 1 つだけ置く。
+- **restore_apply**：今の状態を `<data-dir>/backup/before-restore.tar.gz` に作り直してから、係（`lefthand-update`）を起動して返事をする。係は lefthand を止め、`<data-dir>/backup/.restore-new` に展開し、データの置き場所の上のものを入れ替え（前のものは `.restore-old` へ。バックアップにないものも動かす）、設定ファイルを書き（前の版は `.prev`）、学習を `ime.user` の `~/.anthy` に user の持ち物で書く。起動、`-ready-file`、`update_confirm` を `update_*` と同じに待ち、満たされなければ元に戻して起動し直す（`rolled_back`）。`.restore-old` が残っていれば（途中で止まった復元）、断る。`undo: true` は before-restore.tar.gz を戻す（戻す前に、今の状態を before-restore.tar.gz に作り直す）。`items` を省略するとすべて戻す。
+- **get_status の backup**：`{"items":[…],"before_restore":{"at":"…","bytes":…}}`（before_restore は、あるときだけ）。
+
+## PC ごとの設定（set_pc、get_profile、set_profile）
+
+PC の名前と、設定の `profiles` から、重ねるプロファイルを決める（`profile.go`。docs/config.md の「PC ごとの設定（profiles）」）。
+
+```json
+→ {"id":1,"cmd":"set_pc","name":"macbook-air","source":"brain-deck"}
+← {"id":1,"ok":true,"result":{"active":"mac","label":"Mac","pc":"macbook-air","pc_at":"…","profiles":[{"name":"mac","label":"Mac","pcs":["macbook-air"]},{"name":"work","pcs":["work"]}]}}
+→ {"id":2,"cmd":"set_profile","name":"none"}
+← {"id":2,"ok":true,"result":{"active":"","pc":"macbook-air","manual":"none","manual_pc":"macbook-air","profiles":[…]}}
+→ {"id":3,"cmd":"get_profile"}
+```
+
+- **set_pc**：PC が名乗る（英数字と `_ . -`、63 文字まで。違えば `bad_request`）。別の名前の PC なら、手で選んだものをやめる。使うプロファイルが変わったら、返事の前に反映する。
+- **set_profile**：`name` はプロファイルの名前、`none`（既定を手で選ぶ）、`auto`（手で選んだものをやめる）。知らない名前は `bad_request`。
+- **結果**：`active` は重ねているプロファイル（既定なら空）、`manual` は手で選んだもの、`waiting` はつなぎ直して PC が名乗るのを待っている（60 秒）。`get_status` の `profile` も同じ。
+
 ## 上書きの値（get_overrides、set_override、clear_overrides）
 
 Brain の設定のアプリで変えた値は、設定ファイルを書き換えず、`/var/lib/lefthand/overrides.json` に置く（`overrides.go`。docs/config.md の「上書きの値」）。デーモンは設定ファイルの値に上書きを重ねて使う。`brain-deck overrides` と設定 GUI が使う。
@@ -888,7 +934,7 @@ README の「Brain の保守」。lefthand が systemd のサービスとして�
 ```
 
 - **update_confirm**：受けたデーモンの PID を `<stage>/confirmed` に書く。係は、それが新しいデーモンの PID と同じなら確認できたとする（古いデーモンが受けたものは数えない）。
-- **state**（`<data-dir>/update/state.json`）の `phase`：`starting_helper`、`stopping`、`installing`、`rebinding`、`starting`、`waiting_ready`、`waiting_confirm`、`done`、`rolling_back`、`rolled_back`（失敗して前の版に戻した）、`failed`（restart で起動しなかった）。`done` が true で終わり、`ok` が結果、`message` が理由、`rebound` は USB を付け直したか（gadget-setup.sh がガジェットを変えたとき）。
+- **state**（`<data-dir>/update/state.json`）の `phase`：`starting_helper`、`stopping`、`installing`、`restoring`（restore_apply）、`rebinding`、`starting`、`waiting_ready`、`waiting_confirm`、`done`、`rolling_back`、`rolled_back`（失敗して前の版に戻した）、`failed`（restart で起動しなかった）。`done` が true で終わり、`ok` が結果、`message` が理由、`rebound` は USB を付け直したか（gadget-setup.sh がガジェットを変えたとき）。
 - **時間**：新しいデーモンが `-ready-file` に起動を書くまで 45 秒、そのあと `update_confirm` まで 90 秒、そのあと 2 秒動き続けること。どれかが満たされなければ、係は前の版（と前の `.prev`）に戻し、gadget-setup.sh を入れ替えていれば前のものを実行し直して、サービスを起動する。
 
 ### restart、power

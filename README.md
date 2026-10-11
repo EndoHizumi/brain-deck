@@ -34,6 +34,8 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 - **設定のアプリ**：Brain だけで、明るさ、暗くなるまでの時間、フォトフレーム、画面の向き、読み物の文字の大きさ、ふたを閉じたときの動き、時刻を変える。変えた値は設定ファイルを書き換えず「上書き」として置く。版、電池、SD カードの空きなどの情報と、再起動・電源を切るボタン（2 秒押し続ける）もある。
 - **ヘルプ**：使い方の説明を、Brain の画面で読む（デーモンに入っていて、版と合う）。
 - **ふた**：ふたを閉じたら画面を消し、タッチを受け付けず、描き直しも止める。開けたら元の画面に戻す。画面を裏返したタブレットの形のあいだは、本体のキーを使わない（`lid`）。
+- **バックアップと復元**：Brain の設定ファイルとデータ（Todo、メモ、読み物、写真、背景画像、上書きの値、日本語入力の学習など）を 1 つのファイルにして PC に残し（`brain-deck backup`。同期のときに自動でも取る）、Brain に戻す（`brain-deck restore`。失敗したら元に戻す）。SD カードを入れ直したあとにも戻せる。
+- **PC ごとの設定**：PC の brain-deck が、つないだときに PC の名前を知らせ、Brain は名前ごとの設定（最初に開くアプリ、Mac 用の修飾キーの入れ替え、キーやセルの違い、ホーム画面の並び）を重ねる（`profiles`）。手でも選べる。
 
 設定に `home` を書かなければ、今までどおり左手デバイス（base のレイヤー）から始まる。
 「PC のための手元の PDA」として使う例は [config/pda-example.yaml](config/pda-example.yaml)（今のダッシュボードや道具をアプリとして並べ、縦向きの並びも入れたもの）。
@@ -60,13 +62,14 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 18. [同期](#同期)
 19. [タッチのキャリブレーション](#タッチのキャリブレーション)
 20. [設定のアプリとヘルプ、ふた](#設定のアプリとヘルプふた)
-21. [日常の操作](#日常の操作)
-22. [シリアルコンソール](#シリアルコンソール)
-23. [端末モード](#端末モード)
-24. [画面とコンソール](#画面とコンソール)
-25. [困ったとき](#困ったとき)
-26. [開発](#開発)
-27. [フォントとライセンス](#フォントとライセンス)
+21. [バックアップと復元、PC ごとの設定](#バックアップと復元pc-ごとの設定)
+22. [日常の操作](#日常の操作)
+23. [シリアルコンソール](#シリアルコンソール)
+24. [端末モード](#端末モード)
+25. [画面とコンソール](#画面とコンソール)
+26. [困ったとき](#困ったとき)
+27. [開発](#開発)
+28. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -475,6 +478,8 @@ layers:
 | images/&lt;id&gt;.565 | 背景画像。8 バイトのヘッダ（`LHI1`、幅、高さ）と RGB565 の画素。id はファイルの SHA-256 の先頭 16 文字 |
 | images/index.json | 背景画像の名前（元のファイル名など）、大きさ、SHA-256、足した時刻、送った側 |
 | overrides.json | Brain の設定のアプリで変えた上書きの値（明るさ、暗くなるまで、フォトフレーム、ふた）。設定ファイルの値の代わりに使う。上書きがなければファイルはない（[設定のアプリとヘルプ、ふた](#設定のアプリとヘルプふた)） |
+| profile.json | PC ごとの設定の状態（最後に名乗った PC、手で選んだプロファイル）。PC が名乗るか手で選ぶまでファイルはない（[PC ごとの設定](#pc-ごとの設定profiles)） |
+| backup/ | バックアップを渡すあいだの一時ファイルと、復元の前の状態（`before-restore.tar.gz`。`brain-deck restore --undo` で戻す）。root だけが読める（0700） |
 
 - **書き込み**：一時ファイルに書いて rename する。SD カードへの書き込みは数秒かかることがあるので、通信の返事は書き込みを待たずに返す。続けて書き換えたときは、まとめて 1 回書く。
 - **消すとき**：`brain-deck text <id> --clear`。全部消すなら、デーモンを止めて `sudo rm /var/lib/lefthand/text.json`。
@@ -1775,11 +1780,13 @@ brain-deck sync --if-older 10m     # Brain が 10 分のうちに同期してい
 
 | 順 | すること | 既定 |
 | --- | --- | --- |
+| 0 | PC の名前を知らせる（`profile announce`。[PC ごとの設定](#pc-ごとの設定profiles)）。名前は `sync.yaml` の `pc_name`、なければホスト名（最初の `.` まで） | する（`profile: false` で知らせない） |
 | 1 | 時刻を合わせる（`time sync`）。内蔵 RTC にも書き戻す（`clock.rtc: write`）。**書き戻す前の RTC と PC の差**を出し、Brain に記録する | する |
 | 2 | 予定（`calendar sync`） | `~/.config/brain-deck/calendars.yaml` があれば |
 | 3 | 天気（`weather sync`） | `weather.yaml` があれば |
 | 4 | 読み物の RSS（`read feed sync`） | `feeds.yaml` があれば |
 | 5 | 手書きメモを PC に写す（`<id>.png` と `<id>.json`。前と同じものは書かない） | `sync.yaml` に `memo.dir` があれば |
+| 6 | バックアップを取る（`brain-sync-<日時>.tar.gz`。[バックアップと復元](#バックアップと復元pc-ごとの設定)） | 前に取ってから 20 時間たっていれば取り、7 個残す（`backup`） |
 
 - **どれかが失敗しても、ほかは続ける**。最後に「成功・失敗・飛ばした」をまとめて書き、終了コードは、すべて成功（飛ばしたものを含む）なら 0、失敗があれば 9、Brain が見つからなければ 3。
 - **Brain の画面**：始めると画面の下に「同期しています…」、状態の帯の「同期」が「同期中」。終わると「同期しました」と、帯に最後に同期した時刻（失敗があれば橙）。`brain-deck status` と `get_status` の `sync` にも結果。
@@ -1795,6 +1802,12 @@ feeds: true         # 読み物の RSS（feeds.yaml があれば）
 memo:
   dir: ~/Documents/Brain-memo   # 手書きメモを写すフォルダ（書かなければ取り出さない）
 wait: 90s           # Brain の準備を待つ（--wait と同じ）
+pc_name: my-laptop  # Brain に知らせる PC の名前（書かなければホスト名。英数字と _ . -）
+profile: true       # PC の名前を知らせる
+backup:
+  keep: 7           # 残す数（0 で取らない）。sync が取ったもの（brain-sync-…）だけを古いものから消す
+  every: 20h        # 前に取ってからこれだけたっていれば取る（0 なら毎回）
+  dir: ~/.local/share/brain-deck/backups   # 置き場所（既定もここ）
 ```
 
 ### つないだときに自動で同期する（Linux）
@@ -1966,6 +1979,117 @@ Brain の画面に十字を出し、順に押してもらって、パネルの�
 7. ふた：ふたを閉じて 5 秒後に開ける → 画面が点き、閉じる前のアプリのまま。閉じたまま 1 分待って開けても点く。暗くなってから閉じて開けると、明るくなる。「ふたを閉じたとき」→「何もしない」にすると、閉じても消えない（確かめたら「設定ファイルの値に戻す」）。
 8. ヘルプ：右をタップで次のページ、左で前、真ん中で道具 →「目次」→「困ったとき」で、その章が開く。← → キーでもめくれる。
 9. 電源のタブ：「再起動」を短く押すと「2 秒押し続けてください」。（許せるときに）2 秒押し続けると再起動し、ホーム画面に戻ってくる。上書きは再起動しても残る。
+
+## バックアップと復元、PC ごとの設定
+
+フェーズ K3（2026-10-12）で足した。書き方は docs/config.md の「PC ごとの設定（profiles）」、プロトコルは docs/protocol.md の「バックアップと復元」「PC ごとの設定」。
+
+### バックアップ（brain-deck backup）
+
+```sh
+brain-deck backup                       # ~/.local/share/brain-deck/backups/brain-<日時>.tar.gz に保存する
+brain-deck backup -o ~/brain.tar.gz     # 置き場所を決める
+brain-deck backup list                  # 既定の置き場所にあるものの一覧
+brain-deck backup show <ファイル>       # 中身（作った時刻、Brain の版、ファイルの数と大きさ）
+```
+
+Brain が 1 つの tar.gz を作り、PC が受け取って SHA-256 を確かめてから保存する。中身は次のとおり。
+
+| 入れるもの | Brain の場所 |
+| --- | --- |
+| 設定ファイル（コメントもそのまま） | `/etc/lefthand/config.yaml` |
+| Todo、ストップウォッチなどの状態、電卓の履歴、画面の向き | `todo.json`、`widgets.json`、`calc.json`、`display.json` |
+| 設定のアプリの上書きの値、タッチの調整、PC ごとの設定の状態 | `overrides.json`、`touch-cal.json`、`profile.json` |
+| 手書きメモ、読み物（しおりも）、写真、背景画像 | `memo/`、`reader/`、`photos/`、`images/` |
+| 日本語入力の学習（Anthy の変換の履歴） | user の `~/.anthy/`（`lock-file` は入れない） |
+
+- **入れないもの**（取り直せるもの）：予定（`calendar.json`）、天気と天気のアイコン、時刻の記録（`clock.json`）、PC が送るテキストと QR コードとグラフ、電池の記録、更新の記録、日本語入力の一時ファイル（`ime/`）。lefthand の実行ファイルと Brainux の設定（ユーザー、パスワード、ssh の鍵など）も入らない。
+- **日本語入力の学習**：Anthy は、選んだ候補を `~/.anthy/last-record2_default.utf8` に覚える（この Brain では 658 バイト）。小さく、取り直せないので入れる（K3 で決めた）。uim-fep の設定（`~/.uim.d/`）はソケットと一時ファイルだけなので入れない。
+- **時間**（実機、2026-10-12）：本番と同じデータ（背景画像 10 個など合計 2.5 MB）で、Brain で作るのに 3.8 秒、受け取りまで 5.4 秒、ファイルは 1.2 MB。写真（1 枚 750 KB）や読み物が多いと、そのぶん長くなる。
+- **作るときの置き場所**：Brain の `/var/lib/lefthand/backup/` に一時ファイルを作り、PC が受け取ったら消す（10 分読まれなければ消す）。SD カードの空きが足りなければ断る。
+
+**扱いの注意**：バックアップには個人のデータ（Todo、メモ、読み物、写真、日本語入力の学習、設定ファイルに書いた URL など）が入る。
+
+- 既定の置き場所はフォルダが 0700、ファイルが 0600（自分だけが読める）。`-o` で別の場所に置くときも、ほかの人が読めない場所にする。
+- クラウドの同期フォルダや共有のディスクに置くときは、暗号化する（`gpg -c` など）。git のリポジトリには入れない。
+- 要らなくなったバックアップは消す（`brain-deck sync` が取ったものは、`keep` を超えたら古いものから消える）。
+
+### 同期のときに自動で取る
+
+`brain-deck sync`（つないだときの自動の同期）の最後に、前に取ってから 20 時間たっていれば取る（1 日 1 回ほど）。名前は `brain-sync-<日時>.tar.gz` で、7 個を超えたら sync が取った古いものから消す（手で取った `brain-<日時>.tar.gz` は消さない）。`~/.config/brain-deck/sync.yaml` の `backup` で変える（[同期](#同期)の例）：`keep`（残す数。0 で取らない）、`every`（間隔。0 なら毎回）、`dir`（置き場所）。
+
+### 復元（brain-deck restore）
+
+```sh
+brain-deck restore <ファイル>           # 設定ファイル、データ、日本語入力の学習を戻す
+brain-deck restore <ファイル> --no-config   # 設定ファイルは今のまま（データだけ戻す）。--no-data、--no-anthy もある
+brain-deck restore <ファイル> --dry-run # 確かめるだけ
+brain-deck restore --undo               # 最後の restore の前の状態に戻す
+```
+
+1. PC でファイルを読み、中身が manifest.json（ファイルごとの大きさと SHA-256）と合うかを確かめる。
+2. Brain に送る。Brain が、形の版（新しすぎれば断る）、名前（置き場所の外に出ないか、知っているものか）、SHA-256、JSON、**設定ファイルが今の lefthand で使えるか**を確かめる。使えない設定ファイルなら、`--no-config` を付けるよう言って止める。
+3. 今の状態を Brain の `/var/lib/lefthand/backup/before-restore.tar.gz` に残す（`--undo` で戻す。1 つだけ）。
+4. 更新の係（`brain-deck update` と同じ）が lefthand を止め、入れ替える。データはバックアップの**とおり**になる（バックアップにないもの、たとえば後から足した写真は、今の Brain から消える。消したものは before-restore.tar.gz に残る）。設定ファイルは前の版を `config.yaml.prev` に残す。日本語入力の学習は user の持ち物として書く。
+5. lefthand を起動し、PC がつなぎ直せることを確かめる。起動しない、つなぎ直せないときは、入れ替えたものを元に戻して起動し直す（「戻せなかったので、元の状態に戻しました」）。
+6. **時間**（実機、2026-10-12。2.5 MB）：restore は 31 秒、`--undo` は 22 秒。そのあいだキー入力とシリアルが切れる。
+
+予定、天気などは入らないので、戻したあとに `brain-deck sync` で取り直す。
+
+### 新しい SD カードに入れ直して戻す
+
+SD カードが壊れたときや、新しい SD カードに Brainux を書き直したときは、次の順で元の状態に戻せる。
+
+1. 前もって、PC にバックアップを取っておく（`brain-deck backup`、または同期で自動で取ったもの。`brain-deck backup list`）。
+2. Brainux を SD カードに書き、PC に挿して、[インストール](#インストール)の「SD カードに直接入れる」のとおり入れる：
+   ```sh
+   GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -o lefthand
+   sudo sh install.sh --root /media/$USER/rootfs
+   ```
+3. SD カードを Brain に戻して起動する。Brain が USB キーボードとして動き、`brain-deck status` が答えることを確かめる（設定は例の設定）。
+4. `brain-deck restore <バックアップ>` で戻す。設定ファイル、Todo、メモ、読み物、写真、背景画像、上書き、タッチの調整、日本語入力の学習が戻る。
+5. `brain-deck sync` で、時刻、予定、天気を取り直す。
+6. Brainux 側の設定（シリアルコンソール `console-setup.sh on`、ssh の鍵、user のパスワードなど）は、バックアップに入らないので、入れ直す。
+
+日本語入力の学習は、Brainux の user（`ime.user`）のホームに戻す。user がいなければ戻さない。
+
+### PC ごとの設定（profiles）
+
+Brain からは、つながれた PC を見分けられない。そこで、PC の brain-deck が、つないだときの自動の同期（`brain-deck sync`）の最初に、PC の名前を Brain に知らせる。Brain の設定の `profiles` に、PC の名前ごとに重ねる内容を書いておく。
+
+```yaml
+start_layer: home              # 起動と設定の反映で開くレイヤー（書かなければ home.start のとおり）
+profiles:
+  - name: mac                  # プロファイルの名前（brain-deck profile use mac）
+    label: Mac                 # 画面に出す名前
+    pcs: [macbook-air]         # この名前の PC で使う（書かなければ name と同じ名前の PC）
+    start_layer: code          # この PC につないだら、最初にコードのアプリを開く
+    modifiers: { ctrl: gui, gui: ctrl }   # 割り当ての Ctrl と Cmd（GUI）を入れ替える（Linux 用の割り当てを Mac で使う）
+    layers:                    # レイヤーごとに、書いたキー・セル・ソフトキーだけを差し替える
+      - name: browser
+        keys: { KEY_T: LGUI+T }
+  - name: work
+    pcs: [work-pc, work-laptop]
+    home: { … }                # ホーム画面の並びを差し替える（home を丸ごと）
+```
+
+- **PC の名前**：`~/.config/brain-deck/sync.yaml` の `pc_name`、書いていなければホスト名（最初の `.` まで）。英数字と `_ . -`（大文字と小文字は区別しない）。手で知らせるときは `brain-deck profile announce [<名前>]`。
+- **選び方**：名乗った PC の名前が `pcs` にあるプロファイルを使う。知らない PC、名乗らない PC（brain-deck が入っていない PC）は既定（設定ファイルのとおり）。USB を抜いてつなぎ直したら、60 秒のうちに名乗らなければ既定に戻す。PC がスリープから戻ったときや、USB の形を切り替えたときはそのまま。デーモンを起動し直しても、前に名乗った PC のまま。
+- **手で選ぶ**：`brain-deck profile use <名前>`（`none` で既定）か、Brain の設定のアプリの「PC ごとの設定」。手で選んだものは、**別の名前の PC が名乗るまで**続く（`brain-deck profile auto` か「自動」でやめる）。brain-deck が入っていない PC で使うときも、手で選べばよい。
+- **重ね方**：設定ファイルの値 → プロファイル → Brain の上書きの値、の順に重ねる。`layers` は名前で今のレイヤーに重ねる（新しいレイヤーは作れない）。`touch` に `cols` か `rows` を書くと格子ごと差し替え、書かなければセルだけ重ねる。`modifiers` は割り当てのキーの名前（`LCTRL+C` → `LGUI+C`）を書き換えるので、セルの表示も合う。
+- **切り替わったとき**：割り当てごと反映し直し、押しているキーを離して、最初に開くレイヤー（`start_layer`）を開く。同じプロファイルのままなら何もしない（同期のたびに画面が戻ることはない）。
+- **見る**：`brain-deck profile`（今の状態）、`brain-deck profile list`（一覧。`*` が今のもの）、`brain-deck status` の「PC ごとの設定」、Brain の設定のアプリの 2 ページ目と情報のタブ。
+- **確かめる**：設定の検証（`-check`、設定 GUI、`brain-deck config put`）は、プロファイルを重ねた設定も確かめる（誤りは `/profiles/<番号>`）。設定 GUI はプロファイルを編集しないが、保存しても消さない（レイヤーの名前を変えたり消したりすると、プロファイルの中も合わせる）。
+
+### 目で確かめる手順（フェーズ K3）
+
+1. `brain-deck backup`：「…に保存しました」と中身が出る。`ls -l ~/.local/share/brain-deck/backups` で `-rw-------`。`brain-deck backup show <ファイル>` で中身の一覧。
+2. Brain で Todo を 1 つ足してから `brain-deck restore <1 のファイル>`：30 秒ほど画面とキーが止まり、「戻しました」。足した Todo が消えている。`brain-deck restore --undo` で、足した Todo が戻る。
+3. `~/.config/brain-deck/sync.yaml` を作らずに（または `backup:` を書かずに）`brain-deck sync`：最後に「バックアップ　成功：…brain-sync-<日時>.tar.gz」。すぐもう一度 `brain-deck sync` すると「バックアップ　飛ばした：前に取ってから 20h0m0s たっていない」。
+4. PC ごとの設定（試すときだけ。本番の設定には profiles を入れていない）：設定に上の例のような `profiles` を書いて `brain-deck config put`、`brain-deck profile announce <pcs の名前>` で、`start_layer` のアプリが開き、`brain-deck profile` に名前が出る。設定のアプリの 2 ページ目「PC ごとの設定」で「既定（使わない）」を選ぶとホーム画面に戻り、「自動」で戻る。
+5. 設定のアプリ：1 ページ目が 明るさ、暗くなるまで（PC あり・なし）、フォトフレーム、画面の向き、日本語入力。▼ で 2 ページ目に 読み物の文字、ふた、タブレットの形の本体キー、PC ごとの設定、時刻合わせ、設定ファイルの値に戻す。
+6. 日本語入力：Todo を足す欄は［かな］で開き、「時刻合わせ」の欄は［英数］で開く（Todo の欄で英数にしてから閉じても、次はかなで開く）。
+7. ふたを閉じて 1 分以上たってから開ける：状態の帯の時計が今の時刻になっている（閉じているあいだは描き直さない）。画面を裏返したタブレットの形のあいだ、本体のキーを押しても何も起きない（タッチは効く）。
 
 ## 日常の操作
 
@@ -2365,6 +2489,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | `ssh brain` がつながらない | PC 側のインターフェースに 192.168.7.1/24 が付いているか。USB ケーブルが抜けていないか |
 | 押した位置と違うセルが反応する | キャリブレーションをやり直す |
 | 設定ファイルを変えたのに、明るさや減光の時間が変わらない | Brain の設定のアプリで変えた上書きが優先されている。`brain-deck status` の「上書き」か設定 GUI の上の一覧を見て、`brain-deck overrides clear all`（か Brain の「設定ファイルの値に戻す」） |
+| restore が「設定ファイルは、今の lefthand では使えません」で止まる | バックアップを取ったときより lefthand が古いか、設定の書き方が変わった。lefthand を新しくするか、`--no-config` でデータだけ戻す |
+| restore のあと「戻せなかったので、元の状態に戻しました」 | 新しい lefthand が起動しなかったか、PC がつなぎ直せなかった（`brain-deck logs`）。Brain は restore の前の状態で動いている |
+| restore で戻したら、写真や読み物が減った | バックアップを取ったあとに足したものは、戻すと消える。`brain-deck restore --undo` で戻す前に戻せる |
+| PC につないでも PC ごとの設定に切り替わらない | `brain-deck profile` で名乗った PC の名前を見る。sync が動いていない（`journalctl --user -u brain-deck-sync`）か、名前が `pcs` にない。手で `brain-deck profile announce` か `profile use <名前>` |
 | 本体のキーが効かない（タッチは効く） | タブレットの形だと思っている（`brain-deck status` の「ふた」に「本体のキーは使っていない」）。画面を一度裏返して戻す。タブレットの形でもキーを使うなら `lid.tablet_keys: on`（設定のアプリの「タブレットの形の本体キー」） |
 | 画面が消えたまま、タッチしても点かない | ふたが閉じていると思っている（`brain-deck status` の「ふた」）。ふたを一度開け閉めする。閉じても消さないなら `lid.close: none`（設定のアプリの「ふたを閉じたとき」） |
 | 画面が戻らず、デーモンの表示が残っている | `ssh brain sudo /usr/local/bin/lefthand -restore-console` で元の VT に戻す |
@@ -2437,7 +2565,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | settingswidget.go | 設定のアプリ（widget: settings。設定、情報、電源のタブ、選ぶ画面、2 秒押し続ける電源のボタン） |
 | helpwidget.go、help/ja.md | ヘルプ（widget: help。埋め込んだ help/ja.md を読み物の描き方で読む） |
 | overrides.go | 上書きの値（/var/lib/lefthand/overrides.json。設定ファイルの値に重ねる） |
-| lid.go | ふたの開け閉め（SW_LID。閉じたら画面を消し、タッチを捨てる） |
+| lid.go | ふたの開け閉め（SW_LID。閉じたら画面を消し、タッチを捨て、描き直しを止める）、タブレットの形（SW_TABLET_MODE。本体のキーを使わない） |
+| backup.go | バックアップと復元（tar.gz を作る・確かめる、受け取って係に渡す、係が入れ替えて元に戻す） |
+| profile.go | PC ごとの設定（profiles を重ねる、修飾キーの入れ替え、PC の名前と手で選んだものの状態） |
+| cmd/brain-deck/backup.go、profile.go | brain-deck backup、restore、profile、同期のバックアップ |
 | ime.go | 日本語の入力（uim-fep を user の権限で 2 行の端末に動かし、欄に貸す。Brain のシェルに渡す環境変数。uim.scm、inputrc、line.sh を作る） |
 | readfont.go | 読み物の文字（font/reader-*.lrf.gz）と、縦書きの文字の向き |
 | cmd/brain-deck/aozora.go、read.go、readweb.go | brain-deck read（青空文庫、EPUB、Web の記事、RSS） |
