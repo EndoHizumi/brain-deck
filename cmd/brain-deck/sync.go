@@ -16,7 +16,8 @@ import (
 
 // ---------- sync（PC と Brain のあいだのやり取りをまとめて） ----------
 //
-// 1 つのコマンドで、時刻合わせ、カレンダー、天気、読み物の RSS、手書きメモの取り出しを順に行う。
+// 1 つのコマンドで、PC の名前を知らせる（PC ごとの設定）、時刻合わせ、カレンダー、天気、読み物の RSS、手書きメモの取り出し、
+// バックアップを順に行う。
 // 何をするかは ~/.config/brain-deck/sync.yaml（ユーザーが作る。なければ既定）。どれかが失敗しても、ほかは続け、
 // 最後に結果をまとめて書く。終了コードは、すべて成功（飛ばしたものを含む）なら 0、失敗したものがあれば 9、
 // Brain が見つからなければ 3。Brain には、始めと終わりに set_sync を送り、画面に「同期中」と最後に同期した時刻を出す。
@@ -33,7 +34,10 @@ type syncConfig struct {
 	Memo     struct {
 		Dir string `yaml:"dir"` // 手書きメモを PNG と JSON で置く PC のフォルダ。書かなければ取り出さない
 	} `yaml:"memo"`
-	Wait string `yaml:"wait"` // Brain の準備を待つ時間（--wait と同じ。つないだときの自動の同期）
+	Wait    string           `yaml:"wait"`    // Brain の準備を待つ時間（--wait と同じ。つないだときの自動の同期）
+	PCName  string           `yaml:"pc_name"` // Brain に知らせる、この PC の名前（PC ごとの設定。既定はホスト名）
+	Profile *bool            `yaml:"profile"` // PC の名前を知らせる（既定 true）
+	Backup  syncBackupConfig `yaml:"backup"`  // バックアップ（既定は 1 日 1 回、7 個残す）
 }
 
 const syncExample = `# ~/.config/brain-deck/sync.yaml の例（brain-deck sync で行うこと。このファイルはなくてもよい）
@@ -43,7 +47,12 @@ weather: true       # 天気（~/.config/brain-deck/weather.yaml）
 feeds: true         # 読み物の RSS（~/.config/brain-deck/feeds.yaml）
 memo:
   dir: ~/Documents/Brain-memo   # 手書きメモを PNG と JSON で写すフォルダ（書かなければ取り出さない）
-wait: 90s           # Brain の準備を待つ（つないだときの自動の同期で使う）`
+wait: 90s           # Brain の準備を待つ（つないだときの自動の同期で使う）
+pc_name: my-laptop  # Brain に知らせる PC の名前（Brain の設定の profiles で選ぶ。書かなければホスト名）
+backup:
+  keep: 7           # 残すバックアップの数（0 で取らない）
+  every: 20h        # 前に取ってからこれだけたっていれば取る（0 なら毎回）
+  dir: ~/.local/share/brain-deck/backups   # 置き場所（個人のデータが入る。自分だけが読める場所に）`
 
 func syncPath() string { return filepath.Join(filepath.Dir(calendarsPath()), "sync.yaml") }
 
@@ -176,6 +185,30 @@ func runSync(o *options, stdout, stderr io.Writer) int {
 		steps = append(steps, syncStep{Name: name, OK: code == exitOK, Note: note})
 	}
 	skip := func(name, why string) { steps = append(steps, syncStep{Name: name, OK: true, Note: why, skip: true}) }
+	if on(cfg.Profile, true) {
+		name, err := pcName(cfg)
+		var note string
+		code := exitOK
+		if err == nil {
+			code = connectAndRun(o, io.Discard, stderr, func(c *Client) (string, error) {
+				if !c.Hello.has("set_pc") {
+					note = "Brain の lefthand が PC ごとの設定に対応していない"
+					return "", nil
+				}
+				p, err := announcePC(c, name)
+				if err == nil {
+					note = name + "：" + p.describe()
+				}
+				return "", err
+			})
+		}
+		steps = append(steps, syncStep{Name: "PC の名前", OK: err == nil && code == exitOK, Note: note})
+		if err != nil {
+			steps[len(steps)-1].Note = err.Error()
+		}
+	} else {
+		skip("PC の名前", "sync.yaml で profile: false")
+	}
 	if on(cfg.Time, true) {
 		sub("時刻", "time", "sync")
 	} else {
@@ -217,6 +250,23 @@ func runSync(o *options, stdout, stderr io.Writer) int {
 			return "", err
 		})
 		steps = append(steps, syncStep{Name: "手書きメモ", OK: code == exitOK, Note: msg})
+	}
+	{
+		var note string
+		var skipped bool
+		code := connectAndRun(o, io.Discard, stderr, func(c *Client) (string, error) {
+			var err error
+			note, skipped, err = syncBackup(c, cfg.Backup, time.Now())
+			if err != nil {
+				note = err.Error()
+			}
+			return "", err
+		})
+		if skipped {
+			skip("バックアップ", note)
+		} else {
+			steps = append(steps, syncStep{Name: "バックアップ", OK: code == exitOK, Note: note})
+		}
 	}
 	// 結果をまとめる
 	failed := 0

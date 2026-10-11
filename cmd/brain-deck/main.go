@@ -143,6 +143,18 @@ const usage = `使い方：
   brain-deck config put <ファイル|-> [--restart] [--dry-run]   設定を検証してから、そのまま書き、すぐ反映する
                                       （前の版は .prev）。再起動が要る項目を変えるときは --restart
   brain-deck config check <ファイル>  設定を Brain で検証するだけ
+  brain-deck backup [-o <ファイル>]   Brain の設定ファイルとデータ（Todo、メモ、読み物、写真、背景画像、上書きの値、
+                                      日本語入力の学習など）を 1 つのファイルにして PC に保存する（既定は
+                                      ~/.local/share/brain-deck/backups/brain-<日時>.tar.gz。個人のデータが入る）
+  brain-deck backup list | show <ファイル>   保存したバックアップの一覧、中身
+  brain-deck restore <ファイル> [--no-config] [--no-data] [--no-anthy] [--dry-run]
+                                      バックアップを Brain に戻す。Brain が確かめ、今の状態を Brain に残してから
+                                      入れ替え、つなぎ直して確かめる（失敗したら元に戻す）
+  brain-deck restore --undo           最後の restore の前の状態に戻す
+  brain-deck profile [show|list]      PC ごとの設定（Brain の設定の profiles）の今の状態、一覧
+  brain-deck profile use <名前>|none  手で選ぶ（別の PC が名乗るまで続く）。profile auto でやめる
+  brain-deck profile announce [<名前>]   この PC の名前を Brain に知らせる（sync が最初に行う。名前は sync.yaml の
+                                      pc_name、なければホスト名）
   brain-deck exec --result <id> [--limit 10m] -- <コマンド> [引数...]
                                       コマンドを実行し、結果をテキストのタイル <id> に出す（実行中、成功、失敗と、
                                       出力の最後の行）。終了コードはコマンドのもの
@@ -220,11 +232,12 @@ type options struct {
 // subValueOpts、subFlagOpts は、photo、memo、read、files、sync のオプション。
 var (
 	subValueOpts = map[string]bool{"o": true, "page": true, "wait": true, "if-older": true, "out": true, "of": true, "zoom": true, "center": true, "brightness": true, "limit-items": true, "sort": true, "points": true}
-	subFlagOpts  = map[string]bool{"portrait": true, "no-dither": true, "all": true, "force": true, "du": true, "recursive": true, "reset": true}
+	subFlagOpts  = map[string]bool{"portrait": true, "no-dither": true, "all": true, "force": true, "du": true, "recursive": true, "reset": true,
+		"no-config": true, "no-data": true, "no-anthy": true, "undo": true}
 )
 
 // subCommands は、vals と flags を使うコマンド。
-var subCommands = " photo memo read files sync calibrate "
+var subCommands = " photo memo read files sync calibrate backup restore "
 
 // checkSub は、コマンドが使えないオプションを書いていないかを確かめる。allowed は使える名前（空白区切り）。
 func (o *options) checkSub(allowed string) error {
@@ -503,6 +516,12 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runCalibrate(o, stdout, stderr)
 	case "sync":
 		return runSync(o, stdout, stderr)
+	case "backup":
+		return runBackup(o, stdout, stderr)
+	case "restore":
+		return runRestore(o, stdout, stderr)
+	case "profile":
+		cmd, err = profileCommand(o)
 	case "time":
 		if len(o.args) != 2 || o.args[1] != "sync" {
 			err = usageError("time のあとには sync を書きます（brain-deck time sync）")
@@ -992,6 +1011,12 @@ func status(c *Client) (string, error) {
 		Lid       *lidInfo       `json:"lid"`
 		IME       *imeInfo       `json:"ime"`
 		Overrides []overrideInfo `json:"overrides"`
+		Profile   *profileInfo   `json:"profile"`
+		Backup    *struct {
+			BeforeRestore *struct {
+				At time.Time `json:"at"`
+			} `json:"before_restore"`
+		} `json:"backup"`
 	}
 	json.Unmarshal(raw, &st)
 	pcNow := time.Now()
@@ -1041,6 +1066,12 @@ func status(c *Client) (string, error) {
 	}
 	if c.Hello.has("get_overrides") {
 		out += "\n上書き\t" + describeOverrides(st.Overrides)
+	}
+	if st.Profile != nil {
+		out += "\nPC ごとの設定\t" + st.Profile.describe()
+	}
+	if st.Backup != nil && st.Backup.BeforeRestore != nil {
+		out += "\n復元の前の状態\t" + st.Backup.BeforeRestore.At.Local().Format("2006-01-02 15:04") + " に残した（brain-deck restore --undo で戻せる）"
 	}
 	return out, nil
 }
