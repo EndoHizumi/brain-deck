@@ -31,6 +31,8 @@ fi
 install -D -m 0644 systemd/ethernet_gadget.service.d/lefthand.conf \
   "$ROOT/etc/systemd/system/ethernet_gadget.service.d/lefthand.conf"
 install -m 0644 systemd/lefthand.service "$ROOT/etc/systemd/system/"
+# 端末モードの Brain のシェルで日本語入力（uim-fep）を通す（lefthand が渡す BRAIN_IME があるときだけ働く）
+install -D -m 0644 contrib/brain/lefthand-ime.sh "$ROOT/etc/profile.d/lefthand-ime.sh"
 
 # 旧版の lefthand-gadget.service（drop-in に統合済み）を片付ける
 if [ -e "$ROOT/etc/systemd/system/lefthand-gadget.service" ]; then
