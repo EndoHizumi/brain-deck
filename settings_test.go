@@ -95,6 +95,7 @@ func TestSettingsUIChoose(t *testing.T) {
 	tapRow("lid")
 	pick("何もしない")
 	wait(func() bool { return s.Current().Lid.action() == lidNone })
+	u.Snapshot() // 描き直し（タッチの処理は、最後に描いたときの上書きの数を使う）
 	tapRow("reset")
 	if !u.Snapshot().Confirm {
 		t.Fatal("reset must ask")
@@ -169,5 +170,57 @@ func TestSettingsWidget(t *testing.T) {
 	}
 	if _, err := compileWidget(mustSpec(t, `{widget: settings, key: A}`)); err == nil {
 		t.Error("settings with key accepted")
+	}
+}
+
+// 設定の置き場所が、ロックを持ったまま設定を反映している（エンジンを待っている）あいだも、設定のアプリの
+// 描き直しの知らせ、描画、タッチが止まらないこと（2026-10-11 に本番で config put のあとに止まった）。
+func TestSettingsNoDeadlockWhileApplying(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	src := "touch: { min_x: 0, max_x: 800, min_y: 0, max_y: 480 }\nlayers: [{name: base, touch: {cols: 1, rows: 1}}]\n"
+	os.WriteFile(path, []byte(src), 0o644)
+	file := mustCfg(t, "")
+	km, _, _ := compileKeymap(file)
+	s := &configStore{path: path, cfg: file, km: km, ov: OpenOverrides(dir)}
+	u := NewSettingsUI(SettingsDeps{Store: s, BrightLevel: func() int { return 7 }})
+	u.SetOnChange(func() { u.Snapshot() })
+	entered, release := make(chan struct{}), make(chan struct{})
+	s.apply = func(*Config, *Keymap) error {
+		u.Changed() // main の apply と同じ
+		close(entered)
+		<-release // エンジンのロックを待っているつもり
+		return nil
+	}
+	go s.PutText([]byte(src+"lid: {close: none}\n"), false, false)
+	<-entered
+	go u.Snapshot() // 描画の goroutine：設定の置き場所を待つ（設定のアプリのロックは持たない）
+	time.Sleep(20 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		cell := image.Rect(0, 0, 800, 480)
+		g := settingsGeometry(cell.Inset(cellGap+textMargin), 0)
+		u.touchDown(cell, g.rows[0].Min.Add(image.Pt(10, 10))) // エンジンのロックの中で呼ばれる。選ぶ画面を開く
+		u.touchUp(false)
+		u.touchDown(cell, g.rows[0].Min.Add(image.Pt(10, 10))) // まだ描いていないので、外のタップとして閉じる
+		u.touchUp(false)
+		u.touchDown(cell, g.tabs[1].Min.Add(image.Pt(5, 5)))
+		u.touchUp(false)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("touches blocked while the config was being applied")
+	}
+	close(release)
+	for i := 0; i < 200 && s.Current().Lid.action() != lidNone; i++ {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.Current().Lid.action() != lidNone {
+		t.Error("the config was not applied")
+	}
+	if v := u.Snapshot(); v.Tab != setTabInfo {
+		t.Errorf("tab = %d", v.Tab)
 	}
 }

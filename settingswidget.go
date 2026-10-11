@@ -100,6 +100,11 @@ type SettingsUI struct {
 	note     string
 	noteAt   time.Time
 	onChange func()
+	// 最後に描いたときの写し。タッチの処理（エンジンのロックを持ったまま呼ばれる）は、設定の置き場所を呼ばずにこれを使う
+	// （設定の置き場所は、設定を反映するあいだロックを持ったままエンジンを待つので、呼ぶと止まる）
+	shownChoice  string
+	shownChoices []setChoice
+	shownOvers   int
 }
 
 func NewSettingsUI(d SettingsDeps) *SettingsUI { return &SettingsUI{deps: d} }
@@ -109,14 +114,20 @@ func (u *SettingsUI) SetOnChange(f func()) { u.mu.Lock(); u.onChange = f; u.mu.U
 // SetDeps は、あとから分かったもの（設定の置き場所、電源）を設定する。
 func (u *SettingsUI) SetDeps(f func(*SettingsDeps)) { u.mu.Lock(); f(&u.deps); u.mu.Unlock() }
 
-// Changed は、外で値が変わったとき（上書き、電池、向き）に描き直す。
+// Changed は、外で値が変わったとき（上書き、電池、向き）に描き直す。待たずに返る
+// （設定の置き場所がロックを持ったまま呼ぶので、ここでロックを待たない）。
 func (u *SettingsUI) Changed() {
 	if u == nil {
 		return
 	}
-	u.mu.Lock()
-	u.changedLocked()
-	u.mu.Unlock()
+	go func() {
+		u.mu.Lock()
+		f := u.onChange
+		u.mu.Unlock()
+		if f != nil {
+			f()
+		}
+	}()
 }
 
 func (u *SettingsUI) changedLocked() {
@@ -158,13 +169,13 @@ type SettingsView struct {
 	Overs    int
 }
 
-// Snapshot は、描画の goroutine が使う写し。
+// Snapshot は、描画の goroutine が使う写し。設定の置き場所などは、u.mu を持たずに読む
+// （ロックの順を、設定の置き場所 → 設定のアプリ、の一方だけにする）。
 func (u *SettingsUI) Snapshot() *SettingsView {
 	if u == nil {
 		return nil
 	}
 	u.mu.Lock()
-	defer u.mu.Unlock()
 	v := &SettingsView{Tab: u.tab, Page: u.page, Choice: u.choice, Confirm: u.confirm, Held: u.held, Power: u.powerReq,
 		PowerOK: u.deps.Power != nil, Current: -1}
 	if u.note != "" && time.Since(u.noteAt) < noticeFor {
@@ -173,37 +184,45 @@ func (u *SettingsUI) Snapshot() *SettingsView {
 	if u.held == "reboot" || u.held == "poweroff" {
 		v.HoldFrac = min(float64(time.Since(u.holdAt))/float64(setPowerHold), 1)
 	}
-	v.Rows = u.rowsLocked()
+	d := u.deps
+	u.mu.Unlock()
+	v.Rows = settingsRows(d)
 	for _, r := range v.Rows {
 		if r.Override {
 			v.Overs++
 		}
 	}
-	if u.tab == setTabInfo && u.deps.Info != nil {
-		v.Info = u.deps.Info()
+	if v.Tab == setTabInfo && d.Info != nil {
+		v.Info = d.Info()
 	}
-	if u.choice != "" {
-		v.Title, v.Choices, v.Current = u.choicesLocked(u.choice)
+	if v.Choice != "" {
+		v.Title, v.Choices, v.Current = settingsChoices(d, v.Choice)
 	}
+	u.mu.Lock()
+	u.shownOvers = v.Overs
+	if u.choice == v.Choice {
+		u.shownChoice, u.shownChoices = v.Choice, v.Choices
+	}
+	u.mu.Unlock()
 	return v
 }
 
-// cfgs は、今の設定（上書きを重ねたもの）と設定ファイルの値と、上書きの様子。
-func (u *SettingsUI) cfgsLocked() (eff, file *Config, infos map[string]OverrideInfo) {
+// settingsCfgs は、今の設定（上書きを重ねたもの）と設定ファイルの値と、上書きの様子。
+func settingsCfgs(d SettingsDeps) (eff, file *Config, infos map[string]OverrideInfo) {
 	infos = map[string]OverrideInfo{}
-	if u.deps.Store == nil {
+	if d.Store == nil {
 		return &Config{}, &Config{}, infos
 	}
-	eff, file = u.deps.Store.Current(), u.deps.Store.File()
-	for _, in := range u.deps.Store.Overrides() {
+	eff, file = d.Store.Current(), d.Store.File()
+	for _, in := range d.Store.Overrides() {
 		infos[in.Key] = in
 	}
 	return eff, file, infos
 }
 
-// rowsLocked は、設定のタブの行を作る。
-func (u *SettingsUI) rowsLocked() []SettingsRow {
-	eff, _, infos := u.cfgsLocked()
+// settingsRows は、設定のタブの行を作る。
+func settingsRows(u SettingsDeps) []SettingsRow {
+	eff, _, infos := settingsCfgs(u)
 	bl := eff.Backlight
 	if bl == nil {
 		bl = &BacklightConfig{}
@@ -217,8 +236,8 @@ func (u *SettingsUI) rowsLocked() []SettingsRow {
 			switch {
 			case bl.Level != nil:
 				r.Value = fmt.Sprintf("%d / 7", *bl.Level)
-			case u.deps.BrightLevel != nil:
-				r.Value = fmt.Sprintf("%d / 7", u.deps.BrightLevel())
+			case u.BrightLevel != nil:
+				r.Value = fmt.Sprintf("%d / 7", u.BrightLevel())
 			default:
 				r.Value = "起動したとき"
 			}
@@ -238,14 +257,14 @@ func (u *SettingsUI) rowsLocked() []SettingsRow {
 		case "rotate":
 			r.Label = "画面の向き"
 			r.Value = "使えません"
-			if u.deps.Rotation != nil {
-				r.Value = rotateLabel(u.deps.Rotation())
+			if u.Rotation != nil {
+				r.Value = rotateLabel(u.Rotation())
 			}
 		case "reader":
 			r.Label = "読み物の文字"
 			r.Value = "使えません"
-			if u.deps.ReaderSize != nil {
-				r.Value = readerSizeLabel(u.deps.ReaderSize())
+			if u.ReaderSize != nil {
+				r.Value = readerSizeLabel(u.ReaderSize())
 			}
 		case "lid":
 			r.Label = "ふたを閉じたとき"
@@ -304,9 +323,9 @@ func readerSizeLabel(n int) string {
 
 var setDimChoices = []string{"30s", "1m", "3m", "5m", "10m", "30m", durationOff}
 
-// choicesLocked は、行 id の選ぶ画面の、題と選ぶものと、今の値の番号。
-func (u *SettingsUI) choicesLocked(id string) (string, []setChoice, int) {
-	eff, file, infos := u.cfgsLocked()
+// settingsChoices は、行 id の選ぶ画面の、題と選ぶものと、今の値の番号。
+func settingsChoices(u SettingsDeps, id string) (string, []setChoice, int) {
+	eff, file, infos := settingsCfgs(u)
 	var title string
 	var cs []setChoice
 	cur := -1
@@ -320,8 +339,8 @@ func (u *SettingsUI) choicesLocked(id string) (string, []setChoice, int) {
 		lv := -1
 		if bl.Level != nil {
 			lv = *bl.Level
-		} else if u.deps.BrightLevel != nil {
-			lv = u.deps.BrightLevel()
+		} else if u.BrightLevel != nil {
+			lv = u.BrightLevel()
 		}
 		for i := 1; i <= 7; i++ {
 			if i == lv {
@@ -356,8 +375,8 @@ func (u *SettingsUI) choicesLocked(id string) (string, []setChoice, int) {
 	case "rotate":
 		title = "画面の向き"
 		r := 0
-		if u.deps.Rotation != nil {
-			r = u.deps.Rotation()
+		if u.Rotation != nil {
+			r = u.Rotation()
 		}
 		for _, a := range []int{0, 90, 180, 270} {
 			if a == r {
@@ -368,8 +387,8 @@ func (u *SettingsUI) choicesLocked(id string) (string, []setChoice, int) {
 	case "reader":
 		title = "読み物とヘルプの文字の大きさ"
 		n := 24
-		if u.deps.ReaderSize != nil {
-			n = u.deps.ReaderSize()
+		if u.ReaderSize != nil {
+			n = u.ReaderSize()
 		}
 		cs = []setChoice{{Label: readerSizeLabel(24), Value: 24}, {Label: readerSizeLabel(32), Value: 32}}
 		cur = map[bool]int{true: 1, false: 0}[n >= 32]
@@ -662,7 +681,10 @@ func (u *SettingsUI) touchDown(cell image.Rectangle, pt image.Point) {
 	defer u.changedLocked()
 	u.note = ""
 	if u.choice != "" {
-		_, cs, _ := u.choicesLocked(u.choice)
+		var cs []setChoice
+		if u.shownChoice == u.choice {
+			cs = u.shownChoices // まだ描いていなければ、選ぶものはない（外のタップとして閉じる）
+		}
 		g := settingsGeometry(area, len(cs))
 		id := u.choice
 		for i, c := range cs {
@@ -756,7 +778,7 @@ func (u *SettingsUI) touchUp(cancel bool) {
 			go f()
 		}
 	case "reset":
-		if u.deps.Store == nil || len(u.deps.Store.Overrides()) == 0 {
+		if u.deps.Store == nil || u.shownOvers == 0 {
 			u.sayLocked("上書きはありません（設定ファイルの値で動いています）")
 			return
 		}
@@ -766,20 +788,26 @@ func (u *SettingsUI) touchUp(cancel bool) {
 			u.sayLocked("使えません")
 			return
 		}
-		u.choice = held
+		u.openChoiceLocked(held)
 	case "reader":
 		if u.deps.SetReaderSize == nil {
 			u.sayLocked("使えません")
 			return
 		}
-		u.choice = held
+		u.openChoiceLocked(held)
 	default:
 		if u.deps.Store == nil || u.deps.Store.ov == nil {
 			u.sayLocked("使えません（上書きの置き場所がありません）")
 			return
 		}
-		u.choice = held
+		u.openChoiceLocked(held)
 	}
+}
+
+// openChoiceLocked は、行 id の選ぶ画面を出す。選ぶものは、次に描くときに作る（Snapshot）。
+func (u *SettingsUI) openChoiceLocked(id string) {
+	u.choice = id
+	u.shownChoice, u.shownChoices = "", nil
 }
 
 // powerFire は、電源のボタンを 2 秒押し続けたとき（タイマーの goroutine）。
