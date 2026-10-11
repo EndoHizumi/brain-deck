@@ -29,6 +29,8 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
   const font = testFont()
   const cfg = parseConfigText(repoFile('config/pda-example.yaml').toString('utf8'))
   const hcfg = parseConfigText(repoFile('gui/test/fixtures/home-images.yaml').toString('utf8'))
+  // 本番の設定（フェーズ R3 で、読む、メモ、ファイル、ペン、同期を足した）
+  const prod = parseConfigText(repoFile('config/current.yaml').toString('utf8'))
   const images = new Map<string, Image565>()
   for (const f of readdirSync(resolve(repoRoot, 'config/background-images'))) {
     if (f.endsWith('.565')) images.set(f.slice(0, -4), decodeImageFile(new Uint8Array(repoFile(`config/background-images/${f}`)))!)
@@ -54,6 +56,17 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
     { file: 'pda-base-offline.png', layer: 'base', link: 'not attached' },
     { file: 'pda-todo-offline.png', layer: 'todo', link: 'power', battery: { percent: 64, plugged: false, charging: false }, texts: 'texts.json', todo: 'todo.json' },
     { file: 'pda-mouse-offline-portrait.png', layer: 'mouse', portrait: true, link: 'not attached', pressed: ['3,0'] },
+    // 本番の設定（config/current.yaml）。TZ=Asia/Tokyo lefthand -render-time 2026-10-06T09:41:27+09:00 -render-battery 87 -render-last-sync 2026-10-06T09:30:00+09:00
+    { file: 'prod-home.png', c: prod, home: 0, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-home-p2-portrait.png', c: prod, home: 1, portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-read.png', c: prod, layer: 'read', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-read-portrait.png', c: prod, layer: 'read', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-memo.png', c: prod, layer: 'memo', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-memo-portrait.png', c: prod, layer: 'memo', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-pen.png', c: prod, layer: 'pen', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-pen-portrait.png', c: prod, layer: 'pen', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-sync.png', c: prod, layer: 'sync', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'prod-sync-portrait.png', c: prod, layer: 'sync', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
   ]
   for (const t of cases) {
     it(`lefthand -render-png と画素単位で同じ（${t.file}）`, () => {
