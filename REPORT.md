@@ -6,6 +6,66 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ K2　日本語の入力（2026-10-11）
+
+ユーザーが起きていて、「K2 から始めて」と言われて行った。デーモンは e338b6168600（`.prev` a30ea9e82e31）、設定は `config/current.yaml`（e338b61。`ime` を足した）を本番に反映した。電池は始めるとき 3.86 V、終わるとき 3.85 V（USB 給電）。
+
+### 実機で調べたこと
+
+- **入っているもの**：uim-fep 1.9.6、uim 1.9.6、uim-anthy（Anthy 0.4、辞書 22 MB。uim に登録されている方式は `anthy-utf8` だけ）、fcitx-anthy（X がないので使えない）。**Mozc は入っていない**（ユーザーの記憶の「uim-fep 経由の Mozc」は、uim-fep 経由の Anthy だった。user の `~/.bash_profile` に `fbterm -- uim-fep` があり、コンソールではそれで日本語を打っていたと思われる。PTY から fbterm を動かすと「stdin isn't a interactive tty!」で終わるだけ）。`libuim-skk.so` はあるが SKK の辞書（`/usr/share/skk`）はない。Noto Sans/Serif CJK のフォントはある。
+- **uim-fep のメモリと時間**（python で疑似端末を作って user の権限で動かした）：起動してから状態の行が出るまで 2.8 秒（デーモンの中では 4〜7 秒。描画と重なる）。RSS は起動してすぐ 4.3 MB、一度変換したあと 7.0 MB（PSS 2.2 → 4.7 MB）、子の bash 3.4 MB（PSS 1.1）、uim-helper-server 1.4 MB。打った文字の反映 10〜50 ms、最初の変換 0.2〜0.4 秒（辞書の読み込み）、2 回目から 40 ms ほど。本番のデーモンの入力と描画には影響しない（別のプロセス。欄を開いているあいだの描き直しは 5〜7 ms）。
+- **uim-fep が出す制御シーケンス**：CSI 6n（カーソルの位置の問い合わせ）、CSI r（スクロールの範囲）、CSI H、SGR 4（変換中の下線）、7（文節と候補の反転）、39;49、ESC ( B、CSI K。どれも term.go がもう扱えた。足したのは OSC の受け口（Term.OnOSC）だけ。状態の行は `anthy-utf8[An- Ｒ]`（かなにすると `[AnあＲ]`。あ が「- 」の 2 桁に重なる）、候補は `1:日本語 2:にほんご 3:ニホンゴ [2/3]`。記録したバイト列をテスト（TestTermUimFepSequences）にした。
+- **uim の設定**：`LIBUIM_USER_SCM_FILE` で `~/.uim` の代わりのファイルを渡せる（init.scm）。既定のオン/オフのキーは zenkaku-hankaku と Shift+Space で、どちらも端末では送れないので、lefthand の uim.scm で Ctrl+Space（NUL。uim-fep は `<Control> ` にする）、Ctrl+^（英数にする）、Ctrl+]（変換中はやめる）を足した。
+- **見つけた癖**：uim-fep は、1 回の読み取りで制御の文字と文字が一緒に届くと（`Ctrl+^` + `2026-10-11 23:37` を一度に書いたとき）、知らないエスケープシーケンスとみなして、そのまま子（readline）に渡す。制御の文字が 1 つだけなら効く。また、変換中はオフのキーもやめるキー以外は無視される。lefthand は制御の文字を 1 つずつ、30 ms の間を置いて書く（imeSplit）。
+- **login -p**：環境変数を捨てない（HOME は渡さなければ login が決める。sudo の HOME=/root が残った状態で試したら `/root` に入れずに失敗したので、渡す環境変数は TERM、LANG、PATH、BRAIN_TERMINAL、BRAIN_IME、LIBUIM_USER_SCM_FILE だけにした）。`/etc/profile` → profile.d → `exec uim-fep` で、`UIM_FEP_PID` の入った user の bash（非ログインの対話シェル。`user@brain:~$`）が開くことを、`login -p -f user`（パスワードを聞かない。試験のためだけ）で確かめた。
+- **キーの注入**：`/dev/input/event1`（brain-kbd-i2c）に EV_KEY を書くと、デーモンがふつうのキーとして受け取る（PC に漏らさないよう、試験の設定ではすべてのキーを `{input: todo}` にした。欄が開いていなければ欄を開くだけ、開いていれば欄に入る）。これで、ユーザーに頼まずに欄の試験ができた。
+
+### 作ったもの
+
+- **ime.go**：uim-fep の係。欄を 2 行の端末（Term）にし、`uim-fep -u <方式> -s lastline -e bash --norc --noprofile line.sh` を Brain の user の権限（startUserPTY。root は断る）で動かす。line.sh は bash の `read -e`（readline）で 1 行を読み、決定で `ESC ] 7777 ; ok ; <文字> BEL`、Ctrl+] の readline のマクロ（行を消して先頭に Ctrl+] を入れた行として確定）で `ESC ] 7777 ; cancel BEL` を書く。uim.scm、inputrc、line.sh はデータの置き場所の `ime/`（0755、0644）に作る。起動が終わる（状態の行が出る）までのキーはためて送る。欄を閉じても止めず、`ime.idle`（既定 10 分）使わなければ止める。方式が変われば止めて起動し直す。`IMEView`（1 行目の桁、カーソル、候補の行、モード、準備中の知らせ）。
+- **欄（prompt.go）**：uim-fep が使えるときは欄を IME にし、キーは端末モードと同じバイト列（keyBytes）で送る。文字切り替え（Alt）を 1 回押す（ほかのキーを押さずに離す）と NUL（かな/英数）。戻るは Ctrl+]（変換中なら変換をやめ、でなければ欄をやめる。結果が cancel で届いたときに閉じる）。時刻の欄は Ctrl+^ で英数にしてから最初の文字を入れる。確定できなかったとき（空の Todo など）は、同じ文字で開き直す。使えないとき（off、uim-fep がない、起動できない、途中で止まった）は今までの英数字だけの入れ方（題に「（英数字と記号）」）。描画は倍率 2 の k8x12（全角 16 ドット）で、下線（変換中）と反転（文節、候補。青の背景）、候補の行は説明の行の代わりに出す。題の横に［かな］［英数］。
+- **Brain のシェル（termmode.go、termpty.go、contrib/brain/lefthand-ime.sh）**：`/bin/login -p` に `BRAIN_IME=<方式>` と `LIBUIM_USER_SCM_FILE` を渡す。`/etc/profile.d/lefthand-ime.sh`（install.sh が置く。本番の Brain には手で置いた）が、`BRAIN_TERMINAL=1` と `BRAIN_IME` があり `UIM_FEP_PID` がない対話シェルのときだけ、`exec uim-fep -u <方式> -s lastline`（$SHELL を開く）。文字切り替えを 1 回押すと NUL（uim-fep を通しているときだけ。PC の端末では何も送らない）。タッチのキーに 3 ページ目「日本語」（かな、英数、変換、確定、取消、文節の移動と長さ、候補、BS、F6〜F10 の変換中の形、Esc、Tab、Ctrl、^C、^D、^L、Del）。
+- **設定と状態**：設定の `ime`（method：auto/off/方式、user、idle、terminal）。上書き `ime.method`。設定のアプリの「日本語入力」の行（使わない、自動、入っている方式。方式が入っていなければそう出す）と情報のタブの「日本語入力」。設定の行が 10 になったので、設定のタブは 2 ページになった（時刻合わせと「設定ファイルの値に戻す」は 2 ページ目）。`get_status` の `ime`、`brain-deck status` の「日本語入力」。GUI の設定の型と模擬の Brain の上書きの名前。
+- **文書**：README の「日本語の入力」（仕組み、キー、やめ方、測った値、設定、SKK と Mozc の入れ方、できないこと、目で確かめる手順）ほか、docs/config.md の `ime`、docs/protocol.md、ヘルプの「日本語を打つ」。
+
+### 選んだ方法と、ほかの案
+
+- 第一候補どおり、欄を「1 行（+ 状態の行）の小さな端末」にして uim-fep を動かした。端末の描き方をそのまま使え、Brain のシェルと同じ uim の設定とキーになる。
+- **行を読むプログラム**：bash の readline（起動 34 ms）にした。python3 は起動に 1.1 秒、lefthand 自身の子コマンドは 0.2 秒だが、readline は UTF-8 のカーソル移動、後退、Home/End、横のスクロールをもう持っている。
+- **anthy-agent を直接使う案**（ローマ字→かな、文節、候補の画面を brain-deck の中に作る）：欄の見た目は自由になるが、変換の操作をすべて作り直すことになり、Brain のシェル（uim-fep）と操作が違ってしまうので採らなかった。
+- **重すぎる・入っていないとき**：Anthy は軽く（合計 10 MB ほど、辞書は mmap）、入っていたので、ローマ字→かなの自作は要らなかった。SKK は辞書がないので使えない（README に入れ方を書いた）。
+
+### 確認
+
+- ホスト：`go vet ./...`、`go test ./...`（全体。IME の試験は偽の uim-fep（testdata/ime/uim-fep。bash の readline で本物の line.sh と inputrc を動かす）で、確定、やめる、最初の文字、閉じて開き直す、止まったとき、idle で止まる、Prompt の流れ、欄の絵）、GUI の `tsc` と `vitest`（258 件）。
+- 実機（試験のユニット lefthand-hwtest、`-data-dir /tmp/lhu/data`、25 分の戻すタイマー。前後で本番の lefthand.service を確かめた）：
+  - キーを注入して、Todo の欄：文字切り替え → `nihongo` → スペース（「にほんご」が反転。Anthy の学習で 2 回目は「日本語」が先）→ スペース（候補の一覧）→ 決定 → 決定で「日本語」が todo.json に入った。`test` も入った（知らせ「Todo に足しました：test」を画面で確かめた）。
+  - 戻る：変換中（かく）なら変換だけやめて欄は開いたまま、もう一度で閉じる。時刻の欄：かなにしていても英数で開き、時刻が入っている（最初の版では Ctrl+^ が効かず［かな］のままだった。上の癖を見つけて直した）。
+  - `brain-deck config put`（試験の設定）、`brain-deck overrides set ime.method off`（欄が「（英数字と記号）」になり uim-fep が止まる）、`overrides clear`（次に開いたとき起動し直す。6.7 秒）。
+  - idle（試験の設定では 2 分）で uim-fep が止まった（ログ `ime: idle for 2m0s, stopping uim-fep`）。
+  - Brain のシェル：`login -p -f user` で、profile.d のスクリプトが uim-fep を起動し、状態の行と `UIM_FEP_PID` を確かめた。**パスワードを入れる本当のログインは、ユーザーが確かめる**。
+  - 本番：`brain-deck update`（a30ea9e82e31 → e338b6168600、成功）、`config put config/current.yaml`（`config get` と同じ）、`brain-deck status` の「日本語入力：anthy-utf8（自動）、uim-fep は止まっている、Brain のシェルでも使う」。本番のホーム画面と `-render-png`（`-render-last-sync`、`-render-mouse-off`）が 0 画素の違い。
+- 試験のファイル（/tmp/lhu、注入のスクリプト、uim の試験の設定）は消した。本番の `/var/lib/lefthand/` は `update/`（更新の記録）のほかは書き換えていない。**試験で user の `~/.anthy`（学習）と `~/.uim.d/fep/` に uim-fep が書いたファイルは残っている**（user のもの。害はない）。
+- PC の `~/.local/bin/brain-deck` を e338b6168600 にした。
+
+### 変更したファイルとコミット
+
+- 285929d ime.go、ime_test.go、testdata/ime/uim-fep、term.go（OnOSC）、termpty.go（startUserPTY、openPTY、login -p）、prompt.go、config.go、main.go、control.go、termmode.go、termkeys.go、overrides.go、settingswidget.go、cmd/brain-deck/main.go、gui/src/types.ts、gui/src/demo.ts、termbrain_test.go
+- 9723c3e contrib/brain/lefthand-ime.sh、install.sh
+- 4d4b39c README.md、docs/config.md、docs/protocol.md、help/ja.md
+- e338b61 config/current.yaml
+
+### 目で確かめる手順
+
+README の「日本語の入力」→「目で確かめる手順（フェーズ K2）」（1〜7）。特に 6（Brain のシェルでのログインと日本語）は、パスワードが要るので私は試していない。
+
+### 次のフェーズ（K3）に進む前に決めてほしいこと
+
+1. **K1 のあとで決めたことのうち、まだ作っていないもの**：タブレットの形（`SW_TABLET_MODE`）のあいだ本体キーを PC にも brain-deck にも使わない（設定で変えられる。既定は使わない）、ふたを閉じているあいだ描き直しも止める。K2 は日本語入力だけにしたので、K3 の前に小さく入れるか、K3 と一緒にするか。
+2. **かな/英数の状態**：uim-fep が動いているあいだは、前の欄の状態（かな）が次の欄にも残る（時刻の欄だけ英数にする）。Todo の欄を開くたびに英数にするほうがよいか。
+3. **設定のタブが 2 ページになった**：行を 1 つ足したので、時刻合わせと「設定ファイルの値に戻す」が 2 ページ目に行った。行の高さを詰めて 1 ページに戻すか、順番を変えるか。
+4. **Brain のシェルの uim-fep**：ログインしたシェルは、uim-fep が開く非ログインの bash（`~/.bashrc` は読む。`~/.profile` は読まない。`~/.bash_profile` の `fbterm -- uim-fep` は動かない）。これでよいか。
+
 ## 追記：フェーズ K1　ふた、設定のアプリ、ヘルプ（2026-10-11）
 
 ユーザーが起きていて、その場で返事をもらいながら行った。デーモンは a30ea9e82e31（`.prev` 222a193d6554）、設定は `config/current.yaml`（d79939f）を本番に反映した。
