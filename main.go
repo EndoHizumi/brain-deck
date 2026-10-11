@@ -965,6 +965,7 @@ func main() {
 	pngRotate := flag.Int("render-rotate", -1, "-render-png で、画面の向き（0、90、180、270。-render-size は物理の大きさ）。省略すると設定の display.rotate")
 	pngHomePage := flag.Int("render-home-page", 1, "-render-png で、ホーム画面に出すページ（1 から）")
 	pngLink := flag.String("render-link", "configured", "-render-png で、PC とのつながり（UDC の state か power。configured、suspended、power、not attached、空なら出さない）。configured と suspended のほかでは、PC に送るセルを休みと描く")
+	pngProfile := flag.String("render-profile", "", "-render-png で、状態の帯に出すプロファイルの名前（既定以外のプロファイルを使っているとき）")
 	pngLastSync := flag.String("render-last-sync", "", "-render-png で、状態の帯に出す最後に同期した時刻（RFC 3339。省略すると未同期）")
 	pngRead := flag.String("render-read", "", "-render-png で、読み物のアプリのセルに、この読み物（brain-deck read add -o の .json.gz）を開いて出す")
 	pngReadPage := flag.Int("render-read-page", 1, "-render-read で出すページ（1 から）")
@@ -1108,7 +1109,7 @@ func main() {
 		if _, err := fmt.Sscanf(*pngSize, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 			log.Fatalf("bad -render-size %q", *pngSize)
 		}
-		env := WidgetEnv{Now: time.Now(), TimeSynced: !*pngUnsynced, MouseOff: *pngMouseOff, Link: *pngLink}
+		env := WidgetEnv{Now: time.Now(), TimeSynced: !*pngUnsynced, MouseOff: *pngMouseOff, Link: *pngLink, Profile: *pngProfile}
 		offline := false
 		if *pngLastSync != "" {
 			t, err := time.Parse(time.RFC3339, *pngLastSync)
@@ -1595,6 +1596,7 @@ func main() {
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
 		env.Link = link.State()
+		env.Profile = curCfg.Load().profileTitle()
 		if ti := clock.Info(); ti.LastPCSet != nil {
 			env.LastSync = ti.LastPCSet
 		}

@@ -45,6 +45,19 @@ type ProfileConfig struct {
 	Layers     []LayerConfig     `yaml:"layers,omitempty" json:"layers,omitempty"`           // レイヤーに重ねる（name で選ぶ）
 }
 
+// profileTitle は、今の設定に重ねたプロファイルの、画面に出す名前（重ねていなければ空）。
+func (c *Config) profileTitle() string {
+	if c == nil || c.profile == "" {
+		return ""
+	}
+	for i := range c.Profiles {
+		if c.Profiles[i].Name == c.profile {
+			return c.Profiles[i].title()
+		}
+	}
+	return c.profile
+}
+
 func (p *ProfileConfig) title() string {
 	if p.Label != "" {
 		return p.Label

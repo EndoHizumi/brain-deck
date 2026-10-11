@@ -357,6 +357,7 @@ export interface PreviewParams {
   home?: number // ホーム画面を、このページ（0 から）で描く（stack は使わない）
   link?: string // PC とのつながり（UDC の state か power。-render-link）。省略すると configured。configured と suspended のほかでは、PC に送るセルを休みと描く
   lastSync?: Date | null // 状態の帯の、最後に同期した時刻（-render-last-sync）
+  profile?: string // 状態の帯の、使っているプロファイルの名前（-render-profile。既定なら省略）
 }
 
 export interface WidgetEnv {
@@ -441,7 +442,7 @@ export function renderPreview(font: BitmapFont, p: PreviewParams): { pixels: Uin
   }
   if (bar) {
     drawBar(font, px, W, title, mode, p.cfg.status_bar?.items ?? BAR_ITEMS_DEFAULT,
-      { now: env.now, synced: env.synced, battery: env.battery, link: p.link ?? 'configured', mouseOff: env.mouseOff, lastSync: p.lastSync ?? null })
+      { now: env.now, synced: env.synced, battery: env.battery, link: p.link ?? 'configured', mouseOff: env.mouseOff, lastSync: p.lastSync ?? null, profile: p.profile })
   } else if (title) {
     const bw = font.textWidth(title) * badgeScale + 2 * badgePad
     const bh = FONT_H * badgeScale + 2 * badgePad

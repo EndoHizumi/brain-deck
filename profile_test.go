@@ -227,3 +227,28 @@ func TestProfileProtocol(t *testing.T) {
 		t.Fatalf("profiles %v", res["profiles"])
 	}
 }
+
+func TestBarShowsProfileOnlyWhenNotDefault(t *testing.T) {
+	env := WidgetEnv{Now: time.Date(2026, 10, 12, 9, 0, 0, 0, time.Local), TimeSynced: true}
+	items := barItems([]string{barTime}, env)
+	if len(items) != 1 || items[0].kind != barTime {
+		t.Fatalf("default: %+v", items)
+	}
+	env.Profile = "会社"
+	items = barItems([]string{barTime}, env)
+	if len(items) != 2 || items[0].kind != barProfile || items[0].text != "会社" {
+		t.Fatalf("profile: %+v", items)
+	}
+	cfg := &Config{Profiles: []ProfileConfig{{Name: "work", Label: "会社"}, {Name: "home"}}}
+	if got := cfg.profileTitle(); got != "" {
+		t.Errorf("no profile: %q", got)
+	}
+	cfg.profile = "work"
+	if got := cfg.profileTitle(); got != "会社" {
+		t.Errorf("label: %q", got)
+	}
+	cfg.profile = "home"
+	if got := cfg.profileTitle(); got != "home" {
+		t.Errorf("name: %q", got)
+	}
+}

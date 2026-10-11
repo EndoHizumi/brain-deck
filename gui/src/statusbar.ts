@@ -20,6 +20,7 @@ type RGB = [number, number, number]
 export const colBar: RGB = [0x14, 0x1c, 0x28]
 export const colBarRule: RGB = [0x30, 0x3c, 0x4c]
 const colBarDim: RGB = [0x6a, 0x74, 0x80]
+const colBarProfile: RGB = [0x8c, 0xc8, 0xff]
 const colText: RGB = [0xff, 0xff, 0xff]
 const colUnsynced: RGB = [0xff, 0x80, 0x20]
 const colOK: RGB = [0x50, 0xd8, 0x80]
@@ -35,10 +36,11 @@ export interface BarEnv {
   lastSync: Date | null
   syncing?: boolean // PC の brain-deck sync が同期している（sync.go）
   syncFailed?: boolean // 最後の同期に失敗したものがあった
+  profile?: string // 使っているプロファイルの名前（既定なら空。profile.go）
 }
 
 export interface BarItemView {
-  kind: BarItem
+  kind: BarItem | 'profile'
   text: string
   ink: RGB
   batt?: BatteryInfo
@@ -58,6 +60,7 @@ export function linkText(state: string): [string, RGB] {
 // barItems は statusbar.go の barItems と同じ。
 export function barItems(items: BarItem[], env: BarEnv): BarItemView[] {
   const out: BarItemView[] = []
+  if (env.profile) out.push({ kind: 'profile', text: env.profile, ink: colBarProfile })
   for (const k of items) {
     if (k === 'time') out.push({ kind: k, text: hhmm(env.now), ink: env.synced ? colText : colUnsynced })
     else if (k === 'battery') {

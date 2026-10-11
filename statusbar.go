@@ -10,6 +10,7 @@ import (
 // ---------- 状態の帯（status_bar） ----------
 //
 // 画面の上に、今のレイヤーの名前と、時刻、電池、PC とのつながり、マウスの形、最後に同期した時刻を出す細い帯。
+// 既定以外のプロファイル（PC ごとの設定）を使っているときは、その名前も出す。
 // 帯を出したレイヤーでは、格子は帯の下の範囲に並ぶ（セルがその分だけ小さくなる）。
 // 出すかどうかはレイヤーごとの status_bar で決め、書いていないレイヤーは下のレイヤー、なければ status_bar.show。
 // ホーム画面は home.status_bar（既定は出す）。帯を出すあいだは、右上のレイヤーの札の代わりに、帯の左に名前を出す。
@@ -30,6 +31,7 @@ const (
 	barPC      = "pc"
 	barMouse   = "mouse"
 	barSync    = "sync"
+	barProfile = "profile" // 設定の items には書かない（使っているときだけ出す）
 )
 
 // barItemsDefault は、items を省略したときの項目（左から）。
@@ -38,9 +40,10 @@ var barItemsDefault = []string{barSync, barMouse, barPC, barBattery, barTime}
 var barItemNames = map[string]bool{barTime: true, barBattery: true, barPC: true, barMouse: true, barSync: true}
 
 var (
-	colBar     = RGB{0x14, 0x1c, 0x28}
-	colBarRule = RGB{0x30, 0x3c, 0x4c}
-	colBarDim  = RGB{0x6a, 0x74, 0x80}
+	colBar        = RGB{0x14, 0x1c, 0x28}
+	colBarRule    = RGB{0x30, 0x3c, 0x4c}
+	colBarDim     = RGB{0x6a, 0x74, 0x80}
+	colBarProfile = RGB{0x8c, 0xc8, 0xff}
 )
 
 // StatusBarConfig は設定の status_bar。
@@ -108,8 +111,12 @@ func linkText(state string) (string, RGB) {
 }
 
 // barItems は、今の状態から帯の項目を作る。
+// 既定以外のプロファイル（profile.go）を使っているときは、項目の左にその名前を出す。
 func barItems(items []string, env WidgetEnv) []barItem {
 	var out []barItem
+	if env.Profile != "" {
+		out = append(out, barItem{kind: barProfile, text: env.Profile, ink: colBarProfile})
+	}
 	for _, k := range items {
 		switch k {
 		case barTime:

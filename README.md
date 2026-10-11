@@ -378,6 +378,7 @@ layers:
 - **PC とのつながり**：USB の状態（UDC の state）を 2 秒ごとに見て、つながっていれば緑の「PC」、PC がスリープ中なら「PC休止」、外れていれば橙の「PCなし」。
 - **同期**：今は、最後に PC から時刻を合わせた時刻。一度もなければ橙の「未同期」（フェーズ P3 で `brain-deck sync` の時刻にする）。
 - **ホーム画面**：既定で出す（`home.status_bar: false` で出さない）。
+- **プロファイル**：既定以外のプロファイル（[PC ごとの設定](#pc-ごとの設定profiles)）を使っているときだけ、項目の左にその名前（`label`、なければ `name`）を水色で出す。`items` には書かない。
 - **詳しく**：[docs/config.md](docs/config.md) の「状態の帯（status_bar）」。
 
 ### 画面の向き（rotate）と縦向きの格子（touch_portrait）

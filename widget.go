@@ -116,6 +116,7 @@ type WidgetEnv struct {
 	Reader       *ReaderView            // reader：読み物のアプリの状態（写し）
 	Syncing      bool                   // 状態の帯：PC の brain-deck sync が同期している
 	SyncFailed   bool                   // 状態の帯：最後の同期に失敗したものがあった
+	Profile      string                 // 状態の帯：使っているプロファイルの名前（既定なら空）
 	Files        *FilesView             // files：ファイルエクスプローラの状態（写し）
 	Settings     *SettingsView          // settings：設定のアプリの状態（写し）。nil なら説明だけ描く
 	Help         *HelpView              // help：ヘルプの状態（写し）。nil なら説明だけ描く

@@ -41,7 +41,7 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
 
   // fixtures は README の「開発」の -render-png（-render-rotate、-render-home-page、-render-link、-render-last-sync）で書き出したもの
   const cases: { file: string; c?: typeof cfg; layer?: string; home?: number; portrait?: boolean; battery?: any; link?: string; lastSync?: string;
-    mouseOff?: boolean; widgets?: string; calendar?: string; pressed?: string[]; pressStyle?: PressStyle; images?: boolean; texts?: string; todo?: string }[] = [
+    mouseOff?: boolean; profile?: string; widgets?: string; calendar?: string; pressed?: string[]; pressStyle?: PressStyle; images?: boolean; texts?: string; todo?: string }[] = [
     { file: 'pda-home.png', home: 0, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'pda-home-p2-portrait.png', home: 1, portrait: true, battery: { percent: 12, plugged: false, charging: false }, link: 'suspended', mouseOff: true },
     { file: 'pda-tools.png', layer: 'tools', battery: { percent: 50, plugged: true, charging: true }, link: 'not attached', widgets: 'widgets-state.json' },
@@ -74,6 +74,8 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
     { file: 'prod-settings-portrait.png', c: prod, layer: 'settings', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'prod-help.png', c: prod, layer: 'help', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'prod-help-portrait.png', c: prod, layer: 'help', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    // 既定以外のプロファイルを使っているとき（-render-profile 会社）
+    { file: 'prod-home-profile.png', c: prod, home: 0, profile: '会社', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
   ]
   for (const t of cases) {
     it(`lefthand -render-png と画素単位で同じ（${t.file}）`, () => {
@@ -84,7 +86,7 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
       const mode: Mode = l > 0 ? 'latched' : 'base'
       const [w, h] = t.portrait ? [480, 800] : [800, 480]
       const { pixels } = renderPreview(font, { cfg: c, stack, mode, w, h, now, home: t.home, battery: t.battery ?? null, link: t.link,
-        lastSync: t.lastSync ? new Date(t.lastSync) : null, mouseOff: t.mouseOff, widgets: t.widgets ? fx(t.widgets) : undefined,
+        lastSync: t.lastSync ? new Date(t.lastSync) : null, mouseOff: t.mouseOff, profile: t.profile, widgets: t.widgets ? fx(t.widgets) : undefined,
         calendar: t.calendar ? fx(t.calendar) : null, pressed: new Set(t.pressed), pressStyle: t.pressStyle,
         texts: t.texts ? fx(t.texts).texts : undefined, todo: t.todo ? fx(t.todo) : undefined,
         images: t.images ? (id) => images.get(id) : undefined })
