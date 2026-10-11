@@ -496,9 +496,19 @@ func newCanvas(fb *Framebuffer, rot int) *Canvas {
 // env は、ウィジェットを描くときの状態を返す関数（nil なら時刻だけ使う）。
 // images は背景画像の読み込み先（nil なら背景画像を描かない）。
 func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv, images ImageSource) (*Display, error) {
-	fb, err := OpenFramebuffer(dc.Device)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", dc.Device, err)
+	return StartDisplayFrom(nil, dc, l, env, images)
+}
+
+// StartDisplayFrom は、StartDisplay と同じだが、起動中の画面（sp。nil でもよい）のフレームバッファと VT を引き継ぐ。
+func StartDisplayFrom(sp *Splash, dc *DisplayConfig, l *Layout, env func() WidgetEnv, images ImageSource) (*Display, error) {
+	var fb *Framebuffer
+	if sp != nil {
+		fb = sp.fb
+	} else {
+		var err error
+		if fb, err = OpenFramebuffer(dc.Device); err != nil {
+			return nil, fmt.Errorf("open %s: %w", dc.Device, err)
+		}
 	}
 	log.Printf("display: %s", fb.Info)
 	cv := newCanvas(fb, l.Rotate)
@@ -511,17 +521,22 @@ func StartDisplay(dc *DisplayConfig, l *Layout, env func() WidgetEnv, images Ima
 	}
 	// VT_PROCESS のシグナルは VT を設定する前に受けられるようにしておく
 	signal.Notify(d.vtSig, syscall.SIGUSR1, syscall.SIGUSR2)
-	vt, err := OpenVT(dc.VT, syscall.SIGUSR1, syscall.SIGUSR2)
-	if err != nil {
-		signal.Stop(d.vtSig)
-		fb.Close()
-		return nil, fmt.Errorf("vt: %w", err)
+	var vt *VT
+	if sp != nil {
+		_, vt = sp.handoff()
+	} else {
+		var err error
+		if vt, err = OpenVT(dc.VT, syscall.SIGUSR1, syscall.SIGUSR2); err != nil {
+			signal.Stop(d.vtSig)
+			fb.Close()
+			return nil, fmt.Errorf("vt: %w", err)
+		}
 	}
 	d.vt = vt
 
 	t := time.Now()
 	d.drawAllLocked(l)
-	vlogf("display: initial render %v", time.Since(t))
+	log.Printf("display: initial render %v", time.Since(t).Round(time.Millisecond))
 	if err := vt.Activate(); err != nil {
 		log.Printf("display: %v", err)
 	}

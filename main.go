@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -1040,9 +1041,20 @@ func main() {
 	if flag.NArg() > 0 {
 		cfgPath = flag.Arg(0)
 	}
+	// デーモンとして動くとき：起動のあいだは GC を減らし（起動を終えたら戻す）、設定を読んだらすぐに起動中の画面を出す
+	daemon := !*calibrate && !*check && !*dumpJSON && *pngOut == "" && *recOut == ""
+	if daemon {
+		debug.SetGCPercent(400)
+	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		log.Fatal(err)
+	}
+	bootTrace.mark("config")
+	var splash *Splash
+	if daemon && cfg.Touch != nil && cfg.displayEnabled() {
+		splash = ShowSplash(cfg.Display, NewRotateStore(OpenStore(*dataDir)).Initial(cfg.Display.Rotate))
+		bootTrace.mark("splash")
 	}
 
 	if *calibrate {
@@ -1070,6 +1082,7 @@ func main() {
 		log.Printf("warning: %s", w)
 	}
 
+	bootTrace.mark("keymap")
 	imagesDir := filepath.Join(*dataDir, "images")
 	if *pngImages != "" {
 		imagesDir = *pngImages
@@ -1387,6 +1400,7 @@ func main() {
 		}
 	}
 
+	bootTrace.mark("overrides")
 	// CPU が 1 つでも、描画中に入力の goroutine がすぐ動けるようにする
 	// （描画スレッドは nice 10 に下げてあるので、OS が入力側を優先する）
 	if runtime.GOMAXPROCS(0) < 2 {
@@ -1397,6 +1411,7 @@ func main() {
 	store := OpenStore(*dataDir)
 	clock := NewTimeService(store)
 	clock.BootFromRTC(cfg.Clock.rtcMode())
+	bootTrace.mark("clock")
 
 	// 入力デバイスを先に開く。失敗したら HID に何も送らずに終わる
 	kbd, err := openInput(cfg.Keyboard)
@@ -1410,9 +1425,11 @@ func main() {
 		}
 	}
 
+	bootTrace.mark("input")
 	// 前に端末モードのまま終わっていたら、USB の構成の名前と Brain の getty を戻す（/dev/hidg0 を開く前に）
 	restoreTerminal(*gadgetSetup)
 
+	bootTrace.mark("terminal")
 	hid := NewHIDWriter(cfg.HIDDevice)
 	hostWaker = NewWaker() // スリープ中の PC をキーで起こす
 	hl := detectHID(cfg.HIDDevice)
@@ -1436,6 +1453,7 @@ func main() {
 	ime := NewIME(*dataDir, curCfg.Load)
 	term.ime = ime
 	addAtExit(ime.Stop)
+	bootTrace.mark("hid")
 	if !clock.Synced() {
 		log.Printf("time: not set since boot (the clock widget shows %q until the settings GUI connects)", unsyncedText)
 	}
@@ -1480,6 +1498,7 @@ func main() {
 	if in := battery.Info(); in != nil {
 		guard.Sample(*in) // 起動したときの 1 行（記録の「start」）
 	}
+	bootTrace.mark("services")
 	userActivity = guard.Activity
 	prompt := NewPrompt(nil)
 	prompt.SetIME(ime)
@@ -1512,6 +1531,7 @@ func main() {
 			log.Printf("warning: %s", p.Message)
 		}
 	}
+	bootTrace.mark("images")
 	link := NewLinkMonitor("/sys")
 	setOnline := func(on bool) {
 		e.SetOffline(!on)
@@ -1577,6 +1597,7 @@ func main() {
 		}
 	})
 	e.SetWidgets(widgetRT)
+	bootTrace.mark("widgets")
 	widgetEnv := func() WidgetEnv {
 		env := clock.Env()
 		env.Texts = texts.Snapshot()
@@ -1664,6 +1685,7 @@ func main() {
 		log.Printf("grab keyboard: %v", err)
 	}
 	lid.Init(kbd) // デーモンを起動し直したときに、ふたが閉じていれば
+	bootTrace.mark("grab")
 	log.Printf("keyboard: %s", describe(kbd))
 	logLayers(km)
 	var disp *Display
@@ -1675,7 +1697,9 @@ func main() {
 		// 画面が使えなくても入力は動かす
 		if cfg.displayEnabled() {
 			first := buildLayout(km, e.View())
-			d, err := StartDisplay(cfg.Display, first, widgetEnv, images)
+			d, err := StartDisplayFrom(splash, cfg.Display, first, widgetEnv, images)
+			splash = nil
+			bootTrace.mark("display")
 			if err != nil {
 				log.Printf("display disabled: %v", err)
 			} else {
@@ -1726,6 +1750,8 @@ func main() {
 		}
 	}
 
+	splash.Close() // 画面を使わないとき
+	bootTrace.mark("display-hooks")
 	// 設定 GUI（USB シリアル）。通信が止まっても、入力の処理は待たない
 	mon := &Monitor{}
 	e.SetOnStatus(mon.LayerChanged)
@@ -1860,10 +1886,13 @@ func main() {
 		go ctl.runSerial(*serialPath)
 	}
 
+	bootTrace.mark("control")
 	if touch != nil {
 		go runTouch(touch, e, disp, mon, dim)
 	}
 	writeReady(*readyFile) // 更新の係は、これで新しい版が起動したことを知る
+	bootTrace.finish()
+	debug.SetGCPercent(100)
 	runKeyboard(kbd, e, mon, dim, lid)
 }
 
