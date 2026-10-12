@@ -32,6 +32,7 @@
 
 ## 再開するときの注意
 
+- **新しいセッションは、最初に [docs/architecture.md](docs/architecture.md)（仕組みの資料。2026-10-12 に作った）を読む**。全体像、USB、入力の流れ、割り当ての重なり、データ、通信、保守、起動、安全をまとめ、ソースの地図（「〇〇を変えたいときはどのファイルを見るか」）と用語集もある。コードを変えたら、関係する章も直す。
 - go は `../toolchain/go/bin`（PATH にない）。
 - 試験のユニットは時間制限付き、`-data-dir` は /tmp の下。試験の前後で本番の lefthand.service を確かめる。
 - 試験の手順：/tmp/prodcmp.sh（本番の画面と -render-png の比較。背景画像は DATADIR=/tmp/prodimg に本番の images を写して使う。K3 の終わりに /tmp/prodimg は消した）、/tmp/brainreq.py（1 つのリクエストを送る）は /tmp にあるだけ（セッションが切れたら作り直す）。

@@ -41,6 +41,8 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 設定に `home` を書かなければ、今までどおり左手デバイス（base のレイヤー）から始まる。
 「PC のための手元の PDA」として使う例は [config/pda-example.yaml](config/pda-example.yaml)（今のダッシュボードや道具をアプリとして並べ、縦向きの並びも入れたもの）。
 
+仕組み（どの部品が何をしていて、どうつながっているか）は [docs/architecture.md](docs/architecture.md) にまとめてある。
+
 ## 目次
 
 1. [仕組み](#仕組み)
@@ -76,9 +78,11 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 
 ## 仕組み
 
+仕組みを最初から最後まで通して説明した資料は [docs/architecture.md](docs/architecture.md)（全体像、USB、入力の流れ、割り当ての重なり、描画、データ、通信、保守、起動、安全、ソースの地図、用語集）。
+
 ![入力の流れと起動時のユニットの順序](REPORT-architecture.png)
 
-（上の図は 2026-10-03 の最初の形。今は ACM が 2 つ（NCM+HID+ACM+ACM）で、画面も描く）
+（上の図は 2026-10-03 の最初の形。今は ACM が 2 つ（NCM+HID+ACM+ACM）で、画面も描く。今の全体像は [docs/architecture.md](docs/architecture.md)）
 
 ```
 本体キーボード (brain-kbd-i2c)  ─┐
@@ -2725,6 +2729,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | config/weather-example.yaml | 天気のウィジェットの例（widgets-example.yaml に「天気」と「天気(小)」のレイヤーを足したもの） |
 | cmd/brain-deck/weather.go | PC の `brain-deck weather`：天気予報 API からの取得（User-Agent、間をあける）、天気アイコンの SVG の取得とキャッシュ、変換、送信 |
 | cmd/brain-deck/svg.go、svgfilter.go | PC の brain-deck の SVG の描画（天気アイコン用。道筋、線、グラデーション、埋め込みの PNG、フィルター） |
+| docs/architecture.md、docs/architecture/ | 仕組みの資料（全体の地図、ソースの地図、用語集、制約） |
 | docs/config.md | 設定ファイルの形式（設定 GUI と共有） |
 | docs/keymap-pwsh2.md | PW-SH2 のキー配列、同時押しの制約、画面右の帯の座標 |
 | docs/kernel-build.md | HID と ACM を有効にしたカーネルのビルドと、SD カードへの差し替え |
