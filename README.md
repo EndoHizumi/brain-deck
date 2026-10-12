@@ -2702,7 +2702,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則（70）、端末モードのときだけ getty を起動する規則（71）、スリープ解除を許す規則（72）、つないだら brain-deck sync を動かす規則（73） |
 | contrib/systemd/brain-terminal-getty@.service、contrib/profile.d/brain-terminal.sh | PC 用。端末モードの getty と、端末の大きさを合わせるスクリプト |
 | contrib/brain/lefthand-ime.sh | Brain 用（install.sh が /etc/profile.d に置く）。端末モードで Brain 自身にログインしたとき、uim-fep の中でシェルを開き直す |
-| config.yaml | 設定の例。実機と同じ値 |
+| config.yaml | 設定の例（install.sh が最初に置く。ホーム画面のない、最初のころの形）。今の本番の設定は config/current.yaml |
 | config/current.yaml | Brain で動いている本番の設定の写し（2026-10-10 のフェーズ R で、ホーム画面、PC から外したとき、自動減光、電池の知らせを入れた。[本番の設定](#本番の設定configcurrentyaml)）。下の「current.yaml に〜を足したもの」の例は、フェーズ R より前の本番の設定（ホーム画面なし）がもと |
 | config/widgets-example.yaml | ウィジェットと span の例（current.yaml に「情報」と「Todo」のレイヤーを足したもの） |
 | config/background-example.yaml、config/background-images/ | 背景画像の例（current.yaml に背景を足したもの）と、式で描いた例の画像 |
