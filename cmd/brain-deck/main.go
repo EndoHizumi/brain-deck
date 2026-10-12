@@ -103,6 +103,9 @@ const usage = `使い方：
   brain-deck memo [list] [--json]     手書きメモ（widget: memo）の一覧（番号、id、ページと線の数、更新した日時）
   brain-deck memo get <番号|id> -o <ファイル.png> [--page N]   メモを PNG に描き出す（ページは縦に並べる）
   brain-deck memo rm <番号|id>...     メモを消す
+  brain-deck app [list] [--json]      自分で足したアプリ（/var/lib/lefthand/apps。docs/apps.md）の一覧と、動きの様子
+  brain-deck app install <フォルダ>...   アプリ（app.yaml とスクリプト）を Brain に置く（同じ名前なら入れ替える）
+  brain-deck app rm <名前>...         アプリと、アプリが書いたデータを消す
   brain-deck read add <ファイル | URL>...  読み物（青空文庫のテキストか zip、DRM のない EPUB、Web の記事）を取り込む
                                       （-o <ファイル> で送らずにファイルに書く）。read [list]、read rm <番号>
   brain-deck read feed add <URL> [--limit-items 10]、feed list、feed rm <番号>、feed sync   RSS の記事を取り込む
@@ -512,6 +515,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		cmd, err = readCommand(o)
 	case "files":
 		cmd, err = filesCommand(o)
+	case "app", "apps":
+		cmd, err = appCommand(o)
 	case "calibrate":
 		return runCalibrate(o, stdout, stderr)
 	case "sync":
