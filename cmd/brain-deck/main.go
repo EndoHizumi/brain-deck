@@ -1298,6 +1298,7 @@ type usbHID struct {
 	Mouse     bool    `json:"mouse"`
 	Media     *bool   `json:"media"` // 古い lefthand にはない
 	Switching bool    `json:"switching"`
+	Preparing bool    `json:"preparing"` // 起動のときの USB の準備中（フェーズ K6。古い lefthand にはない）
 	USBState  *string `json:"usb_state"` // 古い lefthand にはない
 }
 
@@ -1313,7 +1314,9 @@ func (h usbHID) describe() string {
 	default:
 		s = "キーボードだけ（ブートキーボード）"
 	}
-	if h.Switching {
+	if h.Preparing {
+		s += "（起動のときの USB の準備中）"
+	} else if h.Switching {
 		s += "（切り替え中）"
 	}
 	if h.USBState != nil && *h.USBState == "suspended" {

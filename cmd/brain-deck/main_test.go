@@ -679,6 +679,8 @@ func TestUSBHIDDescribe(t *testing.T) {
 		{usbHID{Mouse: true}, "キーボードとマウス"},
 		{usbHID{Mouse: true, Media: &yes}, "キーボードとマウスとメディアキー"},
 		{usbHID{Mouse: true, Media: &yes, USBState: &susp}, "キーボードとマウスとメディアキー。PC はスリープ中（USB がサスペンド）"},
+		{usbHID{Media: &no, Switching: true}, "キーボードだけ（ブートキーボード。メディアキーは送れない）（切り替え中）"},
+		{usbHID{Media: &no, Switching: true, Preparing: true}, "キーボードだけ（ブートキーボード。メディアキーは送れない）（起動のときの USB の準備中）"},
 	} {
 		if got := c.h.describe(); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.h, got, c.want)

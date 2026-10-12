@@ -110,3 +110,93 @@ esac
 		t.Error("unknown item must fail")
 	}
 }
+
+// 段階 4〜6（フェーズ K6）：ファイルを足す、/dev/null で隠す、mask する。revert で消し、unmask する。
+func TestBootTuneFiles(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "units")
+	log := filepath.Join(dir, "log")
+	fake := filepath.Join(dir, "systemctl")
+	os.WriteFile(fake, []byte(`#!/bin/sh
+db=`+db+`
+echo "$*" >> `+log+`
+case $1 in
+is-enabled) s=$(grep "^$2 " $db | cut -d' ' -f2); [ -n "$s" ] && echo $s || { echo not-found; exit 1; }; [ "$s" = enabled ] ;;
+mask) sed -i "s/^$2 .*/$2 masked/" $db ;;
+unmask) sed -i "s/^$2 .*/$2 static/" $db ;;
+esac
+`), 0o755)
+	os.WriteFile(db, []byte("modprobe@drm.service static\nmodprobe@efi_pstore.service static\nmodprobe@configfs.service static\nmodprobe@fuse.service static\n"), 0o644)
+	root := filepath.Join(dir, "root")
+	// 前からある udev の規則のフォルダ（revert でフォルダごと消さない）
+	os.MkdirAll(filepath.Join(root, "etc/udev/rules.d"), 0o755)
+	state := filepath.Join(root, "etc/lefthand/boot-tune.state")
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("sh", append([]string{"contrib/boot/boot-tune.sh"}, args...)...)
+		cmd.Env = append(os.Environ(), "SYSTEMCTL="+fake, "BOOT_TUNE_STATE="+state, "BOOT_TUNE_NOROOT=1", "BOOT_TUNE_ROOT="+root)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	exists := func(p string) bool { _, err := os.Lstat(filepath.Join(root, p)); return err == nil }
+	early := "etc/systemd/system/lefthand.service.d/boot-early.conf"
+
+	if out := run("plan", "4"); !strings.Contains(out, "[段階 4] early") || !strings.Contains(out, "boot-early.conf（今：absent）") {
+		t.Errorf("plan 4:\n%s", out)
+	}
+	run("apply", "4")
+	b, _ := os.ReadFile(filepath.Join(root, early))
+	for _, want := range []string{"DefaultDependencies=no", "After=systemd-remount-fs.service fake-hwclock-load.service", "Conflicts=shutdown.target", "Before=shutdown.target"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("boot-early.conf: want %q in\n%s", want, b)
+		}
+	}
+	if l, _ := os.ReadFile(log); !strings.Contains(string(l), "daemon-reload") {
+		t.Error("apply must daemon-reload after adding a drop-in")
+	}
+	run("apply", "5")
+	for _, p := range []string{"etc/systemd/system.conf.d/brain-deck-boot.conf", "etc/sysctl.d/90-brain-deck-console.conf"} {
+		if !exists(p) {
+			t.Errorf("%s missing", p)
+		}
+	}
+	if l, err := os.Readlink(filepath.Join(root, "etc/udev/rules.d/60-triggerhappy.rules")); err != nil || l != "/dev/null" {
+		t.Errorf("triggerhappy rule: %q %v", l, err)
+	}
+	u, _ := os.ReadFile(db)
+	// configfs と fuse は、マウントが Requires= するので mask しない（mask すると configfs がなく、USB の構成が作れない）
+	for _, want := range []string{"modprobe@drm.service masked", "modprobe@efi_pstore.service masked", "modprobe@configfs.service static", "modprobe@fuse.service static"} {
+		if !strings.Contains(string(u), want) {
+			t.Errorf("want %q in\n%s", want, u)
+		}
+	}
+	// brain-deck が置いたのではないファイルには触らない
+	os.MkdirAll(filepath.Join(root, "etc/systemd/journald.conf.d"), 0o755)
+	os.WriteFile(filepath.Join(root, "etc/systemd/journald.conf.d/brain-deck.conf"), []byte("mine\n"), 0o644)
+	if out := run("apply", "journal"); !strings.Contains(out, "そのまま") {
+		t.Errorf("existing file:\n%s", out)
+	}
+	os.RemoveAll(filepath.Join(root, "etc/systemd/journald.conf.d"))
+	run("apply", "6")
+	if b, _ := os.ReadFile(filepath.Join(root, "etc/systemd/journald.conf.d/brain-deck.conf")); !strings.Contains(string(b), "SystemMaxUse=32M") {
+		t.Errorf("journald: %s", b)
+	}
+	if out := run("status"); !strings.Contains(out, "boot-early.conf：前は absent、今は present（file）") || !strings.Contains(out, "modprobe@drm.service：前は static、今は masked（mask）") {
+		t.Errorf("status:\n%s", out)
+	}
+	// 段階 5 だけ戻す
+	run("revert", "5")
+	if exists("etc/udev/rules.d/60-triggerhappy.rules") || exists("etc/systemd/system.conf.d") || !exists("etc/udev/rules.d") || !exists(early) {
+		t.Error("revert 5")
+	}
+	if u, _ := os.ReadFile(db); !strings.Contains(string(u), "modprobe@drm.service static") {
+		t.Errorf("unmask:\n%s", u)
+	}
+	run("revert")
+	if exists(early) || exists("etc/systemd/system/lefthand.service.d") || exists("etc/systemd/journald.conf.d/brain-deck.conf") {
+		t.Error("revert all")
+	}
+}
