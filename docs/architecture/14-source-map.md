@@ -37,7 +37,7 @@
 | 設定の保存と反映 | apply.go（`configStore`）、main.go（`cstore` の `apply` と `light`） |
 | 更新、再起動 | update.go、updatehelper.go、tools/mkupdate、cmd/brain-deck/admin.go |
 | バックアップと復元 | backup.go（`backupItems`）、updatehelper.go（`restore`）、cmd/brain-deck/backup.go |
-| 起動の順、起動中の画面 | main.go（`main`）、startup.go、splash.go、systemd/ |
+| 起動の順、起動中の画面 | main.go（`main`）、startup.go、splash.go、usbboot.go、systemd/、contrib/boot/ |
 | PC 側のポートの探し方、排他 | cmd/brain-deck/ports.go、os_linux.go、os_darwin.go、serial_unix.go、gui/src/ports.ts |
 | 同期 | cmd/brain-deck/sync.go、sync.go、contrib/udev/73-brain-sync.rules |
 | ヘルプの文 | help/ja.md（デーモンに埋め込む） |
@@ -67,6 +67,7 @@
 | media.go | メディアキー（Consumer Control）と、`media:` の割り当て |
 | pen.go | ペンタブレット（`widget: pentablet`）のレポート、PC の画面への当てはめ、筆圧 |
 | usbmode.go | USB の形の切り替え（`USBMode`）、端末モードの構成の名前、gadget-setup.sh の実行 |
+| usbboot.go | 起動のときの USB の準備（`/dev/hidg0` ができるのを待つ `StartBoot`、ethernet_gadget を待つ `waitGadgetUnit`）、入力とフレームバッファを待つ（フェーズ K6） |
 | wakeup.go | スリープ中の PC を起こす（`Waker`） |
 | link.go | PC とのつながり（UDC の state と 5V。`LinkMonitor`） |
 | offline.go | PC から外れたとき（休みにする、ホーム画面に切り替える、「PCなし」） |
@@ -216,7 +217,7 @@
 | contrib/profile.d/brain-terminal.sh | PC 用。端末モードでログインしたときに端末の大きさを合わせる |
 | contrib/brain/lefthand-ime.sh | Brain 用。Brain のシェルで uim-fep を通す（`/etc/profile.d/`） |
 | contrib/apps/ | 自分で足すアプリの例（sdcard、dice、load） |
-| contrib/boot/ | 起動を速くする（boot-tune.sh の段階 1〜3、boot-measure.sh。本番に適用した） |
+| contrib/boot/ | 起動を速くする（boot-tune.sh の段階 1〜6、boot-measure.sh。本番に適用した） |
 | contrib/graph/linux-stats.sh | PC の CPU などをグラフに送る例 |
 | contrib/shortcuts/ | PC の OS のショートカットに割り当てるスクリプトの例 |
 | tools/mkupdate | 更新のファイルを作る |

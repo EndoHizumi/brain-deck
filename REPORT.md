@@ -6,6 +6,54 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ K6　起動をさらに速くする（2026-10-12 夕〜夜、ユーザーあり）
+
+### 本番の状態（終わったとき）
+
+- デーモン **7a97a93e5130**（`.prev` d18b7d39e6c6）。`brain-deck update` で入れた。PC の `~/.local/bin/brain-deck` も 7a97a93e5130。
+- `/etc/systemd/system/lefthand.service` を、USB の構成を待たないもの（`After=ethernet_gadget.service` を外した）に入れ替えた。前のものは `lefthand.service.prev2`（`lefthand.service.prev` は段階 3 の前のもの）。
+- boot-tune.sh の段階 4〜6 を適用（`/etc/lefthand/boot-tune.state` に、段階 1〜3 の 12 のユニットに加えて 11 行）。
+- 電池は始めるとき 3.75 V（3.8 V 未満なので止め、ユーザーが標準のファームウェアで充電）、充電のあと 4.00 V、終わるとき 4.09 V（USB 給電）。
+
+### 1. 測ったこと（段階 3 の起動、読むだけ）
+
+- **最初の 46 秒**：カーネル 3.2 秒（ドライバはすべて組み込み。`lsmod` は空、fstab も空）→ systemd の準備 4.1〜7.6 秒（generator 2.5 秒）→ 最初のマウント、fake-hwclock、空振りの modprobe@ 4 つ（1 つ約 5 秒）、journald の起動 9 秒、remount-fs（20 秒に終わる）→ udev の coldplug 16.5〜30 秒、デバイスの処理 32〜46 秒（内蔵 eMMC も調べる。止めた triggerhappy の規則が th-cmd を呼んで失敗）、journal-flush 25〜34 秒（116 MB）→ SD カードの boot 区画 46.4 秒 → basic.target 50.6 秒 → ethernet_gadget 9.6 秒 → lefthand 60.9 秒。待ちより CPU と SD の取り合いが大きい（CPU は 1 つ）。
+- **journal の時刻のずれ**：journald が起動する前の行は、journald が取り込んだ時刻（約 20 秒あと）が付く。dmesg では init の起動は 3.2 秒。以降の測定は systemd の monotonic（`ExecMainStartTimestampMonotonic` など）と `startup:` の行から計算した。
+- **lefthand の 12 秒**：exec から main まで 8.8 秒（ふだん 0.6 秒。13 MB の実行ファイルを、logind、ssh、brain-config と取り合いながら読む）、main から準備まで 1.5 秒（ふだんと同じ）。
+
+### 2. lefthand を早く起動する（b43dd75、7a97a93）
+
+- デーモン：`/dev/hidg0` がなければ USB の準備中（PC から外れているときと同じ）にし、できたら HID の形を読み直して空のレポートを送る。準備中は USB の形の切り替えを断り、端末モードを待たせる。lefthand が gadget-setup.sh を動かす前は ethernet_gadget の終わりを待つ。入力とフレームバッファは 30 秒まで待つ。`brain-deck status` に「起動のときの USB の準備中」。
+- 試験のデーモン（`hid_device` を `/tmp/lhu/hidg0` にした設定で、準備中を作った）：準備中は status が「切り替え中」で `usb-mode` は断られ、`ln -s /dev/hidg0` で 29 秒後に「usb: ready」と書き込みの回復。`config put` 3 回、上書きの set と clear 2 回ずつ、USB の形の切り替え（マウスあり 3.3 秒、キーボードだけ 2.7 秒）。タップ（Todo、月の表示、設定、レイヤー）とキーは、ユーザーが「go」と答えた（結果の詳しい報告はもらっていない）。
+- 壊れないことを確かめたもの：時刻（lefthand が RTC で合わせる。fake-hwclock-load のあと）、RTC（読み書きは /dev/mem で、起動の順に関係しない）、日本語入力と端末モード（USB の準備のあとに使う。端末モードの印は /run なので起動のときは後始末しない）、更新の仕組み（`brain-deck update` は USB ができてから）、データの場所（ルートの区画。remount-fs のあと）。
+
+### 3. 段階ごとの時間（電源を入れてからの秒）
+
+| | 段階 3 | 段階 4（early） | 段階 4（+ gadget） | 段階 5 | 段階 6（今） |
+| --- | --- | --- | --- | --- | --- |
+| 起動の合計 | 69.2 | 60.3 | 59.4 | 56.2 | **55.2** |
+| lefthand の exec | 60.9 | 20.2 | 20.1 | 17.5 | 17.6 |
+| 「起動中」の画面 | 70.3 | 26.0 | 27.2 | 24.3 | **24.4** |
+| 準備ができた（画面とタッチ） | 71.2 | 29.8 | 29.7 | 26.4 | **26.4** |
+| PC へのキー、brain-deck | 約 71 | 57.6 | 約 30.5 | 約 26.9 | **約 27.9** |
+| ssh / ttyGS0 のログイン | 約 61 | 約 60 | 59.2 / 57.3 | 55.7 / 50.4 | 55.1 / 52.8 |
+
+- 段階 4 の early だけでは、USB の構成（ethernet_gadget）が basic.target を待つので、キーは 57.6 秒のままだった。ユーザーに見せて gadget を足した。
+- 段階 5 の D は、`modprobe@configfs` を `sys-kernel-config.mount` が `Requires=` しているので（mask すると configfs がなく USB が使えない）、drm と efi_pstore だけにした（fuse も `Requires=`）。
+- 段階ごとに、ssh、`brain-deck status`、USB のシリアル（if03、if05）、画面（ホーム）、`systemctl --failed`（0 件）を確かめた。revert は要らなかった。
+- **段階 6 の再起動で、電源が切れてから次の起動まで約 8.6 分かかった**（PC の USB が外れたのが 22:42:36、つながったのが 22:51:44。Brain のシャットダウンは 22:41:37 に普通に終わり、RTC から見て 9 分 10 秒止まっていた。前の 3 回は 38〜58 秒）。起動そのものは 55 秒。止まっていたのは Linux の再起動の命令から U-Boot、カーネルまでのあいだで、原因は分かっていない。
+
+### 元に戻す方法
+
+- 段階 4〜6：`ssh brain 'sudo sh boot/boot-tune.sh revert 6'`（または 5、4、`revert gadget` のように項目）→ `brain-deck reboot`。足したファイルを消し、mask を外す。
+- ユニット：`sudo cp -p /etc/systemd/system/lefthand.service.prev2 /etc/systemd/system/lefthand.service && sudo systemctl daemon-reload`。
+- デーモン：`brain-deck update --rollback`（d18b7d39e6c6 に戻る。USB の準備を待たない lefthand.service とは組み合わせない。戻すなら先にユニットを .prev2 に戻し、段階 4 も戻す）。
+- ssh が使えなければ、USB のシリアル（`screen /dev/ttyACM0 115200`）か tty1（Enter で `brain login:`）。どれも使えなければ SD カードを PC で開き、`/etc/systemd/system/lefthand.service.d/boot-early.conf` と `ethernet_gadget.service.d/boot-early.conf` を消す（README の「復旧の手段」）。
+
+### 提案だけにしたもの
+
+README の「Brain の起動を速くする」の「提案だけのもの」：カーネルの起動の設定（`/boot/uEnv.txt` に `quiet`。U-Boot が読む）、ジャーナルをメモリに置く、ファイルシステムの点検を省く（しない）、スリープ（`mem` は WFI だけで、起こすデバイスもないので、今のカーネルでは使えない）。
+
 ## 追記：K4 と K5 を本番に入れ、起動を速くする段階 1〜3 を適用（2026-10-12 昼、ユーザーあり）
 
 ### 本番の状態（終わったとき）

@@ -100,9 +100,9 @@ PC のブラウザ（設定 GUI） ←─ USB シリアル ─→ /dev/ttyGS1（
 起動時は、次の順に動く。
 
 1. `ethernet_gadget.service` が USB ガジェットを作る。Brainux 標準の処理を drop-in で置き換え、ネットワーク（NCM）、キーボードとマウス（HID）、シリアル 2 つ（ACM。コンソール用と設定 GUI 用）の複合デバイスにする。Brain の usb0 には固定 IP 192.168.7.2 を付ける。
-2. `lefthand.service` がデーモンを起動する。ガジェットの作成を待ってから動く（ログイン画面の ly を使っているときは ly のあと。本番の Brain は ly を止めている。[Brain の起動を速くする](#brain-の起動を速くする)）。
+2. `lefthand.service` がデーモンを起動する。ガジェットの作成は待たない。`/dev/hidg0` ができるまでは、PC から外れているときと同じに動き、できたら HID の形を読み直す（ログイン画面の ly を使っているときは ly のあと。本番の Brain は ly を止め、段階 4 で basic.target も待たない。[Brain の起動を速くする](#brain-の起動を速くする)）。
 
-電源を入れてからキー入力を受け付けるまで、約 80 秒かかる（2026-10-12 に測った値。lefthand の起動は約 77 秒、シリアルで答えるのは約 82 秒。[Brain の起動を速くする](#brain-の起動を速くする)）。
+電源を入れてからキー入力を受け付けるまで、約 28 秒かかる（2026-10-12 に測った値。本番の Brain は起動を速くする段階 1〜6 を適用している。「起動中」の画面は約 24 秒、ホーム画面は約 26 秒。[Brain の起動を速くする](#brain-の起動を速くする)）。
 
 ## 必要なもの
 
@@ -2133,9 +2133,24 @@ brain-deck app rm dice                       # 消す（アプリが書いたデ
 
 ## Brain の起動を速くする
 
-電源を入れてから lefthand が使えるまで、約 86 秒かかっていた。brain-deck と復旧に必要なものだけを残すように 3 つの段階でサービスを止め、**約 70 秒**にした（2026-10-12 に本番で適用。デーモン d18b7d39e6c6）。ほとんどは Brainux のサービスの起動で、lefthand 自身はふだん 2〜5 秒。
+電源を入れてから lefthand が使えるまで、約 86 秒かかっていた。brain-deck と復旧に必要なものだけを残すように 3 つの段階でサービスを止めて約 70 秒にし（段階 1〜3）、さらに lefthand と USB の構成を、SD カードの boot 区画や udev の coldplug を待たずに起動して（段階 4）、起動の最初の部分を軽くし（段階 5、6）、**約 27 秒**にした（2026-10-12 に本番で適用。デーモン 7a97a93e5130）。lefthand 自身はふだん 2 秒。仕組みは [docs/architecture/12-boot.md](docs/architecture/12-boot.md)。
 
-### 測った結果（2026-10-12、contrib/boot/boot-measure.sh）
+### 測った結果（2026-10-12、段階 4〜6。電源を入れてからの秒）
+
+| | 段階 3 | 段階 4（early） | 段階 4（+ gadget） | 段階 5 | 段階 6（今の本番） |
+| --- | --- | --- | --- | --- | --- |
+| 起動の合計 | 69.2 | 60.3 | 59.4 | 56.2 | **55.2** |
+| lefthand が起動した時刻 | 60.9 | 20.2 | 20.1 | 17.5 | 17.6 |
+| 「起動中」の画面 | 70.3 | 26.0 | 27.2 | 24.3 | **24.4** |
+| 準備ができた（画面とタッチ） | 71.2 | 29.8 | 29.7 | 26.4 | **26.4** |
+| PC へのキー、brain-deck | 約 71 | 57.6 | 約 30.5 | 約 26.9 | **約 27.9** |
+| ssh / ttyGS0 のログイン | 約 61 | 約 60 | 59.2 / 57.3 | 55.7 / 50.4 | 55.1 / 52.8 |
+
+- 時刻は systemd の monotonic（`systemctl show -p ExecMainStartTimestampMonotonic` など）と、lefthand の `startup:` の行の内訳から計算した。journal の時刻は、journald が起動する前の行（約 20 秒まで）で数秒ずれる。boot-measure.sh の「起動中の画面」は journal の時刻を使うので、段階 4 からは数秒大きく出る。
+- **起動の最初の部分**（段階 3 のとき）：カーネル 3.2 秒（ドライバはすべて組み込み。モジュールはない）→ systemd の準備 4〜7.6 秒（generator 2.5 秒）→ 最初のマウント、fake-hwclock、modprobe@ が 4 つ（空振りなのに 1 つ約 5 秒）、journald の起動（9 秒）、remount-fs（20 秒に終わる）→ udev の coldplug（16.5〜30 秒）とデバイスの処理（32〜46 秒。内蔵の eMMC も調べる）、journal-flush（25〜34 秒、116 MB のジャーナル）→ SD カードの boot 区画 46 秒 → basic.target 50.6 秒 → ethernet_gadget 9.6 秒 → lefthand 60.9 秒。lefthand に要るもの（入力、フレームバッファ、VT、ルートの区画の /etc と /var/lib）は最初からあるので、段階 4 で basic.target を待たないようにした。
+- **lefthand の約 9 秒**（exec から準備）：exec から main まで 2.6〜2.9 秒、設定の読み込み 3.1〜3.4 秒など。udev の coldplug と同じ時刻に動くための取り合い。段階 3 までの約 12 秒は、exec から main までが 8.8 秒（logind、ssh、brain-config と同時に、13 MB の実行ファイルを読んでいた）。
+
+### 測った結果（2026-10-12、段階 1〜3。contrib/boot/boot-measure.sh）
 
 | | 前 | 段階 1 | 段階 2 | 段階 3（今の本番） |
 | --- | --- | --- | --- | --- |
@@ -2144,9 +2159,9 @@ brain-deck app rm dice                       # 消す（アプリが書いたデ
 | lefthand が準備できた時刻（シリアルで答える） | 86.1 秒 | 81.6 秒 | 71.0 秒 | **69.8 秒** |
 
 - **前の道筋（critical-chain）**：SD カードの boot 区画（`dev-mmcblk1p1`）が見えるのが 43 秒 → local-fs → sysinit → basic（48 秒）→ dbus → NetworkManager（57 秒、+17 秒）→ network.target（74 秒）→ systemd-user-sessions → ly（77 秒）→ lefthand。
-- **今の道筋**：`dev-mmcblk1p1` 40.6 秒 → local-fs → sysinit → basic（44 秒）→ ethernet_gadget（+9 秒）→ lefthand。lefthand が待つのは USB のガジェットだけ。
+- **段階 3 の道筋**：`dev-mmcblk1p1` 40.6 秒 → local-fs → sysinit → basic（44 秒）→ ethernet_gadget（+9 秒）→ lefthand。**段階 4 からは** remount-fs → lefthand、configfs → ethernet_gadget（basic.target を待たない）。
 - **前の blame の上位**：apt-daily-upgrade 51 秒（起動のあとに逃した回を動かす）、dev-mmcblk1p2 40 秒、e2scrub_reap 24 秒、accounts-daemon 23 秒、udisks2 22 秒、systemd-udev-trigger 18 秒、NetworkManager 17 秒、ethernet_gadget 16 秒、logind 16 秒、networking 11 秒、timesyncd 9 秒、avahi 9 秒。CPU は 1 つ（ARM926）なので、並んで起動するサービスが CPU と SD カードを取り合い、`modprobe@…` のような軽いものまで 5 秒かかる。
-- **残っている遅れ**：段階 2 と 3 のあと、lefthand の exec から準備までが約 12 秒かかった（ふだんは 2〜5 秒。段階 2 では exec から main まで 10.3 秒、段階 3 では「起動中」の画面に 8.0 秒）。ほかのサービス（ssh、logind、getty）と同時に起動して、SD カードの読み込みを取り合っていると思われるが、確かめていない。
+- **段階 3 で残っていた遅れ**：lefthand の exec から準備までが約 12 秒かかった（ふだんは 2〜5 秒）。段階 4〜6 の測定で、exec から main まで（実行ファイルの読み込み）が 8.8 秒だったと分かった。
 - **lefthand 自身**（試験のデーモンを本番の設定とデータの写しで。`startup:` の行）：exec から準備まで 2.0〜2.3 秒。内訳は、Go の初期化とプログラムの読み込み 0.6 秒、設定（YAML）の読み込み 0.5 秒、割り当ての組み立て 0.15〜0.4 秒、最初の画面 0.1〜0.3 秒。設定を読んだらすぐ「起動中…」を出す（exec から約 1.2 秒）。
 
 ### 止めたサービス（contrib/boot/boot-tune.sh）
@@ -2164,7 +2179,18 @@ brain-deck app rm dice                       # 消す（アプリが書いたデ
 | 2 | apt | apt-daily.timer、apt-daily-upgrade.timer | パッケージの自動更新 | ネットがないので失敗するだけ。更新するときは手で apt |
 | 3 | ly | ly（display-manager.service の別名ごと） | ログイン画面（tty2） | Brain のログインは tty1（lefthand を止めたとき）、USB のシリアル、SSH、brain-deck の Brain のシェル |
 
-- **必ず残すもの**（どの段階でも止めない）：lefthand、ethernet_gadget（USB の構成）、ssh、serial-getty@ttyGS0（USB のシリアルのログイン）、getty@tty1、systemd、udev、dbus、journald、brain-config（CPU を ondemand にする）、fake-hwclock、resolvconf。fstrim、man-db などのタイマーもそのまま。
+段階 4〜6（フェーズ K6）は、サービスを止めるのではなく、/etc に brain-deck のファイルを足すか mask する（Brainux のファイルは書き換えない。足したファイルを消す・unmask すれば戻る）。
+
+| 段階 | 項目 | 変えるもの | 何のためか | 気をつけること |
+| --- | --- | --- | --- | --- |
+| 4 | early | `/etc/systemd/system/lefthand.service.d/boot-early.conf`（`DefaultDependencies=no`、remount-fs、fake-hwclock-load、tmp.mount のあと） | lefthand を basic.target（SD カードの boot 区画、udev の coldplug）を待たずに起動する | USB の構成を待たない lefthand.service とデーモン（b43dd75 から）が要る。ly を戻すなら一緒に戻す |
+| 4 | gadget | `/etc/systemd/system/ethernet_gadget.service.d/boot-early.conf`（`DefaultDependencies=no`、configfs と remount-fs のあと） | USB の構成（PC へのキー、brain-deck、usb0）も早く作る | 失敗すると ssh も使えない。tty1 か SD カードで戻す |
+| 5 | quiet | `/etc/systemd/system.conf.d/brain-deck-boot.conf`（`ShowStatus=no`）、`/etc/sysctl.d/90-brain-deck-console.conf`（`kernel.printk = 4 4 1 7`） | 起動中の `[ OK ]` の行と info のカーネルのメッセージを、tty1（fbcon）とシリアル（UART）に書かない | 起動中の進み具合が画面に出ない（journal と dmesg には残る） |
+| 5 | modprobe | modprobe@drm、modprobe@efi_pstore を mask | モジュールのないカーネルなので空振り（1 つ約 5 秒） | **modprobe@configfs は mask しない**（sys-kernel-config.mount が `Requires=` するので、configfs がなくなり USB が使えなくなる）。fuse も同じ理由で触らない |
+| 5 | udev | `/etc/udev/rules.d/` の 60-triggerhappy、61-mate-settings-daemon-rfkill、80-udisks2、96-e2scrub を /dev/null へのリンクで隠す | 止めたサービスの規則を coldplug で動かさない（triggerhappy の規則は、止めた th-cmd を呼んで失敗していた） | udisks2 などを戻すときは一緒に戻す |
+| 6 | journal | `/etc/systemd/journald.conf.d/brain-deck.conf`（`SystemMaxUse=32M`） | ジャーナル（128 MB あった）を小さくし、journal-flush を軽くする | 入れたあとの最初の起動で古いログが消える。前の起動のログは残る（メモリだけに置く `Storage=volatile` はしない） |
+
+- **必ず残すもの**（どの段階でも止めない）：lefthand、ethernet_gadget（USB の構成）、ssh、serial-getty@ttyGS0（USB のシリアルのログイン）、getty@tty1、systemd、udev、dbus、journald、brain-config（CPU を ondemand にする。ただしこのカーネルには cpufreq がないので、何もしていない）、fake-hwclock、resolvconf、ファイルシステムの点検。fstrim、man-db などのタイマーもそのまま。
 - **lefthand のユニットの順番**：`After=ly.service` だけにした（前は `getty@tty1.service` も待っていた。getty@tty1 は network.target などのあとなので、ly を止めても遅れた）。lefthand は tty8 に描き、tty1 の getty は VT を切り替えないので取り合わない。ly を使うときは、ly が起動のときに tty2 へ切り替えるので、今までどおり ly のあとに起動する。本番の Brain では、前のユニットを `/etc/systemd/system/lefthand.service.prev` に残した。
 - **tty1**：ly がないので、lefthand を止めると tty1 になる。画面は描き直されないので、**Enter を押すと `brain login:` が出る**（2026-10-12 にユーザーが確かめた）。
 - **やり方**：Brainux のファイルは書き換えず、`systemctl disable` だけ（止める前の状態を `/etc/lefthand/boot-tune.state` に記録し、`revert` はそれだけを見て `enable` に戻す）。止めたサービスも、ほかから呼ばれれば（D-Bus など）動く。段階は 1 つずつ適用し、そのたびに再起動して、ssh、`brain-deck status`、USB のシリアル、画面を確かめ、`boot-measure.sh` で測る。
@@ -2177,16 +2203,42 @@ ssh brain 'sudo sh boot/boot-tune.sh plan 1'                 # 段階 1 で止�
 ssh brain 'sudo sh boot/boot-tune.sh apply 1'                # 段階 1 を止める（2、3 も。apply timesync のように項目も選べる）
 ssh brain 'sudo sh boot/boot-tune.sh status'
 ssh brain 'sudo sh boot/boot-tune.sh revert 3'               # 段階 3 だけ戻す（段階を書かなければすべて。再起動で効く）
+ssh brain 'sudo sh boot/boot-tune.sh revert gadget'          # 項目だけ戻すこともできる（段階 4〜6 は、足したファイルを消す・unmask する）
 ```
+
+### 提案だけのもの（まだしていない。2026-10-12 に読むだけで調べた）
+
+**カーネルの起動の設定**（`/boot` を変えるので、提案だけ）
+
+- 今の設定は `console=ttyAMA0,115200 console=tty1 root=/dev/mmcblk1p2 rw rootwait fbcon=font:ProFont6x11`。U-Boot（buildbrain の `u-boot-brain/include/configs/brain_mx28_common.h`）の `setargs` が作る。U-Boot は、起動のときに boot 区画（SD カードの `/boot`）に `uEnv.txt` があれば読み込む（`loadandimportenv`）。今の Brain にはない。
+- 案：`/boot/uEnv.txt` に `bootargs_custom=fbcon=font:ProFont6x11 quiet` の 1 行を置く。カーネルと、journald が起動するまでの systemd のメッセージを、tty1（fbcon。800×480 の画面のスクロール）とシリアル（115200 bps）に書かなくなる。段階 5 の `kernel.printk` は約 20 秒からしか効かないが、`quiet` は最初から効く。
+- 見込み：カーネルの 3.2 秒のうち 0.5〜1 秒、userspace の最初の部分で 1〜2 秒（測っていない。段階 5 では、起動中の表示を減らして lefthand の起動が 2.6 秒早くなった）。
+- 危なさ：中。uEnv.txt の書き間違いで U-Boot の変数が壊れると起動しない。そのときは SD カードを PC に差し、boot 区画（FAT）の `uEnv.txt` を消せば元に戻る。tty1 とシリアルに起動中のメッセージが出なくなるので、起動しないときの手がかりが減る（dmesg と journal には残る）。
+- さらに `console=tty1` を外す案（`setargs` を uEnv.txt で上書きする）もあるが、カーネルが止まったときに画面に何も出なくなるので勧めない。
+
+**データを失うおそれのあるもの**（しない）
+
+- **ジャーナルをメモリだけに置く**（`Storage=volatile`）：journal-flush（約 5 秒）がなくなるが、再起動すると前のログが消え、電池の見張りで電源が切れたときなどの原因を調べられなくなる。段階 6 では、ディスクに書いたまま 32 MB にした。
+- **ファイルシステムの点検を省く**：ルートは、カーネルが `rw` でマウントするので、起動のたびの点検（systemd-fsck-root）はもともと動いていない。boot 区画（FAT）の boot.mount は約 1 秒。省いても lefthand は速くならない（段階 4 からは待っていない）ので、しない。
+- **内蔵の eMMC（mmcblk0。標準のファームウェア）を udev に調べさせない**：起動の合計は数秒縮むかもしれないが、udev の規則を Brainux のものから外すことになり、lefthand はもう待っていないので、しない。
+
+**スリープ（サスペンド）**（実際にスリープさせる試験はしていない）
+
+- カーネルは対応していると答える：`/sys/power/state` は `freeze mem`、`/sys/power/mem_sleep` は `s2idle [deep]`（`CONFIG_SUSPEND=y`、`CONFIG_PM_SLEEP=y`。ハイバネーション、cpuidle、cpufreq はない）。
+- ただし、i.MX28 の `mem` の中身は、buildbrain の `linux-brain/arch/arm/mach-mxs/pm.c` で `cpu_do_idle()`（WFI。CPU が割り込みを待つだけ）しかしない。DRAM のセルフリフレッシュ、PLL やクロックを止めること、電源の領域を落とすことはしない。なので電池の減りは「画面を消して何もしていないとき」とほとんど同じで、CPU の分が少し減るだけと見込む（電流は測れないので、数字の見積もりはしていない。lefthand は今でも、ふたを閉じると画面を消す）。
+- 何で起こせるか：起こすように設定できるデバイスがない。キーボード（brain-kbd-i2c。GPIO の割り込み）のドライバ `drivers/input/keyboard/brain-kbd-i2c.c` は wakeup に対応していない（`enable_irq_wake` も `device_init_wakeup` もない）。`/sys/.../power/wakeup` があるのは USB（ci_hdrc、usbphy）だけで、どれも disabled。電源ボタン（i.MX28 の PSWITCH）とふたも、入力のデバイスとしての wakeup はない。WFI なので、止めていない割り込みで戻る可能性はあるが、確かめていない。
+- USB：サスペンドすると UDC が止まり、PC からは外れたように見える（HID、シリアル、usb0 が切れる）。戻ったときに、PC がつなぎ直すまで数秒かかる。lefthand は外れたときの仕組み（link.go）で扱える。
+- RTC：内蔵 RTC はスリープ中も動く（電池がほぼ空になると止まる。README の内蔵 RTC）ので、スリープで時刻はずれない。ただし Linux の RTC クラスのデバイスがない（`/sys/class/rtc` が空。lefthand は /dev/mem で読む）ので、RTC のアラームで起こすこともできない。
+- まとめ：今のカーネルでは、スリープは「電池がほとんど減らず、すぐに戻る」ものにならない。使うには、カーネルに (1) i.MX28 の本当の低電力の状態（DRAM のセルフリフレッシュなど。i.MX28 の BSP にはある）、(2) キーボードかふたか電源ボタンでの wakeup、が要る。カーネルのドライバの作業になるので、別のタスク（充電の件と同じく、Brain Hackers のみなさんに見てもらう）。
 
 ### 復旧の手段（brain-deck が動かない、ly を止めた、ネットワークが壊れた）
 
 - **SSH**：`ssh brain`（USB の usb0、192.168.7.2）。
 - **USB のシリアルのコンソール**：PC の `/dev/ttyACM0` で Brain にログインできる（[シリアルコンソール](#シリアルコンソール)。`screen /dev/ttyACM0 115200` などで Enter）。ネットワークが壊れても使える。
 - **brain-deck の Brain のシェル**：lefthand が動いていれば、Brain の画面の端末で Brain にログインできる（[端末モード](#端末モード)）。ly を止めても使える。
-- **元に戻す**：上のどれかで `sudo sh boot/boot-tune.sh revert`（すべて）か `revert 3`（ly だけ）などをして再起動する。lefthand のユニットも前に戻すなら `sudo cp -p /etc/systemd/system/lefthand.service.prev /etc/systemd/system/lefthand.service && sudo systemctl daemon-reload`（ly を戻すだけなら、ユニットはそのままでよい）。
+- **元に戻す**：上のどれかで `sudo sh boot/boot-tune.sh revert`（すべて）か `revert 4`（lefthand と USB を早く起動するのをやめる）、`revert 3`（ly だけ）などをして再起動する。lefthand のユニットも前に戻すなら、`lefthand.service.prev2`（2026-10-12 夜まで。USB の構成を待つ）か `lefthand.service.prev`（段階 3 の前。getty@tty1 も待つ）を `sudo cp -p /etc/systemd/system/lefthand.service.prev2 /etc/systemd/system/lefthand.service && sudo systemctl daemon-reload` のように戻す（ly を戻すだけなら、ユニットはそのままでよいが、段階 4 も戻す）。
 - **tty1**：lefthand が動いていないときは、Brain の画面が tty1 になる。Enter を押すと `brain login:` が出る。
-- **どれも使えないとき**：SD カードを PC に差し、ルートの区画の `/etc/systemd/system/` に、止めたユニットのリンクを戻す（`/etc/lefthand/boot-tune.state` に止めたものが書いてある。リンクの先は `/usr/lib/systemd/system/<ユニット>`、置き場所は `multi-user.target.wants/`、タイマーは `timers.target.wants/`、timesyncd は `sysinit.target.wants/` など。ly は `display-manager.service` の別名）。
+- **どれも使えないとき**：SD カードを PC に差し、ルートの区画の `/etc/systemd/system/` に、止めたユニットのリンクを戻す（`/etc/lefthand/boot-tune.state` に止めたものが書いてある。リンクの先は `/usr/lib/systemd/system/<ユニット>`、置き場所は `multi-user.target.wants/`、タイマーは `timers.target.wants/`、timesyncd は `sysinit.target.wants/` など。ly は `display-manager.service` の別名）。段階 4〜6 は、`boot-tune.state` の 3 つ目の欄が file か null の行のファイルを消し、mask の行の `/etc/systemd/system/<ユニット>`（/dev/null へのリンク）を消す。
 
 ## 日常の操作
 
