@@ -23,7 +23,7 @@ disable) sed -i "s/^$2 .*/$2 disabled/" $db ;;
 enable) sed -i "s/^$2 .*/$2 enabled/" $db ;;
 esac
 `), 0o755)
-	os.WriteFile(db, []byte("accounts-daemon.service enabled\nudisks2.service enabled\ne2scrub_reap.service enabled\ntriggerhappy.service enabled\ntriggerhappy.socket enabled\navahi-daemon.service enabled\navahi-daemon.socket enabled\nly.service enabled\nNetworkManager.service enabled\n"), 0o644)
+	os.WriteFile(db, []byte("accounts-daemon.service enabled\nudisks2.service enabled\ne2scrub_reap.service enabled\ntriggerhappy.service enabled\ntriggerhappy.socket enabled\navahi-daemon.service enabled\navahi-daemon.socket enabled\nly.service enabled\nNetworkManager.service enabled\nNetworkManager-wait-online.service enabled\nNetworkManager-dispatcher.service enabled\nsystemd-timesyncd.service enabled\nnetworking.service enabled\napt-daily.timer enabled\napt-daily-upgrade.timer enabled\nssh.service enabled\nserial-getty@ttyGS0.service enabled\n"), 0o644)
 	state := filepath.Join(dir, "etc", "boot-tune.state")
 	run := func(args ...string) string {
 		t.Helper()
@@ -37,8 +37,8 @@ esac
 	}
 	units := func() string { b, _ := os.ReadFile(db); return string(b) }
 
-	if out := run("plan"); !strings.Contains(out, "accounts") || strings.Contains(out, "ly.service") {
-		t.Errorf("plan: ly は既定で選ばない:\n%s", out)
+	if out := run("plan"); !strings.Contains(out, "[段階 1] accounts") || strings.Contains(out, "ly.service") || strings.Contains(out, "NetworkManager") {
+		t.Errorf("plan: 省略すると段階 1 だけ:\n%s", out)
 	}
 	if out := run("plan", "--all"); !strings.Contains(out, "ly.service") {
 		t.Errorf("plan --all:\n%s", out)
@@ -56,12 +56,43 @@ esac
 	if strings.Contains(string(st), "disabled") || strings.Count(string(st), "\n") != 7 {
 		t.Errorf("state:\n%s", st)
 	}
-	run("apply", "ly")
+	// 段階 2：ネットにつなぐためのもの
+	if out := run("plan", "2"); !strings.Contains(out, "[段階 2] nm") || !strings.Contains(out, "apt-daily.timer") || strings.Contains(out, "accounts") {
+		t.Errorf("plan 2:\n%s", out)
+	}
+	run("apply", "2")
+	u = units()
+	for _, want := range []string{"NetworkManager.service disabled", "NetworkManager-wait-online.service disabled", "systemd-timesyncd.service disabled", "networking.service disabled", "apt-daily.timer disabled", "apt-daily-upgrade.timer disabled", "ly.service enabled"} {
+		if !strings.Contains(u, want) {
+			t.Errorf("after apply 2: want %q in\n%s", want, u)
+		}
+	}
+	run("apply", "stage3")
 	if !strings.Contains(units(), "ly.service disabled") {
-		t.Error("apply ly")
+		t.Error("apply 3")
 	}
 	if out := run("status"); !strings.Contains(out, "ly.service：前は enabled、今は disabled") {
 		t.Errorf("status:\n%s", out)
+	}
+	// ssh とシリアルのログインは、どの段階でも止めない
+	for _, keep := range []string{"ssh.service enabled", "serial-getty@ttyGS0.service enabled"} {
+		if !strings.Contains(units(), keep) {
+			t.Errorf("%s must stay", keep)
+		}
+	}
+	// 段階 3 だけを戻す：ほかは記録に残る
+	run("revert", "3")
+	u = units()
+	if !strings.Contains(u, "ly.service enabled") || !strings.Contains(u, "NetworkManager.service disabled") || !strings.Contains(u, "udisks2.service disabled") {
+		t.Errorf("after revert 3:\n%s", u)
+	}
+	st, _ = os.ReadFile(state)
+	if strings.Contains(string(st), "ly.service") || !strings.Contains(string(st), "networking.service enabled") {
+		t.Errorf("state after revert 3:\n%s", st)
+	}
+	run("revert", "2")
+	if u := units(); !strings.Contains(u, "NetworkManager.service enabled") || !strings.Contains(u, "accounts-daemon.service disabled") {
+		t.Errorf("after revert 2:\n%s", u)
 	}
 	run("revert")
 	if strings.Contains(units(), "disabled") {
