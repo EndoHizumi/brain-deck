@@ -178,6 +178,7 @@ type request struct {
 	Photo   string `json:"photo,omitempty"`   // get_photo、delete_photo：写真の id
 	Memo    string `json:"memo,omitempty"`    // get_memo、delete_memo：メモの id（m1 など）
 	Read    string `json:"read,omitempty"`    // delete_read：読み物の id
+	App     string `json:"app,omitempty"`     // delete_app：アプリの名前
 	Path    string `json:"path,omitempty"`    // list_files、get_file、delete_file：場所（絶対パス。list_files で空なら場所の一覧）。upload_begin（kind: file）：置くフォルダ
 	BySize  bool   `json:"by_size,omitempty"` // list_files：大きい順（フォルダは中の合計。du）
 	// set_override、clear_overrides：Brain で変える上書きの値（overrides.go）
@@ -467,6 +468,7 @@ type Controller struct {
 	photos  *PhotoStore
 	memos   *MemoService
 	reads   *ReadStore
+	apps    *AppService
 	sync    *SyncService
 	reader  *ReaderService
 	files   *FilesService
@@ -511,7 +513,8 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 				"restart", "power", "get_logs", "get_config_text", "put_config_text", "get_battery_log",
 				"list_photos", "get_photo", "delete_photo", "list_memos", "get_memo", "delete_memo", "list_reads", "delete_read", "set_sync", "list_files", "get_file", "delete_file", "calibrate",
 				"get_overrides", "set_override", "clear_overrides",
-				"backup_create", "backup_read", "backup_done", "restore_apply", "set_pc", "get_profile", "set_profile"},
+				"backup_create", "backup_read", "backup_done", "restore_apply", "set_pc", "get_profile", "set_profile",
+				"list_apps", "delete_app"},
 			"upload_kinds": c.uploads.Kinds(),
 		})
 	case "get_config":
@@ -675,6 +678,22 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		return ok(c.sync.Info())
 	case "list_reads", "delete_read":
 		return c.readCmd(id, req)
+	case "list_apps":
+		if c.apps == nil {
+			return errResp(id, errInternal, "apps are not available", nil)
+		}
+		return ok(map[string]any{"apps": c.apps.Info(), "dir": c.apps.store.dir})
+	case "delete_app":
+		if c.apps == nil {
+			return errResp(id, errInternal, "apps are not available", nil)
+		}
+		if err := c.apps.store.Remove(req.App); err != nil {
+			if errors.Is(err, errAppMissing) {
+				return errResp(id, errNotFound, err.Error(), nil)
+			}
+			return errResp(id, errInternal, err.Error(), nil)
+		}
+		return ok(map[string]any{"deleted": req.App})
 	case "get_battery_log":
 		text, err := readBatteryLog(c.dataDir, req.Lines)
 		if err != nil {
@@ -1297,7 +1316,7 @@ func (c *Controller) update(id json.RawMessage, req request) response {
 func (c *Controller) updateErr(id json.RawMessage, err error) response {
 	code := errInternal
 	switch {
-	case errors.Is(err, errUpdateCheck):
+	case errors.Is(err, errUpdateCheck), errors.Is(err, errAppBad):
 		code = errRejected
 	case errors.Is(err, errUpdateBusy):
 		code = errConflict

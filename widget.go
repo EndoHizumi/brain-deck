@@ -47,7 +47,7 @@ const (
 )
 
 var widgetKinds = []string{widgetClock, widgetText, widgetTodo, widgetCal, widgetPad, widgetBattery, widgetStopwatch, widgetPomodoro,
-	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc, widgetPenTab, widgetMemo, widgetReader, widgetFiles, widgetSettings, widgetHelp}
+	widgetCounter, widgetQR, widgetPresence, widgetMonth, widgetWeather, widgetGraph, widgetPresenter, widgetCalc, widgetPenTab, widgetMemo, widgetReader, widgetFiles, widgetSettings, widgetHelp, widgetApp}
 
 // ページを送るウィジェット（Todo、カレンダー、月の表示）が、触らなければ最初のページ（今月）に戻るまでの時間
 const (
@@ -120,11 +120,21 @@ type WidgetEnv struct {
 	Files        *FilesView             // files：ファイルエクスプローラの状態（写し）
 	Settings     *SettingsView          // settings：設定のアプリの状態（写し）。nil なら説明だけ描く
 	Help         *HelpView              // help：ヘルプの状態（写し）。nil なら説明だけ描く
+	Apps         *AppService            // app：アプリを動かす係。nil なら説明だけ描く
+	AppViews     map[string]*AppView    // app：-render-png で描くアプリの写し（Apps の代わり）
 }
 
 // compileWidget は、ウィジェットのセルの書き方を検証して組み立てる。
 func compileWidget(s ActionSpec) (*WidgetDef, error) {
+	if s.Name != "" && s.Widget != widgetApp {
+		return nil, fmt.Errorf("name is for widget: app")
+	}
 	switch s.Widget {
+	case widgetApp:
+		if s.Map != "" || s.PCScreen != "" || s.Region != nil || s.Pressure != nil || s.PressureRange != nil || s.hasPadFields() {
+			return nil, fmt.Errorf("widget: app has no settings but name (the rest is in the app's app.yaml)")
+		}
+		return compileApp(s)
 	case widgetPenTab:
 		return compilePenTab(s)
 	case widgetMemo:
@@ -445,6 +455,8 @@ func widgetKey(v *CellView, env WidgetEnv) string {
 		return settingsKey(env)
 	case widgetHelp:
 		return helpKey(env)
+	case widgetApp:
+		return appKey(w, env)
 	}
 	return gadgetKey(v, env)
 }
@@ -477,6 +489,8 @@ func widgetNext(v *CellView, env WidgetEnv) time.Time {
 		return time.Time{}
 	case widgetSettings:
 		return settingsNext(env)
+	case widgetApp:
+		return appNext(env)
 	}
 	return gadgetNext(v, env)
 }
@@ -513,6 +527,8 @@ func drawWidget(cv *Canvas, inner image.Rectangle, v *CellView, env WidgetEnv, i
 		drawSettings(cv, area, env)
 	case widgetHelp:
 		drawHelp(cv, area, env)
+	case widgetApp:
+		drawApp(cv, area, v.Widget, env)
 	case widgetClock:
 		a, b, unsynced := clockLines(v.Widget, env)
 		if unsynced && ink == colText {
@@ -559,6 +575,8 @@ func widgetLabel(w *WidgetDef, label string, env WidgetEnv) string {
 		if d, ok := calFollowDay(w, env); ok {
 			return strings.TrimSpace(label + " " + calDate(d))
 		}
+	case widgetApp:
+		return appCaption(w, label, env)
 	}
 	return label
 }

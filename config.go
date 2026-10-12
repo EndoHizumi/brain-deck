@@ -128,6 +128,7 @@ type ActionSpec struct {
 
 	// ウィジェット（タッチのセルだけ）。項目の意味は widget.go と docs/config.md
 	Widget     string   `yaml:"widget,omitempty" json:"widget,omitempty"`
+	Name       string   `yaml:"name,omitempty" json:"name,omitempty"`               // app：アプリの名前（/var/lib/lefthand/apps/<name>）
 	Format     string   `yaml:"format,omitempty" json:"format,omitempty"`           // clock：時刻の行の書式（Go の書式）
 	DateFormat string   `yaml:"date_format,omitempty" json:"date_format,omitempty"` // clock：日付の行の書式。none で出さない
 	TZ         string   `yaml:"tz,omitempty" json:"tz,omitempty"`                   // clock：タイムゾーン（IANA の名前）
@@ -195,7 +196,7 @@ func (s Span) MarshalYAML() (any, error) {
 
 var actionFields = map[string]bool{
 	"key": true, "layer_hold": true, "layer_toggle": true, "layer_oneshot": true, "layer_to": true, "label": true,
-	"span": true, "widget": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
+	"span": true, "widget": true, "name": true, "format": true, "date_format": true, "tz": true, "id": true, "rows": true,
 	"page_reset": true, "stale": true, "calendars": true, "follow": true, "week_start": true, "background": true, "mouse": true, "media": true, "usb_mode": true,
 	"terminal": true, "rotate": true, "input": true, "calibrate": true, "work": true, "break": true, "states": true,
 	"unit": true, "min": true, "max": true, "chart": true, "points": true, "decimals": true, "duration": true, "colors": true, "prefix": true,

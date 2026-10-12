@@ -966,6 +966,7 @@ func main() {
 	pngRotate := flag.Int("render-rotate", -1, "-render-png で、画面の向き（0、90、180、270。-render-size は物理の大きさ）。省略すると設定の display.rotate")
 	pngHomePage := flag.Int("render-home-page", 1, "-render-png で、ホーム画面に出すページ（1 から）")
 	pngLink := flag.String("render-link", "configured", "-render-png で、PC とのつながり（UDC の state か power。configured、suspended、power、not attached、空なら出さない）。configured と suspended のほかでは、PC に送るセルを休みと描く")
+	pngApp := flag.String("render-app", "", "-render-png で、widget: app のセルに、このスクリプトの出力を描く（<名前>=<出力のファイル>。名前は app.yaml の title の代わりにも使う）")
 	pngProfile := flag.String("render-profile", "", "-render-png で、状態の帯に出すプロファイルの名前（既定以外のプロファイルを使っているとき）")
 	pngLastSync := flag.String("render-last-sync", "", "-render-png で、状態の帯に出す最後に同期した時刻（RFC 3339。省略すると未同期）")
 	pngRead := flag.String("render-read", "", "-render-png で、読み物のアプリのセルに、この読み物（brain-deck read add -o の .json.gz）を開いて出す")
@@ -1320,6 +1321,14 @@ func main() {
 			}
 			env.Settings = v
 		}
+		if *pngApp != "" {
+			name, file, ok := strings.Cut(*pngApp, "=")
+			b, err := os.ReadFile(file)
+			if !ok || err != nil {
+				log.Fatalf("bad -render-app %q (<name>=<file>): %v", *pngApp, err)
+			}
+			env.AppViews = map[string]*AppView{name: {Def: &AppDef{Name: name, Title: name}, Screen: parseAppOutput(b)}}
+		}
 		if *pngHelp > 0 {
 			area := renderWidgetArea(cfg, km, *pngLayer, w0(*pngSize), rotOf(cfg, *pngRotate), widgetHelp)
 			env.Help = renderHelpView(area, *pngHelp, *pngReadSize)
@@ -1567,6 +1576,17 @@ func main() {
 	files.SetChanged(filesUI.reload)
 	helpUI := NewHelpUI(reader.Size, reader.SetSize)
 	widgetRT.help = helpUI
+	// 自分で足すアプリ（apps.go、appsrun.go、appwidget.go）。スクリプトは Brain の user として動かす
+	appStore := OpenAppStore(*dataDir)
+	apps := NewAppService(appStore, func() string {
+		if c := curCfg.Load(); c != nil && c.Terminal != nil && c.Terminal.BrainUser != "" {
+			return c.Terminal.BrainUser
+		}
+		return defaultBrainUser
+	})
+	apps.SetInput(func(kind, title, _ string) { prompt.OpenTitled(kind, title) })
+	widgetRT.apps = apps
+	addAtExit(apps.Shutdown)
 	// 設定のアプリ。設定の置き場所（cstore）と電源（更新の係）は、あとで決める
 	settingsUI := NewSettingsUI(SettingsDeps{
 		Rotation:      e.Rotation,
@@ -1613,6 +1633,7 @@ func main() {
 		env.Files = filesUI.Snapshot()
 		env.Settings = settingsUI.Snapshot()
 		env.Help = helpUI.Snapshot()
+		env.Apps = apps
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
 		env.Battery = battery.Info()
@@ -1658,6 +1679,9 @@ func main() {
 			}
 			afterClockSet(res, texts, qrs, gadgets, graphs)
 			return "時刻を合わせました：" + t.Format(clockInputForm), nil
+		}
+		if name, id, ok := parseAppInputKind(kind); ok {
+			apps.Event(name, appEvent{args: []string{"input", id}, stdin: text})
 		}
 		return "", nil
 	}, func(kind string) string {
@@ -1744,6 +1768,7 @@ func main() {
 				lid.SetOnChange(d.Poke)
 				lid.SetDisplay(d) // 閉じているあいだは描き直さない
 				syncs.SetOnChange(d.Poke)
+				apps.SetOnChange(d.Poke)
 				// レイヤーが変わったり、設定を差し替えたりしたら描き直す。SetLayout は待たずに返る
 				e.SetOnView(func(v *View) { d.SetLayout(buildLayout(v.km, v)) }, first.Gen)
 			}
@@ -1846,6 +1871,7 @@ func main() {
 			frame:   frame,
 			memos:   memos,
 			reads:   reads,
+			apps:    apps,
 			sync:    syncs,
 			reader:  reader,
 			files:   files,
@@ -1876,6 +1902,7 @@ func main() {
 		ctl.uploads.Register("read", rk)
 		ctl.uploads.Register("file", files.UploadKind(filepath.Join(*dataDir, "files-tmp")))
 		ctl.uploads.Register("backup", backups.UploadKind())
+		ctl.uploads.Register("app", appStore.UploadKind())
 		ctl.uploads.Register(iconUploadKnd, icons.UploadKind())
 		icons.SetWanted(ctl.iconBoxes) // 上限を超えたら、今の設定で使わない大きさのアイコンから消す
 		if upd.Unit == "" {
@@ -1887,6 +1914,7 @@ func main() {
 	}
 
 	bootTrace.mark("control")
+	apps.Start()
 	if touch != nil {
 		go runTouch(touch, e, disp, mon, dim)
 	}

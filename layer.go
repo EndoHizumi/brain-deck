@@ -383,7 +383,7 @@ func (e *Engine) PressKey(code evdev.EvCode) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.calcKeyLocked(code) || e.readerKeyLocked(code) || e.helpKeyLocked(code) {
+	if e.calcKeyLocked(code) || e.readerKeyLocked(code) || e.helpKeyLocked(code) || e.appKeyLocked(code) {
 		return
 	}
 	e.press(keyID(code), e.km.lookupKey(e.layers(), code))

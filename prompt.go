@@ -245,6 +245,7 @@ func fitText(s string, w, scale int) string {
 type Prompt struct {
 	mu       sync.Mutex
 	kind     string // 開いている欄（inputTodo など）。空なら閉じている
+	title    string // inputTitle にない欄（自分で足すアプリの @input）の見出し
 	text     []rune
 	cur      int
 	err      string
@@ -431,11 +432,15 @@ func (p *Prompt) Active() bool {
 }
 
 // Open は欄を開く（開いていれば、その欄に切り替える）。
-func (p *Prompt) Open(kind string) {
+func (p *Prompt) Open(kind string) { p.OpenTitled(kind, "") }
+
+// OpenTitled は、見出しを決めて欄を開く（自分で足すアプリの @input。kind は app:<名前>:<id>）。
+func (p *Prompt) OpenTitled(kind, title string) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
+	p.title = title
 	if p.kind != "" && p.viaIME {
 		p.ime.Close() // ほかの欄に切り替える：uim-fep の行を消す
 	}
@@ -525,8 +530,14 @@ func (p *Prompt) overlayLocked() *Overlay {
 	o := &Overlay{Notice: p.notice, Level: p.level}
 	if p.kind != "" {
 		o.Input = &InputView{Title: inputTitle[p.kind], Text: string(p.text), Cursor: p.cur, Hint: inputHint[p.kind], Err: p.err}
+		if _, ok := inputTitle[p.kind]; !ok {
+			o.Input.Title, o.Input.Hint = p.title+"（英数字と記号）", "決定：決める　戻る：やめる　後退：1 字消す"
+		}
 		if p.viaIME {
 			o.Input.Title, o.Input.Hint = inputTitleIME[p.kind], inputHintIME[p.kind]
+			if _, ok := inputTitleIME[p.kind]; !ok {
+				o.Input.Title, o.Input.Hint = p.title, "決定：決める　戻る：やめる　文字切り替え：かな/英数　スペース：変換"
+			}
 			o.Input.IME = p.ime.View()
 			if o.Input.IME == nil {
 				o.Input.IME = &IMEView{Busy: "日本語入力を準備しています…"}

@@ -78,6 +78,8 @@ var backupItems = []backupItem{
 	{"reader", true, "読み物"},
 	{"photos", true, "写真"},
 	{"images", true, "背景画像"},
+	{appsDirName, true, "自分で足したアプリ"},
+	{appsDataDirName, true, "アプリのデータ"},
 }
 
 // BackupManifest は manifest.json。
