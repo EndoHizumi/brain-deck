@@ -63,13 +63,14 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 19. [タッチのキャリブレーション](#タッチのキャリブレーション)
 20. [設定のアプリとヘルプ、ふた](#設定のアプリとヘルプふた)
 21. [バックアップと復元、PC ごとの設定](#バックアップと復元pc-ごとの設定)
-22. [日常の操作](#日常の操作)
-23. [シリアルコンソール](#シリアルコンソール)
-24. [端末モード](#端末モード)
-25. [画面とコンソール](#画面とコンソール)
-26. [困ったとき](#困ったとき)
-27. [開発](#開発)
-28. [フォントとライセンス](#フォントとライセンス)
+22. [Brain の起動を速くする](#brain-の起動を速くする)
+23. [日常の操作](#日常の操作)
+24. [シリアルコンソール](#シリアルコンソール)
+25. [端末モード](#端末モード)
+26. [画面とコンソール](#画面とコンソール)
+27. [困ったとき](#困ったとき)
+28. [開発](#開発)
+29. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -2098,6 +2099,58 @@ profiles:
 5. 設定のアプリ：1 ページ目が 明るさ、暗くなるまで（PC あり・なし）、フォトフレーム、画面の向き、日本語入力。▼ で 2 ページ目に 読み物の文字、ふた、タブレットの形の本体キー、PC ごとの設定、時刻合わせ、設定ファイルの値に戻す。
 6. 日本語入力：Todo を足す欄は［かな］で開き、「時刻合わせ」の欄は［英数］で開く（Todo の欄で英数にしてから閉じても、次はかなで開く）。
 7. ふたを閉じて 1 分以上たってから開ける：状態の帯の時計が今の時刻になっている（閉じているあいだは描き直さない）。画面を裏返したタブレットの形のあいだ、本体のキーを押しても何も起きない（タッチは効く）。
+
+## Brain の起動を速くする
+
+電源を入れてから使えるまで、約 80 秒かかる（フェーズ K4 で測った。2026-10-12、本番 8a09379808bb）。ほとんどは Brainux のサービスの起動で、lefthand 自身は 2〜5 秒。
+
+### 測った結果
+
+| 段階 | 時間 |
+| --- | --- |
+| カーネル | 4.0 秒 |
+| ユーザーランド（graphical.target まで） | 76.5 秒（ほかの起動でも 75.6〜77.8 秒） |
+| lefthand が起動した時刻 | 電源から約 77 秒（ly のあと） |
+| lefthand が準備できた時刻（シリアルで答える） | 約 82 秒 |
+
+- **道筋（critical-chain）**：SD カードの boot 区画（`dev-mmcblk1p1`）が見えるのが 42.7 秒 → local-fs → sysinit（46 秒）→ basic → dbus（48 秒、+7 秒）→ NetworkManager（60 秒、+10 秒）→ network.target（71 秒）→ systemd-user-sessions → ly（73 秒）→ lefthand。
+- **時間の多い順（blame）**：fstrim 60 秒（週 1 回のタイマー）、dev-mmcblk1p2 40 秒、e2scrub_reap 21 秒、accounts-daemon 19 秒、udisks2 18 秒、systemd-udev-trigger 16 秒、networking 15 秒、ethernet_gadget 13 秒、avahi-daemon 12 秒、brain-config 12 秒、NetworkManager 10 秒。CPU は 1 つ（ARM926）なので、並んで起動するサービスが CPU を取り合い、`modprobe@…` のような軽いものまで 5 秒かかる。止めて減らせるのは、この取り合い。
+- **lefthand 自身**（試験のデーモンを本番の設定とデータの写しで。`startup:` の行）：exec から準備まで 2.0〜2.3 秒（キャッシュが冷えていると 3.6 秒）。内訳は、Go の初期化とプログラムの読み込み 0.6 秒、設定（YAML）の読み込み 0.5 秒、割り当ての組み立て 0.15〜0.4 秒、最初の画面 0.1〜0.3 秒。フェーズ K4 から、設定を読んだらすぐ「起動中…」を出す（exec から約 1.2 秒。前は最初の画面が出るまで約 2 秒）。電源を入れた直後はほかのサービスと取り合うので、起動から準備まで約 5 秒かかる。
+
+### 止めてよさそうなサービス（contrib/boot/boot-tune.sh）
+
+| 項目 | ユニット | 既定 | 何のためか | 見込み | 危なさ |
+| --- | --- | --- | --- | --- | --- |
+| accounts | accounts-daemon | 止める | GUI のログイン画面用のユーザー情報 | 19 秒の CPU | 小 |
+| udisks | udisks2 | 止める | デスクトップの自動マウント | 18 秒（と polkit 5 秒） | 小 |
+| e2scrub | e2scrub_reap | 止める | LVM の検査の後始末（LVM は使っていない） | 21 秒 | 小 |
+| hotkeys | triggerhappy（.service と .socket） | 止める | 全体のホットキー（キーボードは lefthand が握る） | 4 秒 | 小 |
+| avahi | avahi-daemon（.service と .socket） | 止める | `brain.local` の名前（`ssh brain` は IP、brain-deck はシリアル） | 12 秒 | 小 |
+| timesync | systemd-timesyncd | 選ぶ | NTP（Brain はふつうネットにつながらない） | 8 秒 | 小（Wi-Fi で使うなら止めない） |
+| nm | NetworkManager ほか | 選ぶ | ネットワークの管理。道筋の上にある | 10〜25 秒 | 中（usb0 の 192.168.7.2 はガジェットの係が付けるが、実機で確かめてから） |
+| ly | ly | 選ぶ | ログイン画面（tty2）。lefthand は ly を待って起動する | ly の分だけ早く起動 | 中（Brain の画面でログインできなくなる。下の「復旧の手段」） |
+
+- **止めないもの**：brain-config（CPU を ondemand にする。止めると遅くなる）、ethernet_gadget（USB）、ssh、serial-getty（シリアルのコンソール）、fake-hwclock、journald など。
+- **lefthand を ly より先に起動する案は取らない**：ly は起動のときに自分の VT（tty2）へ切り替えるので、lefthand が先だと画面を取られる。早くしたいなら ly を止める（ly がなければ、lefthand は ly を待たない）。
+- **やり方**：Brainux のファイルは書き換えず、`systemctl disable` だけ（止める前の状態を `/etc/lefthand/boot-tune.state` に記録し、`revert` はそれだけを見て `enable` に戻す）。止めたサービスも、ほかから呼ばれれば（D-Bus など）動く。
+
+```sh
+scp -r contrib/boot brain:              # PC から Brain の ~/boot に写す
+ssh brain 'sudo sh boot/boot-measure.sh > boot/before.txt'   # 今の起動の時間（読むだけ）
+ssh brain 'sudo sh boot/boot-tune.sh plan'                   # 既定で止めるものと今の状態（何も変えない）
+ssh brain 'sudo sh boot/boot-tune.sh plan --all'             # 選べる項目も
+ssh brain 'sudo sh boot/boot-tune.sh apply'                  # 既定の項目を止める（apply timesync のように項目も選べる）
+ssh brain 'sudo sh boot/boot-tune.sh status'
+ssh brain 'sudo sh boot/boot-tune.sh revert'                 # 元に戻す（再起動で効く）
+```
+
+### 復旧の手段（brain-deck が動かない、ly を止めた、ネットワークが壊れた）
+
+- **SSH**：`ssh brain`（USB の usb0、192.168.7.2）。
+- **USB のシリアルのコンソール**：PC の `/dev/ttyACM0` で Brain にログインできる（[シリアルコンソール](#シリアルコンソール)。`screen /dev/ttyACM0 115200` などで Enter）。ネットワークが壊れても使える。
+- **brain-deck の Brain のシェル**：lefthand が動いていれば、Brain の画面の端末で Brain にログインできる（[端末モード](#端末モード)）。ly を止めても使える。
+- **元に戻す**：上のどれかで `sudo sh boot/boot-tune.sh revert` をして再起動する。ly だけなら `sudo systemctl enable ly.service`。
+- **どれも使えないとき**：SD カードを PC に差し、ルートの区画の `/etc/systemd/system/` に、止めたユニットのリンクを戻す（`/etc/lefthand/boot-tune.state` に止めたものが書いてある。リンクの先は `/usr/lib/systemd/system/<ユニット>`、置き場所は `multi-user.target.wants/` など。ly は `display-manager.service` の別名）。
 
 ## 日常の操作
 
