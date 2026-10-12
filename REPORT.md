@@ -6,6 +6,56 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ K4　起動を速くする（2026-10-12、無人）
+
+### K4 の前に入れたもの（別のコミット）
+
+- README の「同期」と「同期のときに自動で取る」に、自動のバックアップを**既定で取る**こと、入るもの、止める書き方（`sync.yaml` に `backup: {keep: 0}`）を書いた（bdbb844）。
+- 状態の帯：既定以外のプロファイルを使っているときだけ、項目の左にその名前（`label`、なければ `name`）を水色で出す（7c56449、d1fc0a3）。`items` には書かない。描画は今の設定（atomic）から読み、設定の置き場所のロックを取らない（K1 のデッドロックと同じ形にならないように）。`-render-profile`、GUI のプレビューも同じ（prod-home-profile.png と画素単位で一致）。
+  - 実機（試験のデーモン、02:03）：`profile use hwtest` で帯に出たが、`label` でなく `name` が出ていた（重ねた設定では profiles が空になるため）。d1fc0a3 で直した。**直した版は実機で確かめていない**（下の「実機が止まった」）。
+
+### 1. 測った（実機。読むだけ。2026-10-12 01:40〜02:00、電池 3.68 V）
+
+- `systemd-analyze time`：**kernel 4.0 秒 + userspace 76.6 秒 = 80.6 秒**。前の 3 回の起動も 79.6〜81.8 秒。
+- 道筋（critical-chain）：`dev-mmcblk1p1.device` @42.7 秒 → boot.mount → local-fs.target @44.4 → sysinit @46.4 → basic @47.4 → dbus @48.2（+7.1）→ NetworkManager @60.4（+10.1）→ network.target @70.6 → systemd-user-sessions @71.1（+1.6）→ **ly @73.0 → lefthand（ジャーナルで @77.3 に起動、@82.4 にシリアルで答える）**。
+- blame の上位：fstrim 60.1 秒（週 1 回のタイマー）、dev-mmcblk1p2 39.8、e2scrub_reap 20.5、accounts-daemon 18.6、udisks2 17.9、systemd-udev-trigger 16.1、networking 14.5、ethernet_gadget 13.1、avahi-daemon 11.8、brain-config 11.5、NetworkManager 10.1、systemd-logind 9.8、journald 9.4。CPU が 1 つなので取り合いで、modprobe@… まで 5 秒かかる。
+- 動いているサービス（19）：accounts-daemon、avahi-daemon、cron、dbus、getty@tty1、lefthand、ly、NetworkManager、polkit、serial-getty@ttyAMA0、serial-getty@ttyGS0、ssh、journald、logind、timesyncd、udevd、triggerhappy、udisks2、user@1000。それぞれの役目と止めてよいかは README の「Brain の起動を速くする」の表。
+- ssh でログインするたびに user@1000.service（systemd --user）が 6.5〜7 秒かけて起動している（起動の時間には入らない。ssh が遅い理由）。
+- メモリ：112 MB のうち使用 43〜57 MB、lefthand の RSS 13 MB。cgroup v2 のコントローラーは何も有効でない（cgroup でメモリを制限できない。K5 は rlimit を使う）。
+- **デーモン自身**（`startup:` の行を足した版を、本番の設定とデータの写しで、試験のユニットで。exec から /run/lefthand-ready まで）：
+
+  | | 合計 | Go の初期化と読み込み（proc） | 設定（YAML） | 割り当て | 最初の画面 | ほか |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | キャッシュあり | 1.8〜2.1 秒 | 0.57〜0.61 | 0.47〜0.49 | 0.13〜0.16 | 0.1〜0.36 | 約 0.4（入力 0.1、サービス 0.1 など） |
+  | キャッシュを捨てて | 2.2〜2.3 秒 | 0.63〜0.64 | 0.49 | 0.14 | 0.29〜0.32 | 約 0.5 |
+
+  - **背景画像とフォントは原因ではなかった**：背景画像はもともと別の goroutine で後から読む（Preload）。読み物の明朝体は使うときに戻す。k8x12 とアイコンの初期化は 42 ms（`GODEBUG=inittrace=1`）。
+  - **設定の読み込み 0.5 秒**はほとんど YAML の解析（PC で 3.2 ms。Brain は約 150 倍遅い）。GC を減らしても変わらなかった。
+  - 「本番は 13 秒」は、`brain-deck restart` の待ち時間（止める、係を起動する、待つ）だった。本番を `brain-deck restart` で 2 回：22.7 秒と 11.4 秒（コマンドの時間）。デーモンの起動から準備までは、ジャーナルで 2〜4 秒。
+  - 電源を入れた直後（ほかのサービスと取り合う）は、起動から準備まで約 5 秒。
+
+### 2. デーモン自身（17df414、d1fc0a3）
+
+- **起動中の画面**（splash.go）：設定を読んだらすぐに、フレームバッファと専用 VT を開いて「起動中…」と版を出す。StartDisplay がそのまま引き継ぐ（開き直さないので、ちらつかない。引き継ぐまでに VT を切り替えられたら許可し、戻ってきたら描き直す）。
+  - 実機：exec から約 1.2 秒で出る（前は最初の画面まで約 2.0 秒）。フレームバッファを 0.3 秒ごとに読んで、systemctl start から 0.3〜0.6 秒は tty1、0.9〜1.2 秒で「起動中… brain-deck k4-splash」、1.5 秒でホーム画面（キャッシュを捨てた回）。
+- 起動のあいだは GC を減らす（GOGC 400、準備ができたら 100）。効き目は測れるほどではなかった（設定の解析は CPU だけ）。
+- 起動の段階ごとの時間を、準備ができたときに 1 行でログに出す（`startup: total … since exec (proc …), ready … after main: config …, splash …, keymap …`）。最初の描画の時間もいつも出す。`brain-deck logs` で見られる。
+- **しなかったこと**：設定の解析を速くする（YAML の代わりに、解析した結果を JSON などで残して読む）。0.3 秒ほど縮みそうだが、設定の読み方が 2 通りになり、壊れたときに分かりにくい。起動全体（80 秒）からは小さいので見送った。
+- **本番には反映していない**（下の「実機が止まった」）。
+
+### 3. システムの側の案（用意しただけ。適用していない。ac5bfe2）
+
+- `contrib/boot/boot-tune.sh`（plan、apply、revert、status）と `boot-measure.sh`。項目と見込み、危なさ、復旧の手段は README の「Brain の起動を速くする」。
+- 既定で止める：accounts-daemon、udisks2、e2scrub_reap、triggerhappy、avahi-daemon（どれも起動のときに CPU を取り合っているだけで、lefthand、SSH、シリアルは使わない）。選んだときだけ：timesyncd、NetworkManager（道筋の上にある。usb0 が付くかを実機で確かめてから）、ly（既定では選ばない。Brain の画面でログインできなくなる）。
+- 見込み（推定。再起動していないので測っていない）：既定の項目で、取り合いが減って 10〜20 秒。NetworkManager も止めれば、道筋から 10〜25 秒。ly も止めれば、lefthand は ly を待たない。
+- lefthand を ly より先に起動する案は取らなかった（ly が起動のときに tty2 へ切り替え、画面を取られる）。
+
+### 実機が止まった
+
+- 02:03 に d1fc0a3 の試験を始めたところで ssh が切れ、PC のログでは **03:56 に USB が外れた**まま戻らなかった（10:29 に気づいた。このあいだは作業が止まっていた）。最後に読んだ電池は 3.67 V（02:02）。電池の見張り（3.4 V で電源を切る）か、電池切れで止まったと思われる。
+- そのとき動いていたのは試験のデーモン（17df414、/tmp/lhu）で、20 分の見張り（02:22 に本番に戻す）を付けてあった。/tmp と /run は電源を切ると消えるので、次に起動すれば本番の lefthand.service（8a09379808bb）が動く。
+- これ以降、K4 の本番への反映と、K5 の実機での確かめはしていない（朝の手順）。
+
 ## 追記：フェーズ K3　バックアップと復元、PC ごとの切り替え（2026-10-12）
 
 ユーザーが起きていて、「K3 を始めて」と言われて行った。最初に K1 のあとで決めたこと（タブレットの形、閉じているあいだの描き直し）を別のコミットで作って本番に入れ、続いて日本語入力の調整、K3 の本体を行った。デーモンは afa79624626a（K3 の最初の 2 つ）→ d7daf5ef6e33 → 8a09379808bb（`.prev` d7daf5ef6e33。Todo の Flush の直し）、PC の brain-deck は 8a09379808bb。設定（`config/current.yaml`）は変えていない（本番の設定に profiles は入れていない）。電池は始めるとき 3.85 V、終わるとき 3.70 V（USB 給電）。
