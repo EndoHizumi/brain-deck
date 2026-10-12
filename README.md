@@ -78,6 +78,8 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 
 ![入力の流れと起動時のユニットの順序](REPORT-architecture.png)
 
+（上の図は 2026-10-03 の最初の形。今は ACM が 2 つ（NCM+HID+ACM+ACM）で、画面も描く）
+
 ```
 本体キーボード (brain-kbd-i2c)  ─┐
                                   ├─ lefthand ─→ /dev/hidg0 ─→ USB ─→ PC（キーボードとマウスとして認識）
@@ -87,7 +89,7 @@ PC のブラウザ（設定 GUI） ←─ USB シリアル ─→ /dev/ttyGS1（
 ```
 
 - **入力の専有**：デーモンは本体のキーボードとタッチパネルを専有する。動いているあいだ、Brain 自身のコンソールには入力が届かない。
-- **送信**：押したキーの組み合わせを、標準の 8 バイトのキーボードレポート（前にレポート ID 1 を付ける）で送る。同時に押せる通常キーは 6 つまで。オートリピートは PC 側に任せる。マウスは、レポート ID 2 のレポート（ボタン 3 つ、移動、縦と横のホイール）で送る。
+- **送信**：押したキーの組み合わせを、標準の 8 バイトのキーボードレポートで送る（キーボードとマウスの形では、前にレポート ID 1 を付ける）。同時に押せる通常キーは 6 つまで。オートリピートは PC 側に任せる。マウスは、キーボードとマウスの形のときだけ、レポート ID 2 のレポート（ボタン 3 つ、移動、縦と横のホイール）で送る。
 - **終了時**：すべてのキーとマウスのボタンを離したレポートを送ってから終わる。キーやボタンが押しっぱなしにならない。
 - **PC が応答しないとき**：PC が未接続やスリープ中でも、デーモンは止まらない。送れなかった状態は 0.2 秒ごとに送り直す。
 
@@ -96,7 +98,7 @@ PC のブラウザ（設定 GUI） ←─ USB シリアル ─→ /dev/ttyGS1（
 1. `ethernet_gadget.service` が USB ガジェットを作る。Brainux 標準の処理を drop-in で置き換え、ネットワーク（NCM）、キーボードとマウス（HID）、シリアル 2 つ（ACM。コンソール用と設定 GUI 用）の複合デバイスにする。Brain の usb0 には固定 IP 192.168.7.2 を付ける。
 2. `lefthand.service` がデーモンを起動する。ガジェットの作成と、ログイン画面の ly の起動を待ってから動く。
 
-電源を入れてからキー入力を受け付けるまで、約 68 秒かかる。
+電源を入れてからキー入力を受け付けるまで、約 80 秒かかる（2026-10-12 に測った値。lefthand の起動は約 77 秒、シリアルで答えるのは約 82 秒。[Brain の起動を速くする](#brain-の起動を速くする)）。
 
 ## 必要なもの
 
@@ -113,7 +115,7 @@ GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -o lefthand
 go test ./...
 ```
 
-できる実行ファイルは約 5.5MB で、フォントも含めてこれ 1 つで動く。
+できる実行ファイルは約 13 MB（読み物の明朝体を含む。2026-10-12 のコードでビルドした値）で、フォントも含めてこれ 1 つで動く。
 
 ## インストール
 
@@ -129,7 +131,7 @@ sudo sh install.sh --root /media/$USER/rootfs     # rootfs はルートのパー
 **ssh で入れる**：PC から Brain にファイルを送り、Brain 上で install.sh を実行する。
 
 ```sh
-scp -r lefthand config.yaml install.sh gadget-setup.sh console-setup.sh systemd brain:lefthand/
+scp -r lefthand config.yaml install.sh gadget-setup.sh console-setup.sh systemd contrib brain:lefthand/
 ssh brain 'cd ~/lefthand && sudo sh install.sh'
 ```
 
@@ -142,6 +144,7 @@ install.sh は次のファイルを配置し、`systemctl daemon-reload` を行�
 | config.yaml | /etc/lefthand/config.yaml（まだ無いときだけ） |
 | systemd/ethernet_gadget.service.d/lefthand.conf | /etc/systemd/system/ethernet_gadget.service.d/ |
 | systemd/lefthand.service | /etc/systemd/system/ |
+| contrib/brain/lefthand-ime.sh | /etc/profile.d/lefthand-ime.sh（端末モードの Brain のシェルで日本語入力を通す） |
 
 - **設定ファイル**：install.sh は、既にある `/etc/lefthand/config.yaml` を上書きしない。手元の設定を反映するときは、手動でコピーする。
 
@@ -1511,7 +1514,7 @@ lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタ
 - **画面の向き**：ホーム画面の「画面の向き」で、横向き、縦向き、回す、縦向き（逆）。足したアプリと画面の向きには縦向きの格子がある。今までのレイヤーは、縦向きでは列と行を入れ替えた格子になる。
 - **PC から外したとき**：ホーム画面に切り替え、つなぎ直したら前の画面に戻す（`offline.home`）。Todo のレイヤーの「Todo 追加」（と 決定）、「時刻合わせ」で Brain のキーボードから入れる（本体のレイヤーにも時刻合わせ）。
 - **自動減光**：つないでいるときは 3 分で暗く、15 分で消す。外しているときは 1 分で暗く、5 分で消す。本体キーで明るくなる（キーはそのまま PC に送る）。暗いときのタッチは明るくするだけ。端末モードのあいだと、プレゼン用タイマーが動いているあいだは暗くしない。
-- **電池**：電池だけで動いているあいだ、20% と 10% で知らせる。**電源は自動では切らない**（`poweroff` を書いていない。電池だけで動かした記録で見積もりを見直してから決める）。内蔵 RTC は、PC から時刻を合わせたら書き戻す（`clock.rtc: write`。フェーズ R2 で read から変えた）。
+- **電池**：残り（%）では知らせない（`warn: 0`、`critical: 0`。見積もりがまだ正確でないため）。電池の電圧が 3.5 V を下回ったら知らせ、3.4 V を下回ったら 60 秒後にデータを保存して電源を切る（`warn_mv: 3500`、`poweroff_mv: 3400`、`poweroff_plugged: true`。USB につないでいても同じ。フェーズ R3 で変えた。[充電](#充電)）。内蔵 RTC は、PC から時刻を合わせたら書き戻す（`clock.rtc: write`。フェーズ R2 で read から変えた）。
 - **PC 側の準備が要るもの**：天気（`~/.config/brain-deck/weather.yaml` の `city` と、`brain-deck weather sync` の定期実行。[天気](#天気)）、カレンダーと月の表示の予定（`brain-deck calendar sync` の定期実行。祝日を赤くするなら `holiday: true` のカレンダー。[カレンダー](#カレンダー)）、時刻（`brain-deck time sync`。[cron で時刻を合わせる](#cron-で時刻を合わせる)）、Todo と ダッシュボードの「お知らせ」（`brain-deck text notify …`）。定期実行の例は contrib/systemd/。
 - **元に戻す**：先に「画面の向き」→「横向き」で横向きに戻す（向きは Brain に残るので、縦向きのまま前の設定に戻すと縦向きのままになる）。そのあと、すぐ前の設定に戻すなら `brain-deck config get --prev > prev.yaml && brain-deck config put prev.yaml`（`.prev` は最後に書く前の版だけ。あとで設定を書き換えていたら使えない）。いつでも戻せる方法は、リポジトリから取り出すこと：`git show 00997a2:config/current.yaml > before-r.yaml && brain-deck config put before-r.yaml`（00997a2 はフェーズ R の前の本番の設定）。
 
@@ -1561,6 +1564,7 @@ lefthand は起動したとき、時刻が合っていなければ RTC の時刻
 | 1970 年起点の UTC とみなすと | 1996-10-05。こちらの形ではない |
 
 2000 年起点の形とみなすと日付はもっともらしいが、5 日 18 時間ほど遅れている。純正のファームウェアで最後に時刻を合わせてから、RTC が止まっていた時間があったのかもしれない（電池が切れていたなど）。形が同じかは、次の手順で純正のファームウェアの時計と比べて確かめる。確かめるまでは `clock.rtc: read`（読むだけ）のままにし、RTC には書かない。今の RTC は遅れているので、起動したときにも使われない（`brain-deck status` の「起動したとき：not used: …」）。
+（そのあと、ユーザーの試験で純正のファームウェアの時計と同じ形と確かめ、2026-10-11 のフェーズ R2 で本番の設定を `clock.rtc: write` にした。R2 では RTC が 1 日進んでいて、その理由は分かっていない。[本番の設定](#本番の設定configcurrentyaml)、REPORT.md の「フェーズ R2」）
 
 **純正のファームウェアの時計と比べる手順**（ユーザーが行う）
 
@@ -1901,7 +1905,7 @@ Brain のセルに Ctrl+F18（X11 の名前は `XF86Launch9` と Ctrl）を割�
 - この起動のときのレジスタ（/dev/mem を読むだけ）：`HW_POWER_STS` 0x2007862e（電源の入った理由 PWRUP_SOURCE は bit 29 だけ。i.MX28 のリファレンスマニュアルでは 5V（VBUS）の差し込み、と読める。確かめ要）、`HW_RTC_PERSISTENT0` 0x00a00121（AUTO_RESTART（bit 17）は **0**。フェーズ P2 で読んだときは 0x00820121 で 1 だった。あいだに純正のファームウェアで時刻を合わせ、電源を何度か切ったので、そのどこかで変わった。bit 21 も 0 から 1 に変わった）、`HW_POWER_5VCTRL` 0x0403f113。
 - **「充電だけしたいのに起動する」のは、AUTO_RESTART ではなく、5V の差し込みで電源が入る i.MX28 の働きと考えられる**（AUTO_RESTART は「自分で電源を切ったあと約 180 ms で起動し直す」設定で、今は 0。それでも USB をつなぐと起動する）。5V の差し込みで電源が入るのを、レジスタで止める方法は見つけていない。
 - 提案（実装していない）：起動したときに `HW_POWER_STS` の PWRUP_SOURCE を読み、5V の差し込みだけで起動したとき（電源ボタンでない）は、lefthand が「充電中。キーを押すと起動します」と出し、10 秒のうちにキーかタッチがなければ電源を切る（純正のファームウェアの充電の画面と同じ考え方）。USB につないだまま電源を切るとそのまま切れていることは試験で分かっているので、切り直した電源は、USB を抜いて差し直すまで入らないはず。ビットの意味は、リファレンスマニュアルで確かめてから作る。
-- 電池が少ないときの電源断（`battery.poweroff`）と `brain-deck poweroff` は、この動きを前提にしている：USB の 5V があるあいだは電池で切らない（P2 のまま）。`brain-deck poweroff` で切ったあとに USB を差し直すと起動する。
+- 電池が少ないときの電源断（`battery.poweroff`）と `brain-deck poweroff` は、この動きを前提にしている：USB の 5V があるあいだは、残り（%）では切らない（P2 のまま）。電圧（`poweroff_mv`）では、`poweroff_plugged: true`（既定。フェーズ R3 から）なら USB の 5V があっても切る。`brain-deck poweroff` で切ったあとに USB を差し直すと起動する。
 
 ## タッチのキャリブレーション
 
@@ -2636,7 +2640,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | weathericon.go | 天気アイコンの置き場所（.lha、透明度付きの RGB565）、受け取り（upload_* の weather_icon）、上限、重ねて描く処理 |
 | weatherwidget.go | 天気のセルの配置（描くものの並び）、最終更新の行、アイコンの箱の大きさ、描画 |
 | image.go | 背景画像の置き場所、受け取り（transfer.go を使う）、一覧、削除、読み込みとキャッシュ、先読み |
-| transfer.go | 分割して送られる大きなファイルの受け取り（SHA-256 の確認、一時ファイル、順番、時間切れ）。種類を選べる upload_*（update、image、weather_icon、photo） |
+| transfer.go | 分割して送られる大きなファイルの受け取り（SHA-256 の確認、一時ファイル、順番、時間切れ）。種類を選べる upload_*（update、image、photo、read、file、backup、app、weather_icon） |
 | pen.go | ペンタブレット：HID のペンのレポート、セルを PC の画面に当てはめる、筆圧、描画 |
 | memo.go | 手書きメモ：メモの置き場所、帯のボタン、描き足し、ページの変換、保存 |
 | stroke.go | スタイラスの線の読み取り（跳ね、平均、つなぎ）。penreplay.go は -replay-pen |
@@ -2691,7 +2695,7 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | systemd/ | サービスと drop-in（serial-getty@ttyGS0.service.d/ はシリアルコンソールの getty） |
 | install.sh | Brain 上での配置。`--root` で、PC から SD カードのルートに直接入れる |
 | console-setup.sh | シリアルコンソール（ttyGS0 の getty）を有効にする・元に戻す |
-| contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則（70）、端末モードのときだけ getty を起動する規則（71）、スリープ解除を許す規則（72） |
+| contrib/udev/ | PC 用。ModemManager に Brain のシリアルを調べさせない udev の規則（70）、端末モードのときだけ getty を起動する規則（71）、スリープ解除を許す規則（72）、つないだら brain-deck sync を動かす規則（73） |
 | contrib/systemd/brain-terminal-getty@.service、contrib/profile.d/brain-terminal.sh | PC 用。端末モードの getty と、端末の大きさを合わせるスクリプト |
 | contrib/brain/lefthand-ime.sh | Brain 用（install.sh が /etc/profile.d に置く）。端末モードで Brain 自身にログインしたとき、uim-fep の中でシェルを開き直す |
 | config.yaml | 設定の例。実機と同じ値 |
