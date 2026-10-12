@@ -81,6 +81,7 @@ func (h *helper) run() bool {
 		return h.restore(stage)
 	}
 	var done []installed
+	gadgetChanged := false
 	rebind := p.Rebind
 	if p.Action != "restart" {
 		h.phase("installing", "")
@@ -90,6 +91,11 @@ func (h *helper) run() bool {
 		}
 		pairs = append(pairs, p.Files...) // 読み物の文字（フェーズ K7）
 		for i, pr := range pairs {
+			// 中身が同じものは入れ替えない（.prev を同じもので上書きして、本当の前の版をなくさない。
+			// 文字だけを足す 2 回目の更新では、lefthand と gadget-setup.sh は同じ）
+			if same(pr[0], pr[1]) {
+				continue
+			}
 			in, err := install(pr[0], pr[1], stage)
 			if err != nil {
 				h.undo(done, false)
@@ -98,10 +104,12 @@ func (h *helper) run() bool {
 			if i >= len(pairs)-len(p.Files) {
 				os.Chmod(pr[1], 0o644) // 実行ファイルではない
 			}
+			if pr[1] == p.Gadget && p.StagedGad != "" {
+				gadgetChanged = in.changed
+			}
 			done = append(done, in)
 		}
 	}
-	gadgetChanged := p.StagedGad != "" && len(done) >= 2 && done[1].changed
 
 	// USB の付け直し。gadget-setup.sh が変わったときは実行する（違うところがあるときだけ付け直す）
 	if rebind || gadgetChanged {
@@ -125,6 +133,13 @@ func (h *helper) run() bool {
 		return h.finish(false, "rolled_back", err.Error())
 	}
 	return h.finish(true, "done", "")
+}
+
+// same は、a と b の中身が同じか（b がなければ違う）。
+func same(a, b string) bool {
+	sa, _, err1 := fileSHA256(a)
+	sb, _, err2 := fileSHA256(b)
+	return err1 == nil && err2 == nil && sa == sb
 }
 
 // restore は、バックアップを入れ替えて起動し直す。起動しなければ（PC がつなぎ直せなければ）、元に戻して起動し直す。

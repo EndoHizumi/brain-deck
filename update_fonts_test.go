@@ -219,3 +219,32 @@ func TestHelperInstallsFonts(t *testing.T) {
 		t.Fatalf("after rollback: bin %s, font %d bytes, prev %s", readFile(t, e.bin), len(b), readFile(t, f24+".prev"))
 	}
 }
+
+// 文字だけを足す 2 回目の更新（lefthand と gadget-setup.sh は同じ）では、lefthand.prev を同じもので上書きしない
+// （上書きすると、本当の前の版に --rollback で戻れなくなる）。
+func TestHelperKeepsPrevForSameBinary(t *testing.T) {
+	helperTimeouts(t)
+	e := newUpdateEnv(t)
+	share := filepath.Join(t.TempDir(), "share")
+	script, _ := os.ReadFile(e.gadget)
+	p := e.stageFor(t, "v1", script) // 今と同じ lefthand（v1）と gadget-setup.sh
+	src := filepath.Join(e.upd.Dir, p.Stage, "reader-24.lrf.gz")
+	os.WriteFile(src, []byte("font"), 0o644)
+	p.Files = [][2]string{{src, filepath.Join(share, "reader-24.lrf.gz")}}
+	e.confirmWhenAsked(p.Stage)
+	if ok, st := e.runHelper(p); !ok {
+		t.Fatalf("%+v", st)
+	}
+	if readFile(t, e.bin) != "v1" || readFile(t, e.bin+".prev") != "v0" {
+		t.Fatalf("bin %s prev %s", readFile(t, e.bin), readFile(t, e.bin+".prev"))
+	}
+	if _, err := os.Stat(e.gadget + ".prev"); err == nil {
+		t.Fatal("the same gadget-setup.sh must not make a .prev")
+	}
+	if len(e.sys.gadget) != 0 {
+		t.Fatal("the same gadget-setup.sh must not run")
+	}
+	if readFile(t, filepath.Join(share, "reader-24.lrf.gz")) != "font" {
+		t.Fatal("font not installed")
+	}
+}
