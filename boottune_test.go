@@ -154,6 +154,9 @@ esac
 			t.Errorf("boot-early.conf: want %q in\n%s", want, b)
 		}
 	}
+	if b, _ := os.ReadFile(filepath.Join(root, "etc/systemd/system/ethernet_gadget.service.d/boot-early.conf")); !strings.Contains(string(b), "After=sys-kernel-config.mount") {
+		t.Errorf("gadget drop-in:\n%s", b)
+	}
 	if l, _ := os.ReadFile(log); !strings.Contains(string(l), "daemon-reload") {
 		t.Error("apply must daemon-reload after adding a drop-in")
 	}

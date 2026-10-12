@@ -34,6 +34,8 @@
 #   段階 4（lefthand を早く起動する。USB の構成を待たない lefthand.service（b43dd75 から）を入れてから）
 #     early      /etc/systemd/system/lefthand.service.d/boot-early.conf   DefaultDependencies=no。basic.target（SD カードの
 #                                                 boot 区画と udev の coldplug を待つ）を待たず、ルートの remount と fake-hwclock のあとに起動する
+#     gadget     /etc/systemd/system/ethernet_gadget.service.d/boot-early.conf   同じく、USB の構成を configfs のマウントのあとに作る
+#                                                 （PC へのキー、brain-deck、usb0。ssh のサーバーと ttyGS0 のログインは basic.target のまま）
 #   段階 5（起動の最初の部分を軽くする）
 #     quiet      /etc/systemd/system.conf.d/brain-deck-boot.conf（ShowStatus=no）、/etc/sysctl.d/90-brain-deck-console.conf
 #                （kernel.printk = 4 4 1 7）  起動中の [ OK ] の行と、カーネルの info のメッセージを、tty1（fbcon）とシリアルに書かない
@@ -54,7 +56,7 @@ SYSTEMCTL=${SYSTEMCTL:-systemctl}
 STAGE1="accounts udisks e2scrub hotkeys avahi"
 STAGE2="nm timesync networking apt"
 STAGE3="ly"
-STAGE4="early"
+STAGE4="early gadget"
 STAGE5="quiet modprobe udev"
 STAGE6="journal"
 ALL_ITEMS="$STAGE1 $STAGE2 $STAGE3 $STAGE4 $STAGE5 $STAGE6"
@@ -73,6 +75,7 @@ units_of() {
 	apt) echo apt-daily.timer apt-daily-upgrade.timer ;;
 	ly) echo ly.service ;;
 	early) echo file:/etc/systemd/system/lefthand.service.d/boot-early.conf ;;
+	gadget) echo file:/etc/systemd/system/ethernet_gadget.service.d/boot-early.conf ;;
 	quiet) echo file:/etc/systemd/system.conf.d/brain-deck-boot.conf file:/etc/sysctl.d/90-brain-deck-console.conf ;;
 	modprobe) echo mask:modprobe@drm.service mask:modprobe@efi_pstore.service ;;
 	udev) echo null:/etc/udev/rules.d/60-triggerhappy.rules null:/etc/udev/rules.d/61-mate-settings-daemon-rfkill.rules \
@@ -94,6 +97,19 @@ file_content() {
 [Unit]
 DefaultDependencies=no
 After=systemd-remount-fs.service fake-hwclock-load.service tmp.mount systemd-journald.socket
+Conflicts=shutdown.target
+Before=shutdown.target
+EOF
+		;;
+	*/ethernet_gadget.service.d/boot-early.conf)
+		cat <<'EOF'
+# brain-deck（contrib/boot/boot-tune.sh の段階 4）：USB の構成（gadget-setup.sh）を起動の早いうちに作る。消せば元に戻る。
+# gadget-setup.sh が使うのは configfs と、bash、ip だけ。basic.target（SD カードの boot 区画、udev の coldplug）は待たない。
+# ssh のサーバーと ttyGS0 のログインは今までどおり basic.target のあと
+[Unit]
+DefaultDependencies=no
+Wants=sys-kernel-config.mount
+After=sys-kernel-config.mount systemd-remount-fs.service systemd-journald.socket
 Conflicts=shutdown.target
 Before=shutdown.target
 EOF
@@ -135,6 +151,7 @@ note_of() {
 	networking) echo "見込み：11 秒（blame）。危なさ：小（/etc/network/interfaces は lo だけ）" ;;
 	apt) echo "見込み：逃した回の apt-daily-upgrade が起動のあとに 51 秒 CPU を使っていた（2026-10-12）。危なさ：小（ネットにつないで更新するなら手で apt）" ;;
 	ly) echo "見込み：ly（tty2）を待たずに lefthand が起動。危なさ：中（ly のログイン画面がなくなる。tty1、SSH、USB のシリアル、brain-deck の Brain のシェルは残る）" ;;
+	gadget) echo "見込み：PC へのキーと brain-deck が約 57 秒 → 約 30 秒。危なさ：中（失敗すると ssh も使えない。tty1 か SD カードで revert gadget）" ;;
 	early) echo "見込み：lefthand の起動が約 61 秒 → 約 20 秒。危なさ：中（起動の順が変わる。USB の構成を待たない lefthand.service と、b43dd75 からのデーモンが要る）" ;;
 	quiet) echo "見込み：1〜4 秒（fbcon のスクロールとシリアルへの書き出しを待たない）。危なさ：小（起動中の進み具合が画面とシリアルに出ない。journal には残る）" ;;
 	modprobe) echo "見込み：1〜2 秒ぶんの CPU（モジュールがないので空振り）。危なさ：小（モジュールのあるカーネルにしたら戻す）" ;;
