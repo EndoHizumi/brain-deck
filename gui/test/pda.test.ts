@@ -31,6 +31,8 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
   const hcfg = parseConfigText(repoFile('gui/test/fixtures/home-images.yaml').toString('utf8'))
   // 本番の設定（フェーズ R3 で、読む、メモ、ファイル、ペン、同期を足した）
   const prod = parseConfigText(repoFile('config/current.yaml').toString('utf8'))
+  // フェーズ K5：自分で足すアプリ（プレビューでは説明だけ。-render-app を書かない -render-png と同じ）
+  const appsCfg = parseConfigText(repoFile('config/apps-example.yaml').toString('utf8'))
   const images = new Map<string, Image565>()
   for (const f of readdirSync(resolve(repoRoot, 'config/background-images'))) {
     if (f.endsWith('.565')) images.set(f.slice(0, -4), decodeImageFile(new Uint8Array(repoFile(`config/background-images/${f}`)))!)
@@ -75,6 +77,8 @@ describe('ホーム画面、状態の帯、縦向きの格子のプレビュー'
     { file: 'prod-help.png', c: prod, layer: 'help', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'prod-help-portrait.png', c: prod, layer: 'help', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     // 既定以外のプロファイルを使っているとき（-render-profile 会社）
+    { file: 'apps-dice.png', c: appsCfg, layer: 'dice', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
+    { file: 'apps-load-portrait.png', c: appsCfg, layer: 'load', portrait: true, battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
     { file: 'prod-home-profile.png', c: prod, home: 0, profile: '会社', battery: { percent: 87, plugged: false, charging: false }, lastSync: '2026-10-06T09:30:00+09:00' },
   ]
   for (const t of cases) {

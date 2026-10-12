@@ -39,7 +39,7 @@ import { BRAIN_FILTER, WebSerialTransport, serialSupported } from './serial'
 import { PortRoles, isBrainPort, looksLikeConsole, looksLikePrompt } from './ports'
 import { ConsoleSession, sttyCommand, type TermLike } from './console'
 import type {
-  ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, PhotoListResult, ReadListResult, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
+  ActionSpec, PresenterColorSpec, BatteryInfo, BrainImage, Config, EngineStatus, GetGraphResult, GetTextResult, GraphSeries, GetWidgetsResult, PresenceSpec, WidgetsState, ImageListResult, PhotoListResult, ReadListResult, AppListResult, AppInfo, HelloResult, InputEvent, KeymapInfo, LayerConfig, Notification, PhysKey,
   BarItem, HomeApp, HomeConfig, PressStyle, Problem, SetTimeResult, TextEntry, CalendarData, TodoItem, TodoList, TodoResult, ValidateResult, WeatherData, WidgetKind, MediaAction, MouseAction, UsbMode, TermInfo, TermMode, InputKind, CalibrateKind,
   FileEntry,
   FileListResult,
@@ -185,7 +185,8 @@ export class App {
   previewOffline = false // プレビューを、PC から外したときの画面にする
   brainLastSync: Date | null = null // Brain で最後に時刻を合わせた時刻（get_status の time.last_set）
   // 画面の切り替え：設定（キーとタッチ）か、Todo か、コンソールか
-  section: 'config' | 'todo' | 'photos' | 'reads' | 'files' | 'console' = 'config'
+  section: 'config' | 'todo' | 'photos' | 'reads' | 'files' | 'apps' | 'console' = 'config'
+  apps: AppListResult | null = null // Brain の自分で足したアプリ（list_apps）
   reads: ReadListResult | null = null // Brain の読み物（list_reads）
   files: FileListResult | null = null // Brain のファイル（list_files）
   filesPath = '' // 見ているフォルダ（空なら場所の一覧）
@@ -1054,6 +1055,72 @@ export class App {
     )
   }
 
+  // ---------- 自分で足したアプリ ----------
+
+  get appsSupported(): boolean {
+    return !!this.hello?.commands?.includes('list_apps')
+  }
+
+  async loadApps(): Promise<void> {
+    if (!this.connected || !this.appsSupported) return
+    try {
+      this.apps = await this.client!.request<AppListResult>('list_apps')
+    } catch (e: any) {
+      this.say(`アプリの一覧を読めませんでした：${e?.message ?? e}`, 'error')
+    }
+    this.render()
+  }
+
+  async deleteBrainApp(name: string): Promise<void> {
+    if (!this.deps.confirm(`アプリ「${name}」と、そのアプリが書いたデータを Brain から消します。よいですか？（設定のセルはそのまま残り、「置かれていません」と出ます）`)) return
+    try {
+      await this.client!.request('delete_app', { app: name })
+      this.say('アプリを消しました', 'ok')
+    } catch (e: any) {
+      this.say(`アプリを消せませんでした：${e?.message ?? e}`, 'error')
+    }
+    await this.loadApps()
+  }
+
+  // appUses は、設定の中で、アプリを使っているレイヤーの名前。
+  private appUses(name: string): string[] {
+    const out = new Set<string>()
+    for (const l of this.cfg?.layers ?? []) {
+      for (const g of [l.touch, l.touch_portrait]) {
+        for (const a of Object.values(g?.cells ?? {})) {
+          if (a && typeof a === 'object' && (a as ActionSpec).widget === 'app' && (a as ActionSpec).name === name) out.add(layerTitle(l))
+        }
+      }
+    }
+    return [...out]
+  }
+
+  private viewApps(): HTMLElement {
+    const panel = (...c: (HTMLElement | null)[]) => h('section', { class: 'panel apps-panel' }, h('h2', null, '自分で足したアプリ（Brain に保存）'), c)
+    if (!this.connected) return panel(h('p', { class: 'hint' }, 'Brain に接続すると、自分で足したアプリの一覧を見て、消せます。'))
+    if (!this.appsSupported) return panel(h('div', { class: 'warn' }, 'Brain の lefthand が自分で足すアプリに対応していません。lefthand を新しくしてください'))
+    const l = this.apps
+    const how = (a: AppInfo) => a.error ? '' : a.mode === 'stream' ? '動き続ける' : a.every === 'off' ? 'タップのときだけ' : `${a.every} ごと`
+    return panel(
+      l
+        ? l.apps.length
+          ? h('table', { class: 'apps' },
+            h('thead', null, h('tr', null, ['名前', '題名', '動かし方', '大きさ', '使っているレイヤー', '様子', ''].map((x) => h('th', null, x)))),
+            h('tbody', null, l.apps.map((a) => h('tr', { dataset: { app: a.name } },
+              h('td', null, a.name),
+              h('td', { title: a.description ?? '' }, a.title ?? ''),
+              h('td', null, how(a)),
+              h('td', null, `${a.files} ファイル、${kb(a.bytes)}`),
+              h('td', null, this.appUses(a.name).join('、') || '（使っていない）'),
+              h('td', { class: a.error ? 'err' : '' }, a.error ? `使えません：${a.error}` : a.status ?? ''),
+              h('td', null, h('button', { class: 'small danger', onclick: () => void this.deleteBrainApp(a.name) }, '削除'))))))
+          : h('p', { class: 'hint' }, 'まだアプリがありません。')
+        : h('p', { class: 'hint' }, '読み込んでいます…'),
+      h('p', { class: 'hint' }, 'アプリを足すのは PC のコマンドです：brain-deck app install <フォルダ>（app.yaml とスクリプト。例は contrib/apps、書き方は docs/apps.md）。' +
+        '画面に出すには、セルの種類を「ウィジェット」→「アプリ（自分で足す）」にして、名前を選びます。スクリプトは Brain の user の権限で、時間とメモリの上限を付けて動きます。'),
+    )
+  }
+
   // ---------- ファイル ----------
 
   get filesSupported(): boolean {
@@ -1821,6 +1888,8 @@ export class App {
     }
     if (w !== 'presence') delete a.states
     if (w !== 'calculator') delete a.prefix
+    if (w !== 'app') delete a.name
+    if (w === 'app') a.name = a.name || this.apps?.apps.find((x) => !x.error)?.name || 'myapp'
     if (w !== 'presenter') {
       delete a.duration
       delete a.colors
@@ -2146,7 +2215,7 @@ export class App {
       { class: 'app' },
       this.viewHeader(),
       this.viewMessages(),
-      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' || this.section === 'photos' || this.section === 'reads' || this.section === 'files' ? this.viewEditor() : this.viewStart(),
+      this.section === 'console' ? this.viewConsole() : this.cfg || this.section === 'todo' || this.section === 'photos' || this.section === 'reads' || this.section === 'files' || this.section === 'apps' ? this.viewEditor() : this.viewStart(),
       this.diff ? this.viewDiff() : null,
       this.imageEdit ? this.viewImageEdit() : null,
     )
@@ -2254,6 +2323,8 @@ export class App {
         ? this.viewReads()
         : this.section === 'files'
         ? this.viewFiles()
+        : this.section === 'apps'
+        ? this.viewApps()
         : [
             h('div', { class: 'source' }, `編集中：${this.source}`, this.dirty ? h('span', { class: 'dirty' }, '（未保存の変更あり）') : null),
             this.viewOverrides(),
@@ -2273,8 +2344,9 @@ export class App {
     )
   }
 
-  showSection(s: 'config' | 'todo' | 'photos' | 'reads' | 'files' | 'console'): void {
+  showSection(s: 'config' | 'todo' | 'photos' | 'reads' | 'files' | 'apps' | 'console'): void {
     this.section = s
+    if (s === 'apps') void this.loadApps()
     if (s === 'photos') void this.loadPhotos()
     if (s === 'reads') void this.loadReads()
     if (s === 'files') void this.loadFiles(this.filesPath)
@@ -2299,6 +2371,9 @@ export class App {
         '読み物', this.reads?.reads.length ? h('span', { class: 'count' }, String(this.reads.reads.length)) : null),
       h('button', { role: 'tab', id: 'section-files', class: ['section', this.section === 'files' && 'active'],
         'aria-selected': this.section === 'files' ? 'true' : 'false', onclick: () => this.showSection('files') }, 'ファイル'),
+      h('button', { role: 'tab', id: 'section-apps', class: ['section', this.section === 'apps' && 'active'],
+        'aria-selected': this.section === 'apps' ? 'true' : 'false', onclick: () => this.showSection('apps') },
+        'アプリ', this.apps?.apps.length ? h('span', { class: 'count' }, String(this.apps.apps.length)) : null),
       h('button', { role: 'tab', id: 'section-console', class: ['section', this.section === 'console' && 'active'],
         'aria-selected': this.section === 'console' ? 'true' : 'false', onclick: () => this.showSection('console') },
         'コンソール', this.console.open ? h('span', { class: 'count ok' }, '接続中') : null))
@@ -3329,6 +3404,7 @@ export class App {
         : own.widget === 'pentablet' ? this.viewPenTabEditor(own)
         : own.widget === 'memo' ? this.viewMemoEditor()
         : own.widget === 'reader' ? this.viewReaderEditor()
+        : own.widget === 'app' ? this.viewAppEditor(own)
         : own.widget === 'settings' ? [h('p', { class: 'hint' }, 'Brain だけで、明るさ、暗くなるまでの時間、フォトフレーム、画面の向き、読み物の文字の大きさ、ふたを閉じたときの動き、時刻合わせを変える画面です。' +
           '変えた値は設定ファイルを書き換えず「上書き」として Brain に置きます（この画面の上に一覧が出ます）。情報（版、電池、SD カードの空き、PC とのつながり、最後の同期）と、再起動・電源を切るボタン（2 秒押し続ける）もあります。大きさは 1×1（レイヤー全体）がおすすめです。')]
         : own.widget === 'help' ? [h('p', { class: 'hint' }, '使い方の説明を、読み物と同じ描き方で読みます（中身は lefthand に入っていて、版と合います）。左右のタップでめくり、真ん中で目次と文字の大きさ。大きさは 1×1（レイヤー全体）がおすすめです。')]
@@ -3381,6 +3457,24 @@ export class App {
     return [h('p', { class: 'hint' }, '取り込んだ読み物（青空文庫、EPUB、Web の記事、RSS）を、Brain で読みます（PC から外していても読めます）。' +
       '左右をタップしてページをめくり、真ん中で道具（一覧、目次、文字の大きさ、縦書き・横書き）。本体キーの ← → とスペースでもめくります。' +
       '大きさは 1×1（レイヤー全体）がおすすめです。読み物は「読み物」のタブで見て消せます。足すのは PC の brain-deck read add です。')]
+  }
+
+  // viewAppEditor は、自分で足すアプリのセルの欄（名前）。アプリは Brain のデータ（brain-deck app install）。
+  private viewAppEditor(own: ActionSpec): HTMLElement[] {
+    const name = own.name ?? ''
+    const known = (this.apps?.apps ?? []).map((a) => a.name)
+    const out: HTMLElement[] = [
+      h('label', { class: 'row', title: 'Brain の /var/lib/lefthand/apps/<名前>（英小文字と数字と _ -）' }, '名前 ',
+        h('input', { value: name, 'data-focus': 'app-name', id: 'app-name', list: 'app-names', placeholder: '例：dice',
+          onchange: (ev: Event) => this.patchAction({ name: (ev.target as HTMLInputElement).value.trim() }) }),
+        h('datalist', { id: 'app-names' }, known.map((k) => h('option', { value: k })))),
+    ]
+    if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name)) out.push(h('div', { class: 'err' }, '名前は、英小文字と数字と _ - の 32 文字までです'))
+    else if (this.connected && this.apps && !known.includes(name)) out.push(h('div', { class: 'warn' }, `Brain に「${name}」はまだありません（brain-deck app install <フォルダ>）`))
+    if (this.connected && this.appsSupported && !this.apps) out.push(h('p', null, h('button', { class: 'small', onclick: () => void this.loadApps() }, 'Brain のアプリを読む')))
+    out.push(h('p', { class: 'hint' }, 'Brain に置いたスクリプトの出力を、このセルに描きます（画面にあるあいだだけ動かします）。タップ、ボタン、キー、文字の入力はスクリプトに渡ります。' +
+      'プレビューでは説明だけを描きます。アプリの一覧と削除は「アプリ」のタブ、書き方は docs/apps.md。大きさは 1×1（レイヤー全体）がおすすめです。'))
+    return out
   }
 
   // viewMemoEditor は、手書きメモのセルの説明。線は Brain のデータで、brain-deck memo get で PNG に描き出す。

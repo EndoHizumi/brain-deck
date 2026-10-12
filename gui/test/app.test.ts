@@ -926,6 +926,32 @@ describe('読み物', () => {
   })
 })
 
+describe('自分で足したアプリ（フェーズ K5）', () => {
+  it('アプリのタブで一覧を見て消せ、セルをアプリにして名前を選べる', async () => {
+    const t = await connected()
+    t.click('#section-apps')
+    await vi.waitFor(() => expect(t.app.apps?.apps.length).toBe(2))
+    const txt = t.$('.apps-panel').textContent!
+    expect(txt).toContain('サイコロ')
+    expect(txt).toContain('タップのときだけ')
+    expect(txt).toContain('動き続ける')
+    expect(txt).toContain('brain-deck app install')
+    t.$<HTMLButtonElement>('tr[data-app="dice"] button.danger').click()
+    await vi.waitFor(() => expect(t.daemon.apps.length).toBe(1))
+    t.click('#section-config')
+    t.click('[data-cell="0,0"]')
+    t.change('#kind', 'widget')
+    t.change('#widget', 'app')
+    t.change('#app-name', 'load')
+    expect(t.app.ownAction()).toMatchObject({ widget: 'app', name: 'load' })
+    expect(t.$('.widget-editor').textContent).toContain('スクリプトの出力')
+    t.change('#app-name', 'nope')
+    expect(t.$('.widget-editor').textContent).toContain('まだありません')
+    t.change('#app-name', 'Bad/Name')
+    expect(t.$('.widget-editor').textContent).toContain('英小文字と数字')
+  })
+})
+
 describe('マウスとトラックパッド', () => {
   it('キーとセルにマウスの操作を割り当て、保存できる', async () => {
     const t = await connected()

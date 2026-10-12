@@ -43,6 +43,11 @@ export class FakeDaemon {
   // フォトフレームの写真（upload_* の kind: photo で受け取る）
   photos = new Map<string, { name: string; w: number; h: number; data: Uint8Array; added: string; of?: string }>()
   photoMax = 10
+  // 自分で足したアプリ（list_apps、delete_app）
+  apps: { name: string; title?: string; mode?: string; every?: string; bytes: number; files: number; error?: string; status?: string }[] = [
+    { name: 'dice', title: 'サイコロ', mode: 'interval', every: 'off', bytes: 1800, files: 2 },
+    { name: 'load', title: 'Brain の負荷', mode: 'stream', bytes: 2100, files: 2, status: '動いています' },
+  ]
   // 読み物（list_reads、delete_read）
   reads: { id: string; title: string; author?: string; kind: string; bytes: number; chars: number; added: string; pos?: { b: number; c: number }; progress?: number }[] = []
   private photoUp: { token: string; name: string; of?: string; path?: string; bytes: number; parts: Uint8Array[]; got: number } | null = null
@@ -96,7 +101,7 @@ export class FakeDaemon {
             'get_todo', 'todo_add', 'todo_update', 'todo_delete', 'todo_move', 'todo_clear_done', 'subscribe_data',
             'set_calendar', 'get_calendar', 'set_weather', 'get_weather', 'get_weather_icon', 'list_images', 'image_begin', 'image_chunk', 'image_end', 'image_abort', 'get_image', 'prune_images', 'set_usb_mode', 'set_terminal', 'set_rotate',
             'set_qr', 'get_qr', 'get_widgets', 'set_presence', 'add_graph', 'clear_graph', 'get_graph',
-            'upload_begin', 'upload_chunk', 'upload_end', 'upload_abort', 'list_photos', 'get_photo', 'delete_photo', 'list_reads', 'delete_read', 'list_files', 'get_file', 'delete_file',
+            'upload_begin', 'upload_chunk', 'upload_end', 'upload_abort', 'list_photos', 'get_photo', 'delete_photo', 'list_reads', 'delete_read', 'list_apps', 'delete_app', 'list_files', 'get_file', 'delete_file',
             'get_overrides', 'set_override', 'clear_overrides'], upload_kinds: ['photo', 'file'] })
       case 'get_config':
         return ok({ config: this.config, path: this.path, overrides: this.overrides })
@@ -273,6 +278,14 @@ export class FakeDaemon {
       case 'delete_photo': {
         const r = this.photoCmd(req)
         return Array.isArray(r) ? err(r[0], r[1]) : ok(r)
+      }
+      case 'list_apps':
+        return ok({ apps: this.apps, dir: '/var/lib/lefthand/apps' })
+      case 'delete_app': {
+        const i = this.apps.findIndex((a) => a.name === req.app)
+        if (i < 0) return err('not_found', `no such app: "${req.app}"`)
+        this.apps.splice(i, 1)
+        return ok({ deleted: req.app })
       }
       case 'list_reads':
         return ok({ reads: this.reads, total_bytes: this.reads.reduce((a, r) => a + r.bytes, 0), limit_bytes: 32 << 20, free_bytes: 100 << 20, reserve_bytes: 64 << 20 })

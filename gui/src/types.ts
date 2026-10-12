@@ -19,6 +19,7 @@ export interface ActionSpec {
   background?: string // セルの背景画像の id（Brain の /var/lib/lefthand/images/<id>.565）。タッチのセルだけ
   // ウィジェット（タッチのセルだけ）。key と layer_* は省略でき、書けばタップしたときに働く
   widget?: WidgetKind
+  name?: string // app：自分で足したアプリの名前（/var/lib/lefthand/apps/<name>。apps.go）
   format?: string // clock：時刻の行（Go の書式）
   date_format?: string // clock：日付の行。none で出さない
   tz?: string // clock：タイムゾーン（IANA の名前）
@@ -65,7 +66,7 @@ export interface ActionSpec {
   pressure_range?: [number, number] // 筆圧の 0 と最大にする押す強さ（既定 [400, 2400]）
 }
 
-export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo' | 'reader' | 'files' | 'settings' | 'help'
+export type WidgetKind = 'clock' | 'text' | 'todo' | 'calendar' | 'trackpad' | 'battery' | 'stopwatch' | 'pomodoro' | 'counter' | 'qr' | 'presence' | 'month' | 'weather' | 'graph' | 'presenter' | 'calculator' | 'pentablet' | 'memo' | 'reader' | 'files' | 'settings' | 'help' | 'app'
 
 // プレゼン用タイマーの色の区切り 1 つ（presenter.go の PresenterColorSpec）
 export interface PresenterColorSpec {
@@ -182,6 +183,26 @@ export interface ReadInfo {
   added: string
   pos?: { b: number; c: number }
   progress?: number
+}
+
+// 自分で足したアプリ（list_apps。apps.go の AppInfo）
+export interface AppInfo {
+  name: string
+  title?: string
+  description?: string
+  icon?: string
+  mode?: string
+  every?: string
+  bytes: number
+  files: number
+  error?: string
+  status?: string
+  last_run?: string
+}
+
+export interface AppListResult {
+  apps: AppInfo[]
+  dir: string
 }
 
 export interface ReadListResult {
