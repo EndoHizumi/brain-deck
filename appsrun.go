@@ -469,7 +469,8 @@ func (p *appProc) kill(why string) {
 // startStream は、stream のアプリを動かし始める。
 func (s *AppService) startStream(name string, st *appState) {
 	s.mu.Lock()
-	if st.proc != nil || st.running || s.states[name] != st {
+	// tick が重なると、すぐに終わったものを、待つ時間（nextRun）の前にもう一度動かしてしまうので、nextRun も見る
+	if st.proc != nil || st.running || s.states[name] != st || s.now().Before(st.nextRun) {
 		s.mu.Unlock()
 		return
 	}
@@ -763,7 +764,14 @@ func (s *AppService) command(def *AppDef, args []string, stream bool) (*exec.Cmd
 	argv = append(argv, script)
 	argv = append(argv, args...)
 	cmd := exec.Command(argv[0], argv[1:]...)
-	if err := os.MkdirAll(data, 0o700); err != nil {
+	// apps-data は user が通れるように 0755（前の版と復元は 0700 で作ることがある）、アプリごとのフォルダは user だけ
+	if err := os.MkdirAll(filepath.Dir(data), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(filepath.Dir(data), 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.Mkdir(data, 0o700); err != nil && !os.IsExist(err) {
 		return nil, err
 	}
 	if uid >= 0 {

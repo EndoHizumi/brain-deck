@@ -276,7 +276,7 @@ func newTestApps(t *testing.T, apps map[string]map[string]string) *AppService {
 // waitApp は、cond が真になるまで待つ。
 func waitApp(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 750; i++ { // 15 秒（テストを並べて動かすと遅くなる）
 		if cond() {
 			return
 		}
@@ -327,7 +327,7 @@ func TestAppLimits(t *testing.T) {
 		"small": {"app.yaml": "every: off\noutput_kb: 1\n", "main.sh": "head -c 2000 /dev/zero | tr '\\0' a"},
 	})
 	for _, n := range []string{"slow", "loud", "fail", "mem", "shell", "small"} {
-		s.Seen(n)
+		s.View(n) // 状態を作る（Seen は tick を動かし、同時に動かす枠を取り合うので使わない）
 	}
 	t0 := time.Now()
 	go s.runInterval("slow", s.states["slow"], appEvent{})
@@ -559,4 +559,21 @@ func TestContribApps(t *testing.T) {
 	a.Event("load", appEvent{args: []string{"button", "fast"}})
 	waitApp(t, "load fast", func() bool { v := a.View("load"); return v.Screen != nil && strings.Contains(v.Screen.Title, "1 秒") })
 	check("load", a.View("load"))
+}
+
+// Brain の user が apps-data/<名前> に入れること（親は 0755、アプリのフォルダは 0700）。前の版は親を 0700（root）で作り、user で動かせなかった
+func TestAppDataDirModes(t *testing.T) {
+	s := newTestApps(t, map[string]map[string]string{"x": {"app.yaml": "every: off\n", "main.sh": "pwd"}})
+	parent := s.store.dataDir
+	os.MkdirAll(parent, 0o700) // 前の版や復元が作った形
+	os.Chmod(parent, 0o700)
+	if _, err := s.command(mustApp(t, s, "x"), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(parent); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("apps-data mode %v %v", fi.Mode(), err)
+	}
+	if fi, err := os.Stat(filepath.Join(parent, "x")); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("apps-data/x mode %v %v", fi.Mode(), err)
+	}
 }
