@@ -994,6 +994,8 @@ func main() {
 	replayPNG := flag.String("replay-png", "", "-replay-pen で、最後の記録から読み取った線を描いた PNG を書く")
 	showVersion := flag.Bool("version", false, "版を JSON で書いて終わる（brain-deck update が、新しい lefthand を確かめるのに使う）")
 	checkGadget := flag.String("check-gadget", "", "この gadget-setup.sh のディスクリプタが、この lefthand のものと同じかを確かめて終わる")
+	checkFonts := flag.String("check-fonts", "", "このフォルダの読み物の文字（reader-24.lrf.gz、reader-32.lrf.gz）を、この lefthand で読めるかを確かめて終わる")
+	fontDir := flag.String("font-dir", defaultReadFontDir, "読み物の文字（本文の 24、32 ドット）を置く場所。brain-deck update もここに入れ替える")
 	updateApply := flag.String("update-apply", "", "更新・再起動の係として、plan.json のとおりに入れ替えて終わる（デーモンが systemd-run で起動する）")
 	updateBin := flag.String("update-bin", "/usr/local/bin/lefthand", "brain-deck update で入れ替える lefthand の場所")
 	updateGadget := flag.String("update-gadget", defaultGadgetSetup, "brain-deck update で入れ替える gadget-setup.sh の場所")
@@ -1004,6 +1006,7 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	readFontDir = *fontDir
 
 	switch {
 	case *showVersion:
@@ -1015,6 +1018,13 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("ok: the descriptors in", *checkGadget, "match", daemonVersion())
+		return
+	case *checkFonts != "":
+		if err := checkReadFonts(*checkFonts); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("ok: the reader fonts in", *checkFonts, "work with", daemonVersion())
 		return
 	case *updateApply != "":
 		os.Exit(runUpdateHelper(*updateApply))
@@ -1894,6 +1904,7 @@ func main() {
 			started: time.Now(),
 		}
 		upd := NewUpdater(*dataDir, *updateBin, *updateGadget, *unitName, cfgPath, imagesDir, *readyFile, usb, term)
+		upd.FontDir = *fontDir
 		ctl.updater = upd
 		backups.updater = upd
 		if upd.Unit != "" {

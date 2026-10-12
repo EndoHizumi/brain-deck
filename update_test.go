@@ -133,8 +133,17 @@ func (f *fakeSystem) ops() sysOps {
 				if v == "legacy" {
 					return "flag provided but not defined: -version", 2, nil
 				}
-				j, _ := json.Marshal(versionInfo{Version: v, Update: 1})
+				vi := versionInfo{Version: v, Update: 1}
+				if strings.HasPrefix(v, "k7") { // 読み物の文字を別のファイルに置く版（フェーズ K7）
+					vi.ReaderFonts = updateFontNames()
+				}
+				j, _ := json.Marshal(vi)
 				return string(j) + "\n", 0, nil
+			case "-check-fonts":
+				if err := checkReadFonts(args[1]); err != nil {
+					return err.Error(), 1, nil
+				}
+				return "ok", 0, nil
 			case "-check-gadget":
 				if err := checkGadgetScript(args[1]); err != nil {
 					return err.Error(), 1, nil

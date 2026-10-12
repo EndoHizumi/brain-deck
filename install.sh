@@ -20,9 +20,14 @@ if [ "$1" = "--root" ]; then
   fi
 fi
 [ -f lefthand ] || { echo "lefthand がありません。先にビルドします（README の「ビルド」）" >&2; exit 2; }
+[ -f font/reader-24.lrf.gz ] && [ -f font/reader-32.lrf.gz ] || { echo "font/reader-24.lrf.gz と reader-32.lrf.gz がありません（リポジトリの font/ も一緒に写します）" >&2; exit 2; }
 
 install -D -m 0755 lefthand "$ROOT/usr/local/bin/lefthand"
 install -D -m 0755 gadget-setup.sh "$ROOT/usr/local/sbin/lefthand-gadget-setup"
+# 読み物の本文の文字（フェーズ K7 から lefthand に埋め込まない。lefthand の -font-dir の既定の場所）
+for f in reader-24.lrf.gz reader-32.lrf.gz; do
+  install -D -m 0644 "font/$f" "$ROOT/usr/local/share/lefthand/$f"
+done
 if [ -e "$ROOT/etc/lefthand/config.yaml" ]; then
   echo "$ROOT/etc/lefthand/config.yaml は既にあるので上書きしません（新しい版: config.yaml）"
 else

@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +27,8 @@ import (
 //
 // 更新は、デーモン（lefthand）と gadget-setup.sh を組で入れ替える。手順は次のとおり。
 //
-//  1. 受け取る：PC は「更新のファイル」（tools/mkupdate が作る tar.gz。manifest.json、lefthand、gadget-setup.sh）を
+//  1. 受け取る：PC は「更新のファイル」（tools/mkupdate が作る tar.gz。manifest.json、lefthand、gadget-setup.sh、
+//     フェーズ K7 からは読み物の文字 reader-24.lrf.gz と reader-32.lrf.gz。readfont.go）を
 //     upload_*（kind: update）で分けて送る。デーモンは SHA-256 を確かめ、<data-dir>/update/<stage>/ に展開する
 //  2. 確かめる：manifest の SHA-256、新しい lefthand の -version（manifest の版と同じか）、-check-gadget（新しい lefthand の
 //     ディスクリプタと gadget-setup.sh のものが同じか）、-check（今の設定を新しい lefthand が読めるか）。
@@ -36,6 +38,10 @@ import (
 //     （要れば USB を付け直す）、サービスを起動する
 //  4. 確かめる：新しいデーモンが起動を知らせる（-ready-file）のを待ち、PC の brain-deck がつなぎ直して update_confirm を
 //     送るのを待つ。どちらかが時間内に来なければ、前の版に戻してサービスを起動し直す（自動で戻す）
+//
+// 読み物の文字は、入っていれば lefthand と組で <-font-dir>/ に入れ替える（.prev も残す）。新しい lefthand の -check-fonts で
+// 確かめる。入っていない更新のファイル（K7 より前の mkupdate）でも受け付けるが、新しい lefthand が文字を別のファイルに置く版で、
+// Brain にもなければ、注意を返す（読み物は k8x12 で描かれる）。
 //
 // 前の版に戻す（update_rollback）のも、.prev を「受け取ったもの」として同じ手順で行う（今の版が .prev になる）。
 // 再起動（restart）と USB の付け直し（restart の usb）も、同じ係が行う（デーモンは自分を止められないため）。
@@ -48,6 +54,7 @@ const (
 	updateMaxBundle    = 24 << 20          // 更新のファイル（tar.gz）の大きさの上限
 	updateMaxBinary    = 32 << 20          // 展開した lefthand の上限
 	updateMaxScript    = 1 << 20           // gadget-setup.sh の上限
+	updateMaxFont      = 8 << 20           // 読み物の文字（1 つ）の上限
 	updateMaxManifest  = 64 << 10          //
 	updateStateFile    = "state.json"      // 係の進み具合
 	updatePlanFile     = "plan.json"       // 係への指示
@@ -75,12 +82,22 @@ var stageRE = regexp.MustCompile(`^[0-9a-f]{12}$`)
 
 // versionInfo は lefthand -version の出力。
 type versionInfo struct {
-	Version string `json:"version"`
-	Update  int    `json:"update"` // この仕組み（update_*、-update-apply、-ready-file）の版。古い lefthand にはない
+	Version     string   `json:"version"`
+	Update      int      `json:"update"`                 // この仕組み（update_*、-update-apply、-ready-file）の版。古い lefthand にはない
+	ReaderFonts []string `json:"reader_fonts,omitempty"` // 別のファイルに置く読み物の文字（フェーズ K7。古い lefthand は埋め込む）
+}
+
+// updateFontNames は、更新のファイルに入れてよい読み物の文字の名前。
+func updateFontNames() []string {
+	var n []string
+	for _, s := range readFontExternal {
+		n = append(n, readFontName(s))
+	}
+	return n
 }
 
 func printVersion() {
-	b, _ := json.Marshal(versionInfo{Version: daemonVersion(), Update: updateProtocol})
+	b, _ := json.Marshal(versionInfo{Version: daemonVersion(), Update: updateProtocol, ReaderFonts: updateFontNames()})
 	fmt.Println(string(b))
 }
 
@@ -223,6 +240,7 @@ type Updater struct {
 	CfgPath   string
 	ImagesDir string
 	ReadyFile string
+	FontDir   string // 読み物の文字を入れ替える場所（-font-dir。空なら扱わない）
 	usb       *USBMode
 	term      *TermMode
 	sys       sysOps
@@ -245,6 +263,8 @@ type StageInfo struct {
 	Legacy         bool     `json:"legacy,omitempty"` // 起動の知らせと update_confirm がない古い版（戻すときだけ）
 	Warnings       []string `json:"warnings"`
 	BuiltAt        string   `json:"built_at,omitempty"`
+	Fonts          []string `json:"fonts,omitempty"`         // 入れ替える読み物の文字（フェーズ K7）
+	FontsChanged   bool     `json:"fonts_changed,omitempty"` // 読み物の文字の中身が変わる
 }
 
 func NewUpdater(dataDir, bin, gadget, unit, cfgPath, imagesDir, ready string, usb *USBMode, term *TermMode) *Updater {
@@ -378,6 +398,21 @@ func (u *Updater) receive(b UploadBegin, f *os.File, path string) (any, error) {
 		}
 		os.Chmod(filepath.Join(dir, name), 0o755)
 	}
+	// 読み物の文字（あれば）。入っているなら manifest にもなければならない
+	for _, name := range updateFontNames() {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		mf, ok := m.Files[name]
+		if !ok {
+			return fail(fmt.Errorf("%w: %s is not listed in %s", errUpdateCheck, name, updateManifestName))
+		}
+		sum, n, err := fileSHA256(p)
+		if err != nil || sum != mf.SHA256 || n != mf.Bytes {
+			return fail(fmt.Errorf("%w: %s does not match %s", errUpdateCheck, name, updateManifestName))
+		}
+	}
 	info, err := u.verify(dir, "update", m.Version, false)
 	if err != nil {
 		return fail(err)
@@ -390,13 +425,16 @@ func (u *Updater) receive(b UploadBegin, f *os.File, path string) (any, error) {
 	return info, nil
 }
 
-// unpackUpdate は tar.gz を dir に展開する。入っていてよいのは、manifest.json、lefthand、gadget-setup.sh だけ。
+// unpackUpdate は tar.gz を dir に展開する。入っていてよいのは、manifest.json、lefthand、gadget-setup.sh、読み物の文字だけ。
 func unpackUpdate(r io.Reader, dir string) error {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("%w: the update file is not a .tar.gz made by tools/mkupdate (%v)", errUpdateCheck, err)
 	}
 	limits := map[string]int64{updateManifestName: updateMaxManifest, updateBinName: updateMaxBinary, updateGadgetName: updateMaxScript}
+	for _, name := range updateFontNames() {
+		limits[name] = updateMaxFont
+	}
 	seen := map[string]bool{}
 	tr := tar.NewReader(zr)
 	for {
@@ -498,6 +536,11 @@ func (u *Updater) verify(dir, action, want string, legacyOK bool) (*StageInfo, e
 		}
 	}
 
+	// 読み物の文字（フェーズ K7）
+	if err := u.verifyFonts(dir, bin, vi, info); err != nil {
+		return nil, err
+	}
+
 	// 今の設定を、新しい lefthand が読めるか
 	args := []string{"-check"}
 	if u.ImagesDir != "" {
@@ -523,6 +566,39 @@ func (u *Updater) verify(dir, action, want string, legacyOK bool) (*StageInfo, e
 		info.Rebind, info.RebindReasons = u.gadgetCheck(script)
 	}
 	return info, nil
+}
+
+// verifyFonts は、dir の読み物の文字を新しい lefthand（bin）で確かめ、info.Fonts と FontsChanged を決める。
+// 入っていなくて、新しい lefthand が別のファイルの文字を使い、Brain にもなければ、注意にする。
+func (u *Updater) verifyFonts(dir, bin string, vi versionInfo, info *StageInfo) error {
+	if u.FontDir == "" {
+		return nil
+	}
+	for _, name := range updateFontNames() {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			continue
+		}
+		info.Fonts = append(info.Fonts, name)
+		sum, _, _ := fileSHA256(filepath.Join(dir, name))
+		cur, _, _ := fileSHA256(filepath.Join(u.FontDir, name))
+		if sum != cur {
+			info.FontsChanged = true
+		}
+	}
+	if len(info.Fonts) > 0 && !info.Legacy && len(vi.ReaderFonts) > 0 {
+		if out, code, err := u.sys.command(nil, bin, "-check-fonts", dir); err != nil || code != 0 {
+			return fmt.Errorf("%w: the new lefthand cannot read the reader fonts in the update file: %s", errUpdateCheck, strings.TrimSpace(out))
+		}
+	}
+	for _, name := range vi.ReaderFonts {
+		if slices.Contains(info.Fonts, name) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(u.FontDir, name)); err != nil {
+			info.Warnings = append(info.Warnings, fmt.Sprintf("the reader font %s is neither in the update file nor in %s; reading will use k8x12 until it is installed (make the update file with the current tools/mkupdate)", name, u.FontDir))
+		}
+	}
+	return nil
 }
 
 // gadgetCheck は、gadget-setup.sh を GADGET_CHECK=1 で実行し、USB の付け直しが要るかを調べる。
@@ -592,6 +668,19 @@ func (u *Updater) PrepareRollback() (*StageInfo, error) {
 			return nil, err
 		}
 	}
+	// 読み物の文字の前の版（あれば。K7 より前の版に戻すときはないので、今の文字をそのまま残す）
+	if u.FontDir != "" {
+		for _, name := range updateFontNames() {
+			prev := filepath.Join(u.FontDir, name) + ".prev"
+			if _, err := os.Stat(prev); err != nil {
+				continue
+			}
+			if err := link(prev, filepath.Join(dir, name)); err != nil {
+				os.RemoveAll(dir)
+				return nil, err
+			}
+		}
+	}
 	info, err := u.verify(dir, "rollback", "", true)
 	if err != nil {
 		os.RemoveAll(dir)
@@ -627,6 +716,8 @@ type updatePlan struct {
 	Gadget    string `json:"gadget"`
 	StagedBin string `json:"staged_bin,omitempty"`
 	StagedGad string `json:"staged_gadget,omitempty"`
+	// Files は、lefthand と組で入れ替えるほかのファイル（読み物の文字。[置いたもの, 入れ替える先]）
+	Files [][2]string `json:"files,omitempty"`
 	Version   string `json:"version,omitempty"` // 新しいデーモンが知らせるはずの版（空ならどれでもよい）
 	From      string `json:"from"`              // 今の版
 	Legacy    bool   `json:"legacy,omitempty"`  // 起動の知らせと update_confirm を待たない
@@ -659,6 +750,9 @@ func (u *Updater) Apply(stage string) (*updatePlan, error) {
 	}
 	if info.HasGadget {
 		p.StagedGad = filepath.Join(dir, updateGadgetName)
+	}
+	for _, name := range info.Fonts {
+		p.Files = append(p.Files, [2]string{filepath.Join(dir, name), filepath.Join(u.FontDir, name)})
 	}
 	if err := u.start(p); err != nil {
 		return nil, err
@@ -942,6 +1036,7 @@ type installed struct {
 	target  string
 	stash   string // 入れ替える前の target.prev（なければ空）
 	changed bool   // 中身が変わった
+	existed bool   // 入れ替える前に target があった（なければ、取り消すときは消す。初めて置く読み物の文字）
 }
 
 // install は staged を target に入れ替え、今の target を target.prev に残す。前の target.prev は stash に移す。
@@ -957,9 +1052,12 @@ func install(staged, target, stashDir string) (installed, error) {
 		}
 	}
 	if _, err := os.Stat(target); err == nil {
+		in.existed = true
 		if err := linkOrCopy(target, target+".prev"); err != nil {
 			return in, fmt.Errorf("keeping the previous version as %s.prev: %w", target, err)
 		}
+	} else if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return in, err
 	}
 	os.Chmod(staged, 0o755)
 	if err := moveFile(staged, target); err != nil {
@@ -971,7 +1069,9 @@ func install(staged, target, stashDir string) (installed, error) {
 
 // restore は install を取り消す：target を target.prev（入れ替える前の版）に戻し、target.prev を stash に戻す。
 func restore(in installed) error {
-	if err := linkOrCopy(in.target+".prev", in.target); err != nil {
+	if !in.existed {
+		os.Remove(in.target)
+	} else if err := linkOrCopy(in.target+".prev", in.target); err != nil {
 		return fmt.Errorf("restoring %s: %w", in.target, err)
 	}
 	if in.stash != "" {

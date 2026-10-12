@@ -88,16 +88,20 @@ func (h *helper) run() bool {
 		if p.StagedGad != "" {
 			pairs = append(pairs, [2]string{p.StagedGad, p.Gadget})
 		}
-		for _, pr := range pairs {
+		pairs = append(pairs, p.Files...) // 読み物の文字（フェーズ K7）
+		for i, pr := range pairs {
 			in, err := install(pr[0], pr[1], stage)
 			if err != nil {
 				h.undo(done, false)
 				return h.finish(false, "rolled_back", err.Error())
 			}
+			if i >= len(pairs)-len(p.Files) {
+				os.Chmod(pr[1], 0o644) // 実行ファイルではない
+			}
 			done = append(done, in)
 		}
 	}
-	gadgetChanged := len(done) == 2 && done[1].changed
+	gadgetChanged := p.StagedGad != "" && len(done) >= 2 && done[1].changed
 
 	// USB の付け直し。gadget-setup.sh が変わったときは実行する（違うところがあるときだけ付け直す）
 	if rebind || gadgetChanged {

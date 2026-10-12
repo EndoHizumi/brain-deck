@@ -214,6 +214,8 @@ type stageInfo struct {
 	Legacy         bool     `json:"legacy"`
 	Warnings       []string `json:"warnings"`
 	BuiltAt        string   `json:"built_at"`
+	Fonts          []string `json:"fonts"`         // 入れ替える読み物の文字（フェーズ K7。古い lefthand は返さない）
+	FontsChanged   bool     `json:"fonts_changed"` //
 }
 
 func (i stageInfo) describe() string {
@@ -238,8 +240,14 @@ func (i stageInfo) describe() string {
 	default:
 		b.WriteString("。gadget-setup.sh が変わりますが、USB の付け直しは要りません")
 	}
+	switch {
+	case len(i.Fonts) > 0 && i.FontsChanged:
+		b.WriteString("。読み物の文字（" + strings.Join(i.Fonts, "、") + "）も入れ替えます")
+	case len(i.Fonts) > 0:
+		b.WriteString("。読み物の文字は同じ")
+	}
 	for _, w := range i.Warnings {
-		b.WriteString("\n注意（新しい版で今の設定を確かめた結果）：" + w)
+		b.WriteString("\n注意（新しい版で確かめた結果）：" + w)
 	}
 	return b.String()
 }

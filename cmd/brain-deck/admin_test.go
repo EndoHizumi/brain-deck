@@ -326,3 +326,23 @@ func TestClipWidth(t *testing.T) {
 		}
 	}
 }
+
+// 読み物の文字（フェーズ K7）を入れ替えるときは、そう書く。
+func TestStageInfoFonts(t *testing.T) {
+	i := stageInfo{Action: "update", Version: "b", CurrentVersion: "a", BinChanged: true, HasGadget: true,
+		Fonts: []string{"reader-24.lrf.gz", "reader-32.lrf.gz"}, FontsChanged: true, Warnings: []string{"w"}}
+	got := i.describe()
+	for _, want := range []string{"読み物の文字（reader-24.lrf.gz、reader-32.lrf.gz）も入れ替えます", "注意（新しい版で確かめた結果）：w"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q in %q", want, got)
+		}
+	}
+	i.FontsChanged = false
+	if !strings.Contains(i.describe(), "読み物の文字は同じ") {
+		t.Error(i.describe())
+	}
+	i.Fonts = nil
+	if strings.Contains(i.describe(), "読み物の文字") {
+		t.Error(i.describe())
+	}
+}

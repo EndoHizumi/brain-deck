@@ -5,9 +5,14 @@ import (
 	"compress/gzip"
 	_ "embed"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"image"
 	"io"
+	"io/fs"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 )
@@ -16,8 +21,12 @@ import (
 //
 // 長い文章を読むための明朝体（Noto Serif JP を tools/mkreadfont で 16 階調のビットマップにしたもの。SIL OFL 1.1、
 // font/reader-OFL.txt）。本文は 24 ドットと 32 ドット、ルビは 12 ドットと 16 ドット（かなと記号だけ）。
-// gzip のまま lefthand に埋め込み、使う大きさを初めて使うときに戻す（24 ドットで 2.2 MB、32 ドットで 3.9 MB のメモリ）。
-// 入っていない文字は、k8x12 を 2 倍にして描く。
+// 使う大きさを初めて使うときに gzip を戻す（24 ドットで 2.2 MB、32 ドットで 3.9 MB のメモリ）。
+// 入っていない文字や、ファイルがないときは、k8x12 を 2 倍にして描く。
+//
+// ルビ（12、16 ドット。合わせて約 30 KB）は lefthand に埋め込む。本文（24、32 ドット。gzip で 2.6 MB）は、
+// 実行ファイルを小さくするため（フェーズ K7）、別のファイル（readFontDir/reader-24.lrf.gz など）に置き、
+// 読み物を開いたときに読む。install.sh が置き、brain-deck update が lefthand と組で入れ替える（update.go）。
 
 //go:embed font/reader-12.lrf.gz
 var readFont12 []byte
@@ -25,13 +34,54 @@ var readFont12 []byte
 //go:embed font/reader-16.lrf.gz
 var readFont16 []byte
 
-//go:embed font/reader-24.lrf.gz
-var readFont24 []byte
+var readFontEmbedded = map[int][]byte{12: readFont12, 16: readFont16}
 
-//go:embed font/reader-32.lrf.gz
-var readFont32 []byte
+// readFontExternal は、別のファイルに置く大きさ（readFontName の名前で readFontDir に置く）。
+var readFontExternal = []int{24, 32}
 
-var readFontFiles = map[int][]byte{12: readFont12, 16: readFont16, 24: readFont24, 32: readFont32}
+// defaultReadFontDir は、別のファイルに置く読み物の文字の場所（-font-dir で変える）。
+const defaultReadFontDir = "/usr/local/share/lefthand"
+
+// readFontDir は、別のファイルに置く読み物の文字の場所。ここになければ、今のディレクトリの font/ も見る
+// （PC で、リポジトリの中で動かすとき。テストと -render-png）。
+var readFontDir = defaultReadFontDir
+
+// readFontName は、大きさ s のファイルの名前（更新のファイルの中でも同じ名前）。
+func readFontName(s int) string { return fmt.Sprintf("reader-%d.lrf.gz", s) }
+
+// readFontData は、大きさ s の gzip のままの中身。
+func readFontData(s int) ([]byte, error) {
+	if b, ok := readFontEmbedded[s]; ok {
+		return b, nil
+	}
+	name := readFontName(s)
+	b, err := os.ReadFile(filepath.Join(readFontDir, name))
+	if errors.Is(err, fs.ErrNotExist) {
+		if b2, err2 := os.ReadFile(filepath.Join("font", name)); err2 == nil {
+			return b2, nil
+		}
+	}
+	return b, err
+}
+
+// checkReadFonts は、dir にある本文の文字のファイルを、すべて戻して確かめる（-check-fonts。brain-deck update が、
+// 新しい lefthand と組で送られた文字のファイルを確かめるのに使う）。
+func checkReadFonts(dir string) error {
+	for _, s := range readFontExternal {
+		b, err := os.ReadFile(filepath.Join(dir, readFontName(s)))
+		if err != nil {
+			return err
+		}
+		f, err := parseReadFont(b)
+		if err != nil {
+			return fmt.Errorf("%s: %v", readFontName(s), err)
+		}
+		if f.S != s {
+			return fmt.Errorf("%s: the font is %d dots, not %d", readFontName(s), f.S, s)
+		}
+	}
+	return nil
+}
 
 // ReadFont は、1 つの大きさの読み物の文字。
 type ReadFont struct {
@@ -54,7 +104,11 @@ func readFontOf(s int) *ReadFont {
 	if f, ok := readFonts[s]; ok {
 		return f
 	}
-	f, err := parseReadFont(readFontFiles[s])
+	b, err := readFontData(s)
+	var f *ReadFont
+	if err == nil {
+		f, err = parseReadFont(b)
+	}
 	if err != nil {
 		log.Printf("reader: font %d: %v (drawing with k8x12)", s, err)
 	}
