@@ -46,12 +46,82 @@ const (
 	appDefaultEvery   = time.Minute
 	appMinEvery       = 2 * time.Second
 	appMaxEvery       = 24 * time.Hour
-	appDefaultTimeout = 10 * time.Second
-	appMaxTimeout     = 60 * time.Second
-	appDefaultMemMB   = 64
-	appMinMemMB       = 16
-	appMaxMemMB       = 256
+	// app.yaml で変えられる値の既定。上限は設定の apps（AppLimits）で決め、それを超える値は断る
+	appDefaultTimeout  = 10 * time.Second
+	appDefaultMemMB    = 32
+	appDefaultOutputKB = 32
+	appMinMemMB        = 8 // sh は 8 MB でも動く
+	// 設定の apps の既定と、設定に書ける値の範囲
+	appDefaultMaxTimeout  = 60 * time.Second
+	appDefaultMaxMemMB    = 64
+	appDefaultMaxOutputKB = 256
+	appDefaultMaxRunning  = 3
+	appHardMaxTimeout     = 5 * time.Minute
+	appHardMaxMemMB       = 256
+	appHardMaxOutputKB    = 1024
+	appHardMaxRunning     = 8
 )
+
+// AppLimits は、アプリ全体の上限（設定の apps）。app.yaml の値がこれを超えるアプリは使えない（入れるときも断る）。
+type AppLimits struct {
+	MaxTimeout  time.Duration
+	MaxMemMB    int
+	MaxOutputKB int
+	MaxRunning  int // 同時に動かす数（すべてのアプリで）
+}
+
+func defaultAppLimits() AppLimits {
+	return AppLimits{MaxTimeout: appDefaultMaxTimeout, MaxMemMB: appDefaultMaxMemMB, MaxOutputKB: appDefaultMaxOutputKB, MaxRunning: appDefaultMaxRunning}
+}
+
+// AppsConfig は、設定の apps（自分で足すアプリの全体の上限）。省略すると既定（AppLimits の既定）。
+type AppsConfig struct {
+	MaxMemoryMB int    `yaml:"max_memory_mb,omitempty" json:"max_memory_mb,omitempty"` // app.yaml の memory_mb の上限（既定 64、8〜256）
+	MaxTimeout  string `yaml:"max_timeout,omitempty" json:"max_timeout,omitempty"`     // app.yaml の timeout の上限（既定 60s、1s〜5m）
+	MaxOutputKB int    `yaml:"max_output_kb,omitempty" json:"max_output_kb,omitempty"` // app.yaml の output_kb の上限（既定 256、1〜1024）
+	MaxRunning  int    `yaml:"max_running,omitempty" json:"max_running,omitempty"`     // 同時に動かす数（既定 3、1〜8）
+}
+
+// limits は、設定の apps を AppLimits にする（validate で確かめてあるものとして、変な値は既定にする）。
+func (c *AppsConfig) limits() AppLimits {
+	l := defaultAppLimits()
+	if c == nil {
+		return l
+	}
+	if c.MaxMemoryMB >= appMinMemMB && c.MaxMemoryMB <= appHardMaxMemMB {
+		l.MaxMemMB = c.MaxMemoryMB
+	}
+	if d, err := time.ParseDuration(c.MaxTimeout); err == nil && d >= time.Second && d <= appHardMaxTimeout {
+		l.MaxTimeout = d
+	}
+	if c.MaxOutputKB >= 1 && c.MaxOutputKB <= appHardMaxOutputKB {
+		l.MaxOutputKB = c.MaxOutputKB
+	}
+	if c.MaxRunning >= 1 && c.MaxRunning <= appHardMaxRunning {
+		l.MaxRunning = c.MaxRunning
+	}
+	return l
+}
+
+func (c *AppsConfig) validate(fail func(path, format string, args ...any)) {
+	if c == nil {
+		return
+	}
+	if v := c.MaxMemoryMB; v != 0 && (v < appMinMemMB || v > appHardMaxMemMB) {
+		fail("/apps/max_memory_mb", "apps.max_memory_mb must be %d..%d", appMinMemMB, appHardMaxMemMB)
+	}
+	if c.MaxTimeout != "" {
+		if d, err := time.ParseDuration(c.MaxTimeout); err != nil || d < time.Second || d > appHardMaxTimeout {
+			fail("/apps/max_timeout", "apps.max_timeout must be a duration from 1s to %v", appHardMaxTimeout)
+		}
+	}
+	if v := c.MaxOutputKB; v != 0 && (v < 1 || v > appHardMaxOutputKB) {
+		fail("/apps/max_output_kb", "apps.max_output_kb must be 1..%d", appHardMaxOutputKB)
+	}
+	if v := c.MaxRunning; v != 0 && (v < 1 || v > appHardMaxRunning) {
+		fail("/apps/max_running", "apps.max_running must be 1..%d", appHardMaxRunning)
+	}
+}
 
 var (
 	appNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
@@ -70,8 +140,9 @@ type AppManifest struct {
 	Run         string   `yaml:"run,omitempty" json:"run,omitempty"`                 // 動かすスクリプト（フォルダの中のファイル）。既定 main.sh
 	Mode        string   `yaml:"mode,omitempty" json:"mode,omitempty"`               // interval（既定）か stream
 	Every       string   `yaml:"every,omitempty" json:"every,omitempty"`             // interval：動かす間隔（既定 1m、2s〜24h。off で、タップやボタンのときだけ）
-	Timeout     string   `yaml:"timeout,omitempty" json:"timeout,omitempty"`         // interval：1 回の時間の上限（既定 10s、1s〜60s）
-	Memory      int      `yaml:"memory_mb,omitempty" json:"memory_mb,omitempty"`     // メモリの上限（MB。仮想メモリ。既定 64、16〜256）
+	Timeout     string   `yaml:"timeout,omitempty" json:"timeout,omitempty"`         // interval：1 回の時間の上限（既定 10s、1s〜設定の apps.max_timeout）
+	Memory      int      `yaml:"memory_mb,omitempty" json:"memory_mb,omitempty"`     // メモリの上限（MB。仮想メモリ。既定 32、8〜設定の apps.max_memory_mb）
+	OutputKB    int      `yaml:"output_kb,omitempty" json:"output_kb,omitempty"`     // 出力の上限（KiB。interval は 1 回、stream は 10 秒にこの 2 倍。既定 32、1〜設定の apps.max_output_kb）
 	Keys        []string `yaml:"keys,omitempty" json:"keys,omitempty"`               // 受け取る本体キー（left、right、up、down、enter、space、a〜z、0〜9 など）
 }
 
@@ -83,12 +154,13 @@ type AppDef struct {
 	Every                          time.Duration // 0 なら時間では動かさない
 	Timeout                        time.Duration
 	MemMB                          int
+	OutputBytes                    int // interval の 1 回の出力の上限（stream は 10 秒にこの 2 倍）
 	Keys                           map[string]bool
 	Dir                            string
 }
 
-// parseAppManifest は app.yaml を読んで確かめる。dirName はフォルダの名前、files はフォルダの中のファイルの名前。
-func parseAppManifest(b []byte, dirName string, files map[string]bool) (*AppDef, error) {
+// parseAppManifest は app.yaml を読んで確かめる。dirName はフォルダの名前、files はフォルダの中のファイルの名前、lim は全体の上限。
+func parseAppManifest(b []byte, dirName string, files map[string]bool, lim AppLimits) (*AppDef, error) {
 	var m AppManifest
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
@@ -102,7 +174,7 @@ func parseAppManifest(b []byte, dirName string, files map[string]bool) (*AppDef,
 		return nil, fmt.Errorf("%s: name %q is not the folder name %q", appManifestName, m.Name, dirName)
 	}
 	d := &AppDef{Name: dirName, Title: m.Title, Description: m.Description, Icon: m.Icon, Run: m.Run, MemMB: m.Memory,
-		Every: appDefaultEvery, Timeout: appDefaultTimeout}
+		Every: appDefaultEvery, Timeout: min(appDefaultTimeout, lim.MaxTimeout), OutputBytes: min(appDefaultOutputKB, lim.MaxOutputKB) << 10}
 	if d.Title == "" {
 		d.Title = dirName
 	}
@@ -146,16 +218,31 @@ func parseAppManifest(b []byte, dirName string, files map[string]bool) (*AppDef,
 	}
 	if m.Timeout != "" {
 		t, err := time.ParseDuration(m.Timeout)
-		if err != nil || t < time.Second || t > appMaxTimeout {
-			return nil, fmt.Errorf("%s: timeout must be a duration from 1s to %v", appManifestName, appMaxTimeout)
+		if err != nil || t < time.Second {
+			return nil, fmt.Errorf("%s: timeout must be a duration from 1s to %v", appManifestName, lim.MaxTimeout)
+		}
+		if t > lim.MaxTimeout {
+			return nil, fmt.Errorf("%s: timeout %v is over the limit %v (apps.max_timeout in the Brain's config)", appManifestName, t, lim.MaxTimeout)
 		}
 		d.Timeout = t
 	}
 	if d.MemMB == 0 {
-		d.MemMB = appDefaultMemMB
+		d.MemMB = min(appDefaultMemMB, lim.MaxMemMB) // 既定は、上限を下げてあればそれに合わせる
 	}
-	if d.MemMB < appMinMemMB || d.MemMB > appMaxMemMB {
-		return nil, fmt.Errorf("%s: memory_mb must be %d..%d", appManifestName, appMinMemMB, appMaxMemMB)
+	if d.MemMB < appMinMemMB {
+		return nil, fmt.Errorf("%s: memory_mb must be %d..%d", appManifestName, appMinMemMB, lim.MaxMemMB)
+	}
+	if d.MemMB > lim.MaxMemMB {
+		return nil, fmt.Errorf("%s: memory_mb %d is over the limit %d (apps.max_memory_mb in the Brain's config)", appManifestName, d.MemMB, lim.MaxMemMB)
+	}
+	switch {
+	case m.OutputKB == 0: // 既定のまま
+	case m.OutputKB < 0:
+		return nil, fmt.Errorf("%s: output_kb must be 1..%d", appManifestName, lim.MaxOutputKB)
+	case m.OutputKB > lim.MaxOutputKB:
+		return nil, fmt.Errorf("%s: output_kb %d is over the limit %d (apps.max_output_kb in the Brain's config)", appManifestName, m.OutputKB, lim.MaxOutputKB)
+	default:
+		d.OutputBytes = m.OutputKB << 10
 	}
 	if len(m.Keys) > 0 {
 		d.Keys = map[string]bool{}
@@ -188,6 +275,7 @@ type AppInfo struct {
 type AppStore struct {
 	dir, dataDir string
 	mu           sync.Mutex
+	lim          AppLimits // 全体の上限（設定の apps）
 	apps         map[string]*AppDef
 	bad          map[string]string // 使えないアプリと理由
 	sizes        map[string][2]int64
@@ -196,14 +284,47 @@ type AppStore struct {
 
 // OpenAppStore は、dataDir/apps を読む。
 func OpenAppStore(dataDir string) *AppStore {
-	s := &AppStore{dir: filepath.Join(dataDir, appsDirName), dataDir: filepath.Join(dataDir, appsDataDirName)}
+	s := &AppStore{dir: filepath.Join(dataDir, appsDirName), dataDir: filepath.Join(dataDir, appsDataDirName), lim: defaultAppLimits()}
 	s.Reload()
 	return s
+}
+
+// Limits は、今の全体の上限。
+func (s *AppStore) Limits() AppLimits {
+	if s == nil {
+		return defaultAppLimits()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lim
+}
+
+// SetLimits は、全体の上限（設定の apps）を変える。変わったら読み直し（上限を超えたアプリは使えなくなる）、動いているものを止める。
+func (s *AppStore) SetLimits(l AppLimits) {
+	s.mu.Lock()
+	if s.lim == l {
+		s.mu.Unlock()
+		return
+	}
+	s.lim = l
+	s.mu.Unlock()
+	s.Reload()
+	s.mu.Lock()
+	var names []string
+	for n := range s.sizes {
+		names = append(names, n)
+	}
+	s.mu.Unlock()
+	for _, n := range names {
+		s.changed(n)
+	}
+	log.Printf("apps: limits memory %d MB, timeout %v, output %d KiB, running %d", l.MaxMemMB, l.MaxTimeout, l.MaxOutputKB, l.MaxRunning)
 }
 
 // Reload は、フォルダを読み直す。
 func (s *AppStore) Reload() {
 	apps, bad, sizes := map[string]*AppDef{}, map[string]string{}, map[string][2]int64{}
+	lim := s.Limits()
 	ents, err := os.ReadDir(s.dir)
 	if err != nil && !os.IsNotExist(err) {
 		log.Printf("apps: %v", err)
@@ -213,7 +334,7 @@ func (s *AppStore) Reload() {
 		if strings.HasPrefix(name, ".") {
 			continue // 入れ替えの途中のもの
 		}
-		d, n, size, err := loadAppDir(filepath.Join(s.dir, name), name)
+		d, n, size, err := loadAppDir(filepath.Join(s.dir, name), name, lim)
 		sizes[name] = [2]int64{int64(n), size}
 		if err != nil {
 			bad[name] = err.Error()
@@ -230,7 +351,7 @@ func (s *AppStore) Reload() {
 }
 
 // loadAppDir は、アプリのフォルダを確かめて読む。ファイルの数と大きさの合計も返す。
-func loadAppDir(dir, name string) (*AppDef, int, int64, error) {
+func loadAppDir(dir, name string, lim AppLimits) (*AppDef, int, int64, error) {
 	if !appNameRE.MatchString(name) {
 		return nil, 0, 0, fmt.Errorf("%w: the folder name %q is not a valid app name", errAppBad, name)
 	}
@@ -265,7 +386,7 @@ func loadAppDir(dir, name string) (*AppDef, int, int64, error) {
 	if err != nil {
 		return nil, len(ents), total, fmt.Errorf("%w: %s is missing", errAppBad, appManifestName)
 	}
-	d, err := parseAppManifest(b, name, files)
+	d, err := parseAppManifest(b, name, files, lim)
 	if err != nil {
 		return nil, len(ents), total, fmt.Errorf("%w: %v", errAppBad, err)
 	}
@@ -384,7 +505,7 @@ func (s *AppStore) install(name string, r io.Reader) (*AppDef, error) {
 	if err := extractApp(r, tmp); err != nil {
 		return nil, err
 	}
-	d, _, _, err := loadAppDir(tmp, name)
+	d, _, _, err := loadAppDir(tmp, name, s.Limits())
 	if err != nil {
 		return nil, err
 	}

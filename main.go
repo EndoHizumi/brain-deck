@@ -1578,6 +1578,7 @@ func main() {
 	widgetRT.help = helpUI
 	// 自分で足すアプリ（apps.go、appsrun.go、appwidget.go）。スクリプトは Brain の user として動かす
 	appStore := OpenAppStore(*dataDir)
+	appStore.SetLimits(cfg.Apps.limits())
 	apps := NewAppService(appStore, func() string {
 		if c := curCfg.Load(); c != nil && c.Terminal != nil && c.Terminal.BrainUser != "" {
 			return c.Terminal.BrainUser
@@ -1801,6 +1802,7 @@ func main() {
 		pp, _ := c.Photo.compile() // 検証済み
 		frame.SetParams(pp)
 		files.SetConfig(c.Files)
+		appStore.SetLimits(c.Apps.limits())
 		go filesUI.reload()
 		ime.ConfigChanged()
 		settingsUI.Changed()

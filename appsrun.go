@@ -25,20 +25,18 @@ import (
 // user のプロセスの数（今の数 + 32。RLIMIT_NPROC は user のプロセスの合計を数えるので）。プロセスのグループごと動かし、優先度は nice 15（入力と描画を先にする）。
 //
 // interval：画面にあるあいだ、every ごとに（タップ、ボタン、キー、文字を入れたときはすぐに）動かし、標準出力を描く。
-// timeout を超えたら止める。出力は 32 KiB まで（超えたら止める）。標準エラーは最後の 4 KiB を、失敗したときに出す。
+// timeout を超えたら止める。出力は output_kb まで（既定 32 KiB。超えたら止める）。標準エラーは最後の 4 KiB を、失敗したときに出す。
 // stream：画面にあるあいだ動かし続け、1 行ごとに描き直す（0.2 秒に 1 回まで）。止まったら 5 秒、10 秒…と待って動かし直す
-// （最大 5 分。1 分動いていれば元に戻す）。画面から消えて 30 秒たったら止める。出力は 10 秒に 64 KiB まで。
-// 同時に動かすのは、すべてのアプリで 3 つまで（stream は動いているあいだ 1 つ使う）。
+// （最大 5 分。1 分動いていれば元に戻す）。画面から消えて 30 秒たったら止める。出力は 10 秒に output_kb の 2 倍まで。
+// 同時に動かすのは、すべてのアプリで設定の apps.max_running（既定 3）まで（stream は動いているあいだ 1 つ使う）。
+// 時間、メモリ、出力は app.yaml で変えられ、設定の apps の上限を超える値のアプリは使えない（apps.go）。
 // どれも、デーモンの入力と描画は待たない（別の goroutine で動かし、描くのは写しだけ）。
 
 const (
-	appMaxRunning    = 3
-	appMaxOutput     = 32 << 10
 	appMaxStderr     = 4 << 10
 	appMaxLineBytes  = 1024
 	appMaxScreen     = 200 // 1 つの画面の行の数
-	appStreamWindow  = 10 * time.Second
-	appStreamMax     = 64 << 10
+	appStreamWindow  = 10 * time.Second // stream の出力は、この時間に output_kb の 2 倍まで
 	appStreamHide    = 30 * time.Second // 画面から消えて、これだけたったら stream を止める
 	appVisibleFor    = 5 * time.Second  // 最後に描いてから、これだけは画面にあるとみなす
 	appRedrawGap     = 200 * time.Millisecond
@@ -291,7 +289,7 @@ func (s *AppService) Event(name string, ev appEvent) {
 
 // takeSlot は、同時に動かす数の枠を 1 つ取る。取れなければ false。
 func (s *AppService) takeSlotLocked() bool {
-	if s.slots >= appMaxRunning {
+	if s.slots >= s.store.Limits().MaxRunning {
 		return false
 	}
 	s.slots++
@@ -318,7 +316,7 @@ func (s *AppService) runInterval(name string, st *appState, ev appEvent) {
 		return
 	}
 	if !s.takeSlotLocked() {
-		st.setStatusLocked(fmt.Sprintf("ほかのアプリが %d つ動いているので待っています", appMaxRunning), noticeInfo)
+		st.setStatusLocked(fmt.Sprintf("ほかのアプリが %d つ動いているので待っています", s.slots), noticeInfo)
 		st.nextRun = s.now().Add(appTick)
 		if ev.args != nil && len(st.pending) < appMaxEventQueue {
 			st.pending = append(st.pending, ev)
@@ -405,17 +403,18 @@ func (s *AppService) runOnce(def *AppDef, ev appEvent) (out, errOut []byte, why 
 	p := &appProc{cmd: cmd, done: make(chan struct{})}
 	timer := time.AfterFunc(def.Timeout, func() { p.kill(fmt.Sprintf("時間の上限（%v）を超えました", def.Timeout)) })
 	var buf bytes.Buffer
-	_, rerr := io.Copy(&buf, io.LimitReader(stdout, appMaxOutput+1))
-	if rerr == nil && buf.Len() > appMaxOutput {
-		p.kill(fmt.Sprintf("出力が %s を超えました", kib(appMaxOutput)))
+	maxOut := def.OutputBytes
+	_, rerr := io.Copy(&buf, io.LimitReader(stdout, int64(maxOut)+1))
+	if rerr == nil && buf.Len() > maxOut {
+		p.kill(fmt.Sprintf("出力が %s を超えました", kib(int64(maxOut))))
 		io.Copy(io.Discard, stdout)
 	}
 	werr := cmd.Wait()
 	timer.Stop()
 	close(p.done)
 	out = buf.Bytes()
-	if len(out) > appMaxOutput {
-		out = out[:appMaxOutput]
+	if len(out) > maxOut {
+		out = out[:maxOut]
 	}
 	procMu.Lock()
 	why = p.why
@@ -475,7 +474,7 @@ func (s *AppService) startStream(name string, st *appState) {
 		return
 	}
 	if !s.takeSlotLocked() {
-		st.setStatusLocked(fmt.Sprintf("ほかのアプリが %d つ動いているので待っています", appMaxRunning), noticeInfo)
+		st.setStatusLocked(fmt.Sprintf("ほかのアプリが %d つ動いているので待っています", s.slots), noticeInfo)
 		st.nextRun = s.now().Add(appTick)
 		s.changedLocked()
 		s.mu.Unlock()
@@ -530,7 +529,7 @@ func (s *AppService) startStream(name string, st *appState) {
 			line, err := readAppLine(r)
 			if line != "" || err == nil {
 				if !s.streamLine(name, st, p, line) {
-					p.kill(fmt.Sprintf("出力が %v に %s を超えました", appStreamWindow, kib(appStreamMax)))
+					p.kill(fmt.Sprintf("出力が %v に %s を超えました", appStreamWindow, kib(int64(2*def.OutputBytes))))
 				}
 			}
 			if err != nil {
@@ -600,7 +599,7 @@ func (s *AppService) streamLine(name string, st *appState, p *appProc, line stri
 		st.outWin, st.outBytes = now, 0
 	}
 	st.outBytes += len(line) + 1
-	if st.outBytes > appStreamMax {
+	if st.outBytes > 2*st.def.OutputBytes {
 		return false
 	}
 	if strings.TrimSpace(line) == "@clear" {

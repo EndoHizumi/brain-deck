@@ -15,35 +15,58 @@ import (
 
 func TestParseAppManifest(t *testing.T) {
 	files := map[string]bool{"app.yaml": true, "main.sh": true, "run.py": true}
-	d, err := parseAppManifest([]byte("title: サイコロ\nevery: 30s\nkeys: [left, space, a, \"1\"]\n"), "dice", files)
+	lim := defaultAppLimits()
+	d, err := parseAppManifest([]byte("title: サイコロ\nevery: 30s\nkeys: [left, space, a, \"1\"]\n"), "dice", files, lim)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Title != "サイコロ" || d.Run != "main.sh" || d.Every != 30*time.Second || d.Timeout != appDefaultTimeout || d.MemMB != appDefaultMemMB || !d.Keys["a"] || !d.Keys["1"] {
+	if d.Title != "サイコロ" || d.Run != "main.sh" || d.Every != 30*time.Second || d.Timeout != 10*time.Second || d.MemMB != 32 || d.OutputBytes != 32<<10 || !d.Keys["a"] || !d.Keys["1"] {
 		t.Errorf("%+v", d)
 	}
-	d, err = parseAppManifest(nil, "x", files) // 空の app.yaml でもよい
+	// アプリごとに変える（全体の上限まで）
+	d, err = parseAppManifest([]byte("timeout: 60s\nmemory_mb: 64\noutput_kb: 256\n"), "x", files, lim)
+	if err != nil || d.Timeout != time.Minute || d.MemMB != 64 || d.OutputBytes != 256<<10 {
+		t.Fatalf("%+v %v", d, err)
+	}
+	for _, over := range []string{"timeout: 61s\n", "memory_mb: 65\n", "output_kb: 257\n"} {
+		if _, err := parseAppManifest([]byte(over), "x", files, lim); err == nil || !strings.Contains(err.Error(), "over the limit") {
+			t.Errorf("%q: %v", over, err)
+		}
+	}
+	// 設定で上限を変える：上げれば通り、既定より下げれば既定も上限に合わせる
+	big := AppLimits{MaxTimeout: 2 * time.Minute, MaxMemMB: 128, MaxOutputKB: 512, MaxRunning: 3}
+	if d, err := parseAppManifest([]byte("timeout: 2m\nmemory_mb: 128\noutput_kb: 512\n"), "x", files, big); err != nil || d.MemMB != 128 {
+		t.Errorf("raised limits: %+v %v", d, err)
+	}
+	small := AppLimits{MaxTimeout: 5 * time.Second, MaxMemMB: 16, MaxOutputKB: 8, MaxRunning: 1}
+	if d, err := parseAppManifest(nil, "x", files, small); err != nil || d.MemMB != 16 || d.Timeout != 5*time.Second || d.OutputBytes != 8<<10 {
+		t.Errorf("lowered limits: %+v %v", d, err)
+	}
+	if _, err := parseAppManifest([]byte("memory_mb: 32\n"), "x", files, small); err == nil {
+		t.Error("memory over a lowered limit accepted")
+	}
+	d, err = parseAppManifest(nil, "x", files, lim) // 空の app.yaml でもよい
 	if err != nil || d.Title != "x" || d.Stream {
 		t.Fatalf("%+v %v", d, err)
 	}
-	d, err = parseAppManifest([]byte("mode: stream\nrun: run.py\n"), "load", files)
+	d, err = parseAppManifest([]byte("mode: stream\nrun: run.py\n"), "load", files, lim)
 	if err != nil || !d.Stream || d.Run != "run.py" {
 		t.Fatalf("%+v %v", d, err)
 	}
-	d, _ = parseAppManifest([]byte("every: off\n"), "x", files)
+	d, _ = parseAppManifest([]byte("every: off\n"), "x", files, lim)
 	if d.Every != 0 {
 		t.Error("every off")
 	}
 	for _, bad := range []string{
 		"run: ../x.sh\n", "run: /bin/sh\n", "run: other.sh\n", "run: app.yaml\n", "mode: daemon\n", "every: 1s\n", "timeout: 2m\n",
-		"memory_mb: 4\n", "keys: [f1]\n", "name: other\n", "mode: stream\nevery: 5s\n", "unknown: 1\n", "icon: nope\n",
+		"memory_mb: 4\n", "output_kb: -1\n", "timeout: 0.5s\n", "keys: [f1]\n", "name: other\n", "mode: stream\nevery: 5s\n", "unknown: 1\n", "icon: nope\n",
 	} {
-		if _, err := parseAppManifest([]byte(bad), "x", files); err == nil {
+		if _, err := parseAppManifest([]byte(bad), "x", files, lim); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
 	}
 	for _, name := range []string{"", "Dice", "../x", "a/b", ".x", strings.Repeat("a", 33)} {
-		if _, err := parseAppManifest(nil, name, files); err == nil {
+		if _, err := parseAppManifest(nil, name, files, lim); err == nil {
 			t.Errorf("name %q accepted", name)
 		}
 	}
@@ -177,6 +200,62 @@ func TestAppInstallRejectsUnsafe(t *testing.T) {
 	}
 }
 
+func TestAppStoreLimits(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenAppStore(dir)
+	os.MkdirAll(s.dir, 0o755)
+	if _, err := s.install("big", bytes.NewReader(mkAppTar(t, map[string]string{"app.yaml": "memory_mb: 64\n", "main.sh": ""}))); err != nil {
+		t.Fatal(err)
+	}
+	// 入れるときに、上限を超えるものは断る
+	if _, err := s.install("huge", bytes.NewReader(mkAppTar(t, map[string]string{"app.yaml": "memory_mb: 128\n", "main.sh": ""}))); err == nil || !strings.Contains(err.Error(), "apps.max_memory_mb") {
+		t.Errorf("over the limit installed: %v", err)
+	}
+	// 上限を下げると、超えるアプリは使えなくなり（理由が一覧に出る）、戻せば使える
+	var forgot []string
+	s.onChange = func(n string) { forgot = append(forgot, n) }
+	s.SetLimits(AppLimits{MaxTimeout: time.Minute, MaxMemMB: 48, MaxOutputKB: 256, MaxRunning: 3})
+	if d, bad := s.Get("big"); d != nil || !strings.Contains(bad, "over the limit 48") {
+		t.Errorf("after lowering: %v %q", d, bad)
+	}
+	if l := s.List(); len(l) != 1 || l[0].Error == "" || len(forgot) != 1 {
+		t.Errorf("list %+v forgot %v", l, forgot)
+	}
+	s.SetLimits(defaultAppLimits())
+	if d, _ := s.Get("big"); d == nil {
+		t.Error("not usable after restoring the limit")
+	}
+	s.SetLimits(defaultAppLimits()) // 変わらなければ何もしない
+	if len(forgot) != 2 {
+		t.Errorf("forgot %v", forgot)
+	}
+}
+
+func TestAppsConfig(t *testing.T) {
+	if l := (*AppsConfig)(nil).limits(); l != defaultAppLimits() || l.MaxMemMB != 64 || l.MaxTimeout != time.Minute || l.MaxOutputKB != 256 || l.MaxRunning != 3 {
+		t.Errorf("default %+v", l)
+	}
+	c := &AppsConfig{MaxMemoryMB: 128, MaxTimeout: "2m", MaxOutputKB: 64, MaxRunning: 1}
+	if l := c.limits(); l != (AppLimits{MaxTimeout: 2 * time.Minute, MaxMemMB: 128, MaxOutputKB: 64, MaxRunning: 1}) {
+		t.Errorf("%+v", l)
+	}
+	var probs []string
+	fail := func(path, format string, args ...any) { probs = append(probs, path) }
+	(&AppsConfig{MaxMemoryMB: 512, MaxTimeout: "10m", MaxOutputKB: 2048, MaxRunning: 9}).validate(fail)
+	(&AppsConfig{MaxMemoryMB: 4, MaxTimeout: "x"}).validate(fail)
+	if strings.Join(probs, " ") != "/apps/max_memory_mb /apps/max_timeout /apps/max_output_kb /apps/max_running /apps/max_memory_mb /apps/max_timeout" {
+		t.Errorf("%v", probs)
+	}
+	// 設定ファイルの検証にも入っている
+	cfg, err := parseConfig([]byte("touch: { min_x: 0, max_x: 800, min_y: 0, max_y: 480 }\nlayers: [{name: base, touch: {cols: 1, rows: 1}}]\napps: {max_running: 0, max_memory_mb: 1000}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := compileKeymap(cfg); err == nil || !strings.Contains(err.Error(), "apps.max_memory_mb") {
+		t.Errorf("compile: %v", err)
+	}
+}
+
 // newTestApps は、スクリプトを自分の権限で動かす係を作る。
 func newTestApps(t *testing.T, apps map[string]map[string]string) *AppService {
 	t.Helper()
@@ -245,8 +324,9 @@ func TestAppLimits(t *testing.T) {
 		"fail":  {"app.yaml": "every: off\n", "main.sh": "echo out; echo oops >&2; exit 3"},
 		"mem":   {"app.yaml": "every: off\nmemory_mb: 16\n", "main.sh": `x=$(head -c 40000000 /dev/zero | tr '\0' a); echo ${#x}`},
 		"shell": {"app.yaml": "every: off\n", "main.sh": "#!/no/such/interp\necho x"},
+		"small": {"app.yaml": "every: off\noutput_kb: 1\n", "main.sh": "head -c 2000 /dev/zero | tr '\\0' a"},
 	})
-	for _, n := range []string{"slow", "loud", "fail", "mem", "shell"} {
+	for _, n := range []string{"slow", "loud", "fail", "mem", "shell", "small"} {
 		s.Seen(n)
 	}
 	t0 := time.Now()
@@ -272,6 +352,8 @@ func TestAppLimits(t *testing.T) {
 	}
 	go s.runInterval("shell", s.states["shell"], appEvent{})
 	waitApp(t, "shell", func() bool { return strings.Contains(s.View("shell").Status, "動かせません") })
+	go s.runInterval("small", s.states["small"], appEvent{})
+	waitApp(t, "small", func() bool { return strings.Contains(s.View("small").Status, "出力が 1 KiB を超えました") })
 	waitApp(t, "slots freed", func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.slots == 0 })
 }
 
@@ -296,6 +378,32 @@ func TestAppConcurrencyLimit(t *testing.T) {
 		t.Errorf("d: %+v", v)
 	}
 	waitApp(t, "done", func() bool { return screenText(s.View("a")) == "done" && screenText(s.View("c")) == "done" })
+	waitApp(t, "slots freed", func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.slots == 0 })
+	// 設定の apps.max_running で数を変える
+	s.store.SetLimits(AppLimits{MaxTimeout: time.Minute, MaxMemMB: 64, MaxOutputKB: 256, MaxRunning: 1})
+	s.mu.Lock()
+	for _, n := range []string{"a", "b"} {
+		if s.states[n] == nil {
+			s.states[n] = &appState{def: mustApp(t, s, n)}
+		}
+	}
+	sa, sb := s.states["a"], s.states["b"]
+	s.mu.Unlock()
+	go s.runInterval("a", sa, appEvent{})
+	waitApp(t, "1 running", func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.slots == 1 })
+	s.runInterval("b", sb, appEvent{})
+	if v := s.View("b"); !strings.Contains(v.Status, "待っています") || v.Running {
+		t.Errorf("b with max_running 1: %+v", v)
+	}
+}
+
+func mustApp(t *testing.T, s *AppService, name string) *AppDef {
+	t.Helper()
+	d, bad := s.store.Get(name)
+	if d == nil {
+		t.Fatalf("%s: %s", name, bad)
+	}
+	return d
 }
 
 func TestAppStream(t *testing.T) {
