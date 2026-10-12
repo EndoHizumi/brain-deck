@@ -28,6 +28,7 @@ battery: { ... }            # 電池が少ないときの知らせと電源断�
 clock: { ... }              # 内蔵 RTC の使い方。省略すると読むだけ（下の「時刻と内蔵 RTC（clock）」）
 lid: { ... }                # ふたを閉じたときの動き。省略すると画面を消す（下の「ふた（lid）」）
 ime: { ... }                # 日本語の入力（uim-fep）。省略すると、入っていれば使う（下の「日本語の入力（ime）」）
+apps: { ... }               # 自分で足すアプリの全体の上限。省略すると既定（下の「自分で足すアプリの上限（apps）」）
 start_layer: home           # 起動と設定の反映で開くレイヤー。省略すると home.start のとおり（下の「PC ごとの設定（profiles）」）
 profiles: [ ... ]           # PC ごとの設定。省略すると使わない（下の「PC ごとの設定（profiles）」）
 ```
@@ -48,6 +49,7 @@ profiles: [ ... ]           # PC ごとの設定。省略すると使わない�
 | clock | オブジェクト | rtc（read、write、off）。下の「時刻と内蔵 RTC（clock）」 |
 | lid | オブジェクト | close（off、none）、tablet_keys（off、on）。下の「ふた（lid）」 |
 | ime | オブジェクト | method、user、idle、terminal、start。下の「日本語の入力（ime）」 |
+| apps | オブジェクト | max_memory_mb、max_timeout、max_output_kb、max_running。下の「自分で足すアプリの上限（apps）」 |
 | start_layer | 文字列 | 起動したときと、設定を反映したとき（とプロファイルが変わったとき）に開くレイヤーの名前（`home` はホーム画面）。下の「PC ごとの設定（profiles）」 |
 | profiles | 配列 | PC ごとの設定。下の「PC ごとの設定（profiles）」 |
 
@@ -723,7 +725,7 @@ Brain の `/var/lib/lefthand/apps/<name>/` に置いたアプリ（`app.yaml` �
 ```
 
 - **動かすとき**：セルが画面にあるあいだだけ。タップ、ボタン、文字（入力欄。日本語入力も）、`app.yaml` の `keys` の本体キー（このときは PC に送らない）は、スクリプトに渡す。
-- **置いていないアプリ**：「置かれていません」と描く（設定はエラーにしない。アプリを後から置ける）。使えないアプリ（app.yaml の書き間違いなど）は「使えません」と理由。
+- **置いていないアプリ**：「置かれていません」と描く（設定はエラーにしない。アプリを後から置ける）。使えないアプリ（app.yaml の書き間違い、設定の `apps` の上限を超える値など）は「使えません」と理由。
 - **プレビュー**：設定 GUI と `-render-png` は説明だけ描く（`-render-app <名前>=<出力のファイル>` で出力を描く）。
 
 #### 電池（battery）
@@ -1277,6 +1279,22 @@ ime:
 - **使えないとき**（`off`、uim-fep がない、方式が入っていない、起動できない）：欄は英数字と記号だけの入れ方になる（題に「（英数字と記号）」と出る）。uim-fep が途中で止まったら、欄は英数字だけの入れ方に切り替わり、画面の下に理由を出す。
 - **Brain のシェル**（`terminal: true`）：`/bin/login -p` に `BRAIN_IME=<method>` と `LIBUIM_USER_SCM_FILE` を渡し、`/etc/profile.d/lefthand-ime.sh`（install.sh が置く。`contrib/brain/lefthand-ime.sh`）が、ログインしたシェルを `uim-fep -u <method> -s lastline` の中で開き直す。ssh やコンソールからのログインでは何もしない。
 - **入っている方式**：`/usr/share/uim/installed-modules.scm` の `installed-im-list`。Brain の設定のアプリ（「日本語入力」の行）で、使わない・自動・入っている方式から選べる（上書き `ime.method`）。`brain-deck status` の「日本語入力」、プロトコルの `get_status` の `ime`。
+
+## 自分で足すアプリの上限（apps）
+
+自分で足すアプリ（[docs/apps.md](apps.md)）が `app.yaml` で選べる値の上限と、同時に動かす数（`apps.go`）。省略すると下の既定。
+
+```yaml
+apps:
+  max_memory_mb: 64   # app.yaml の memory_mb の上限（MB。既定 64、8〜256）
+  max_timeout: 60s    # app.yaml の timeout の上限（既定 60s、1s〜5m）
+  max_output_kb: 256  # app.yaml の output_kb の上限（KiB。既定 256、1〜1024）
+  max_running: 3      # すべてのアプリで同時に動かす数（既定 3、1〜8）
+```
+
+- **アプリごとの値**：`app.yaml` の `memory_mb`（既定 32）、`timeout`（既定 10s）、`output_kb`（既定 32）。書かなければ既定で、既定が上限より大きければ上限を使う。
+- **上限を超える値**：`brain-deck app install` は断る。置いたあとで上限を下げると、超えるアプリは「使えません」になり（`brain-deck app list` に理由が出る）、動いていれば止める。上限を戻せば、また使える。
+- 反映は `brain-deck config put` などの設定の反映のとき（デーモンを起動し直さなくてよい）。
 
 ## PC ごとの設定（profiles）
 
