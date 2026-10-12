@@ -6,6 +6,108 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 無人のセッションのまとめ（2026-10-12、K4 → K5）
+
+- **K4（起動を速くする）**：終わり。実機で測り（下の「フェーズ K4」）、デーモンの起動中の画面と起動の時間のログを作り、止めるサービスの案とスクリプト（contrib/boot）を用意した。**本番には反映していない**。
+- **K5（自分でアプリを足す仕組み）**：終わり（PC のテストまで）。**実機では確かめていない**。本番には入れていない（決めたとおり、本番の設定にも入れない）。
+- **実機が止まった**：02:03 に試験の途中で ssh が切れ、03:56 に USB が外れたまま戻らなかった（電池。最後の電圧は 02:02 の 3.67 V）。それ以降は PC 側だけで続けた。
+- **今の本番**：デーモン 8a09379808bb（`.prev` d7daf5ef6e33）、設定は config/current.yaml のまま（2026-10-12 02:02 に確かめた）。試験のユニットと見張りのタイマーは /run の下で、電源が切れると消える。/tmp/lhu（本番のデータの写しを含む）も tmpfs なので消える。次に起動したら、下の朝の手順の 2 で確かめる。
+
+### 無人で決めたこと
+
+| 決めたこと | 理由 |
+| --- | --- |
+| 本番に反映しない（K4 も K5 も） | 試験のデーモンでの確かめ（config put、上書き、レイヤーの切り替え）が終わる前に Brain が止まった。決まりどおり、確かめていないものは入れない |
+| デーモンの起動の速さは「起動中の画面を早く出す」に絞った。設定の解析を速くする（解析した結果を残す）案は取らなかった | 測ると、デーモンは起動全体（80 秒）のうち 2〜5 秒で、背景画像やフォントは原因でなかった（もともと後から読む）。設定を 2 通りの方法で読むと、壊れたときに分かりにくい |
+| 起動を速くするスクリプトで既定に止めるのは、accounts-daemon、udisks2、e2scrub_reap、triggerhappy、avahi-daemon。NetworkManager、timesyncd、ly は選んだときだけ | 既定のものは SSH、シリアル、lefthand に関わらない。NetworkManager は SSH（usb0）に関わるかもしれず、実機で確かめていない。ly は止めると Brain の画面でログインできなくなる |
+| lefthand を ly より先に起動する案は取らない | ly は起動のときに tty2 へ切り替えるので、先に起動すると画面を取られる |
+| アプリのホーム画面への置き方は、今のアプリと同じ「セルを置いたレイヤー＋ home.apps」にした（アプリ専用の書き方は作らなかった） | 設定 GUI のホーム画面の編集とプレビューを変えずに済む。ほかのアプリと同じ書き方で覚えやすい |
+| アプリは画面にあるあいだだけ動かす | Brain は CPU が 1 つで、充電されない。見ていないときに動かす理由が少ない |
+| メモリの上限は仮想メモリ（ulimit -v）。既定 64 MB | Brain の cgroup はコントローラーが有効でない（実機で調べた）。Python は 16 MB でも動いた |
+| プロセスの数の上限は「今の user のスレッドの数 + 32」 | RLIMIT_NPROC は user のスレッドの合計を数えるので、決まった数では user のほかのもの（Brain のシェルなど）が多いと動かせない |
+| 出力の決まりは「@ で始まる指示の行」 | sh の echo だけで書け、ふつうの行はそのまま文字になる |
+| アプリを消すと、アプリが書いたデータも消す。入れ替えではデータを残す | rm は「なくす」、install は「新しくする」と考えた |
+| PC の ~/.local/bin/brain-deck は新しくしていない | brain-deck の変更は app のコマンドを足しただけ。PC の環境を変えないほうを選んだ（朝の手順で入れ替える） |
+
+### 朝の手順
+
+1. **充電**：Brainux では充電されない。Brain に電源を入れ、純正のファームウェアの「電源につないでお待ちください」で充電する（README の「充電」。2026-10-11 は 3.48 → 3.88 V）。充電のあと Brainux で起動する。
+2. **起動したら確かめる**（PC）：
+
+   ```sh
+   brain-deck status                       # lefthand 8a09379808bb、電池
+   ssh brain 'uptime; systemctl is-active lefthand.service; systemctl list-timers --all | grep -c hwtest; ls /run/systemd/system/ | grep -c hwtest; ls /tmp/lhu 2>&1 | head -1'
+   # 期待：active、0、0、No such file（/run と /tmp は電源が切れて消えている）
+   ```
+
+3. **起動の時間を測る（今のまま。読むだけ）**：
+
+   ```sh
+   cd ~/brainix-lefthand-device/lefthand
+   scp -r contrib/boot brain:
+   ssh brain 'sudo sh boot/boot-measure.sh' > /tmp/boot-before.txt; head -12 /tmp/boot-before.txt
+   ```
+
+4. **K4 と K5 のデーモンを試験のデーモンで確かめてから、本番に入れる**（README の「開発」→「テスト」のユニット。電池が 3.6 V 以上のとき）：
+
+   ```sh
+   export PATH=$HOME/brainix-lefthand-device/toolchain/go/bin:$PATH
+   V=$(git rev-parse --short=12 HEAD)
+   GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$V" -o /tmp/lefthand-$V .
+   go run ./tools/mkupdate -bin /tmp/lefthand-$V -version $V -o /tmp/$V.update.tar.gz
+   go build -o ~/.local/bin/brain-deck ./cmd/brain-deck     # PC の brain-deck（app のコマンド）
+   ```
+
+   - 試験のデーモン（/tmp/lhu、本番の設定とデータの写し、20 分の見張り）で：`brain-deck config put`（本番の設定）、`brain-deck overrides set backlight.level 5` と `overrides clear all`、profiles を足した設定で `brain-deck profile use <名前>`（レイヤーが切り替わり、帯に label が水色で出る）と `profile use none`、`brain-deck restart`（`brain-deck logs` に `startup:` の行）。
+   - アプリ：`brain-deck app install contrib/apps/dice contrib/apps/load contrib/apps/sdcard`、`brain-deck config put config/apps-example.yaml`、ホーム画面の 3 ページ目から開く。`ssh brain 'ps -o user,ni,args -C sh,bash'` で、スクリプトが `user`、nice 15 で動いていること。サイコロの「面の数」で日本語入力の欄が開くこと。負荷のアプリのボタンで間隔が変わること。終わったら `brain-deck app rm dice load sdcard` と本番の設定に戻す（/tmp/lhu ごと消える）。
+   - よければ本番に：`brain-deck update /tmp/$V.update.tar.gz`、`brain-deck update --status`、`brain-deck status`、本番の画面を `-render-png` と比べる（tools/fbshot.sh）。おかしければ `brain-deck update --rollback`。
+5. **起動を速くするスクリプトを試す**（本番に入れたあと。再起動するので、電池が十分あるとき）：
+
+   ```sh
+   ssh brain 'sudo sh boot/boot-tune.sh plan'          # 既定で止めるものと今の状態（何も変えない）
+   ssh brain 'sudo sh boot/boot-tune.sh apply'         # 既定の 5 項目を止める。記録は /etc/lefthand/boot-tune.state
+   brain-deck reboot                                   # 再起動
+   ssh brain 'sudo sh boot/boot-measure.sh' > /tmp/boot-after.txt; diff <(head -3 /tmp/boot-before.txt) <(head -3 /tmp/boot-after.txt)
+   brain-deck status; ssh brain 'systemctl --failed'   # lefthand、SSH、シリアル（/dev/ttyACM0）が使えること
+   ```
+
+   - 問題があれば：`ssh brain 'sudo sh boot/boot-tune.sh revert'` → `brain-deck reboot`。SSH が使えなければ USB のシリアル（`screen /dev/ttyACM0 115200`）でログインして同じことをする。
+   - さらに速くしたいとき（選ぶ項目）：`apply nm`（SSH が usb0 で使えるかを必ず確かめる）、`apply ly`（Brain の画面でログインできなくなる。brain-deck の Brain のシェルは使える）。どちらも 1 つずつ、再起動して確かめる。
+6. **目で確かめること**：電源を入れたとき、ly のログイン画面のあと「起動中… brain-deck <版>」が出てからホーム画面になること（K4 の版を入れたあと）。PC ごとの設定を使っているとき、帯の左に水色でその名前が出ること。アプリの画面（文字の大きさ、ボタン、下に出る知らせ）。
+
+### 決めてほしいこと
+
+- 起動を速くするスクリプトの既定の項目（特に avahi。`brain.local` の名前を使っているなら外す）と、NetworkManager、ly を止めるか。
+- 自分で足すアプリの上限の既定（timeout 10 秒、メモリ 64 MB、同時に 3 つ、出力 32 KiB）。
+- 例のアプリを本番の設定に入れるか（今は入れていない）。
+
+## 追記：フェーズ K5　自分でアプリを足す仕組み（2026-10-12、無人）
+
+### 1. 調べた（実機。読むだけ。01:45 ごろ）
+
+| 言語 | 版 | 起動（3 回） | 備考 |
+| --- | --- | --- | --- |
+| sh（dash。/bin/sh） | 0.5.12 | 0.03〜0.09 秒 | |
+| bash | 5.2.37 | 0.05〜0.07 秒 | `read -t` がある |
+| busybox sh | 1.37.0 | 0.03〜0.09 秒 | |
+| mawk（awk） | 1.3.4 | 0.03 秒 | |
+| perl | 5.40.1 | 0.06 秒 | |
+| lua | 5.1.5 | 0.04 秒（最初だけ 3.3 秒。ファイルを読む時間） | |
+| python3 | 3.13.5 | 0.85 秒（`-S` で 0.53、`import json,os,time` で 1.4〜1.7） | numpy、ipython なども入っている |
+
+- メモリ：Python は仮想メモリの上限 16 MB でも動いた（VmPeak 約 15 MB）。sh は 8 MB でも動く。user（uid 1000、groups video users）。cgroup v2 のコントローラーは何も有効でない（cgroup でメモリを制限できない）。`prlimit`、`setpriv`、`timeout`、`nice` はある。
+- 時間の測り方：python3 の os.fork と os.wait4 で、子の実時間を測った（/usr/bin/time がないため）。
+
+### 2〜6. 作ったもの
+
+- **仕組み**（60c31a3）：`apps.go`（置き場所、app.yaml、受け取り）、`appsrun.go`（動かす係）、`appwidget.go`（出力の決まり、セルの描き方、タップとキー）。詳しくは docs/apps.md と README の「自分で足すアプリ」。
+- **安全**：user の権限、ulimit（仮想メモリ、CPU の時間、ファイルの大きさ 16 MiB、開けるファイル 64、プロセスの数）、プロセスのグループごと止める、nice 15、時間と出力の上限、同時に 3 つまで、名前とファイルの検査（リンク、フォルダ、ほかの場所を指す名前は断る）。入力と描画はスクリプトを待たない（描くのは写し。アプリの係はエンジンや画面のロックを取らない）。
+- **PC から**：`brain-deck app install / list / rm`（bbf7075）。設定 GUI の「アプリ」のタブとセルの欄（e47e379）。バックアップに `apps/` と `apps-data/`。
+- **例**：`contrib/apps/sdcard`、`dice`、`load`（26a72b1）と `config/apps-example.yaml`。docs/apps.md、ヘルプ（35c8bad）。
+- **確かめたこと（PC）**：Go のテスト（説明のファイル、出力の決まり、入れ方の安全（../、サブフォルダ、リンク、絶対パス、大きさ）、時間切れ（1 秒で、子のプロセスも止まる）、出力の上限、終了コードと標準エラー、メモリの上限（16 MB で 40 MB の文字列を作れない）、#! の読み方、同時に 3 つ、stream の行とイベントと止めるとき、動かし直すまでの時間、例の 3 つのアプリ）を `-race` で 5 回。brain-deck は偽の Brain で。GUI はタブ、削除、セルの欄、プレビューと `-render-png` の画素の一致。
+- **実機では確かめていない**：user として動くこと（PC のテストは自分の権限で動かす）、Brain での速さ、日本語入力の欄（@input）。朝の手順の 4。
+- **気づいたこと**：PC では user のスレッドが多く、`ulimit -p 64` で fork できなかった。RLIMIT_NPROC は user のスレッドの合計を数えるので、「今の数 + 32」にした。
+
 ## 追記：フェーズ K4　起動を速くする（2026-10-12、無人）
 
 ### K4 の前に入れたもの（別のコミット）
