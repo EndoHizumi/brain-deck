@@ -7,7 +7,7 @@
 - **JSON への変換**：`lefthand -dump-json config.yaml` は、検証したうえで、旧形式を layers の形にそろえた JSON を出力する。割り当ては、すべてオブジェクトの形（`{"key": "B"}`）になる。
 - **知らない項目**：書き間違いを見逃さないよう、知らない項目があると読み込みに失敗する。
 - **設定 GUI で保存したとき**：デーモンが YAML で書き直す（`lefthand -check` を通る形）。割り当ては 1 行（`KEY_A: LCTRL+Z`、`"0,0": {key: B, label: ブラシ}`）で、項目は名前順になる。**手で書いたコメントは消える**。前の版は `config.yaml.prev` に残る。
-- **設定 GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`touch` の有無、`display`（`press_style` を除く）は、開いているデバイスにかかわるので、動作中のデーモンには反映できない。ファイルを直接編集し、サービスを再起動する。プロトコルは [protocol.md](protocol.md)。
+- **設定 GUI で変えられない項目**：`hid_device`、`keyboard`、`touch.device`、`touch` の有無、`display` の `enabled`、`device`、`vt`、`rotate` は、開いているデバイスにかかわるので、動作中のデーモンには反映できない。ファイルを直接編集し、サービスを再起動する。プロトコルは [protocol.md](protocol.md)。
 - **設定 GUI で編集しない項目**：`terminal` と `backlight` は、GUI では編集しない（GUI で保存しても残る）。ファイルを直接編集する。
 - **ホーム画面、状態の帯、縦向きの格子**：`home`、`status_bar`、レイヤーの `touch_portrait` と `status_bar`、`display.portrait_grid` は GUI で編集でき、保存すればすぐ反映する（下の「ホーム画面（home）」「状態の帯（status_bar）」「画面の向きと縦向きの格子」）。
 
