@@ -251,4 +251,13 @@ func TestBarShowsProfileOnlyWhenNotDefault(t *testing.T) {
 	if got := cfg.profileTitle(); got != "home" {
 		t.Errorf("name: %q", got)
 	}
+	// 重ねた設定（Profiles は空になる）でも label を出す
+	cfg.profile = ""
+	eff, err := applyProfile(cfg, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := eff.profileTitle(); got != "会社" {
+		t.Errorf("applied: %q", got)
+	}
 }

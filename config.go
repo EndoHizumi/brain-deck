@@ -41,7 +41,8 @@ type Config struct {
 	// Profiles は、PC ごとの設定（profile.go）。PC の brain-deck が名乗った名前で選び、設定ファイルの値に重ねる
 	Profiles []ProfileConfig `yaml:"profiles,omitempty" json:"profiles,omitempty"`
 
-	profile string // applyProfile で重ねたプロファイルの名前（設定ファイルには書かない）
+	profile      string // applyProfile で重ねたプロファイルの名前（設定ファイルには書かない）
+	profileLabel string // 重ねたプロファイルの、画面に出す名前（label、なければ name）
 }
 
 // TouchConfig はタッチパネルそのものの設定（どのレイヤーでも共通）。

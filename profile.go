@@ -50,6 +50,9 @@ func (c *Config) profileTitle() string {
 	if c == nil || c.profile == "" {
 		return ""
 	}
+	if c.profileLabel != "" {
+		return c.profileLabel // applyProfile で重ねた設定（Profiles は空）
+	}
 	for i := range c.Profiles {
 		if c.Profiles[i].Name == c.profile {
 			return c.Profiles[i].title()
@@ -155,6 +158,7 @@ func applyProfile(file *Config, name string) (*Config, error) {
 	eff := *file
 	eff.Profiles = nil // 重ねたものは、もう一度は重ねない（compileKeymap も確かめない）
 	eff.profile = name
+	eff.profileLabel = p.title()
 	if p.StartLayer != "" {
 		eff.StartLayer = p.StartLayer
 	}
