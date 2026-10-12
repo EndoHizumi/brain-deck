@@ -269,7 +269,23 @@ func newTestApps(t *testing.T, apps map[string]map[string]string) *AppService {
 	}
 	s := NewAppService(OpenAppStore(dir), nil)
 	s.runAsMe = true
-	t.Cleanup(s.Shutdown)
+	t.Cleanup(func() {
+		// 止めてから、動いているものが終わるのを待つ（テストのあとまで動くと、ほかのテストが変える time.Local などを読む）
+		s.Shutdown()
+		for i := 0; i < 500; i++ {
+			s.mu.Lock()
+			busy := s.slots > 0
+			for _, st := range s.states {
+				busy = busy || st.running || st.proc != nil
+			}
+			s.mu.Unlock()
+			if !busy {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		time.Sleep(20 * time.Millisecond) // 終わったあとのログと知らせ
+	})
 	return s
 }
 
@@ -575,5 +591,54 @@ func TestAppDataDirModes(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(parent, "x")); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("apps-data/x mode %v %v", fi.Mode(), err)
+	}
+}
+
+// アプリのセルと月の表示のタップが、エンジンのロックを持ったまま設定のアプリの写し（Engine.Rotation）を作ってもデッドロックしない。
+// K5 の実機の試験で、アプリのセルをタップしたら、入力も描画も終了も止まった（Rotation がエンジンのロックを取り直していた）
+func TestTouchWithSettingsEnvNoDeadlock(t *testing.T) {
+	km, _, err := compileYAML(t, `
+touch: { min_x: 0, max_x: 799, min_y: 0, max_y: 479 }
+layers:
+  - name: base
+    touch:
+      cols: 2
+      rows: 1
+      cells:
+        "0,0": { widget: app, name: x }
+        "1,0": { widget: month }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := NewEngine(km, &State{hid: NewHIDWriter(os.DevNull), active: map[string]Combo{}})
+	s := newTestApps(t, map[string]map[string]string{"x": {"app.yaml": "every: off\n", "main.sh": "echo hi"}})
+	rt := NewWidgetRT(nil)
+	rt.apps = s
+	settings := NewSettingsUI(SettingsDeps{Rotation: e.Rotation})
+	// 本番の描画と同じく、設定のアプリの写しを作る env（タップ用の軽い env は設定しない：Rotation の側で守れているか）
+	rt.SetEnv(func() WidgetEnv { return WidgetEnv{Now: time.Now(), Settings: settings.Snapshot(), Apps: s} })
+	e.SetWidgets(rt)
+	done := make(chan struct{})
+	go func() {
+		for _, x := range []int32{200, 600} {
+			e.PressTouch(x, 240)
+			e.Release("t")
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("touch deadlocked")
+	}
+	// タップで動いたアプリが終わるのを待つ（テストのあとまで動くと、ほかのテストが変える time.Local を読む）
+	waitApp(t, "app ran", func() bool { v := s.View("x"); return !v.Running && !v.LastRun.IsZero() })
+	if r := e.Rotation(); r != 0 {
+		t.Errorf("rotation %d", r)
+	}
+	e.Rotate(90)
+	if r := e.Rotation(); r != 90 {
+		t.Errorf("rotation after Rotate %d", r)
 	}
 }

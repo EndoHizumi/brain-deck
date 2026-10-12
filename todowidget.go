@@ -93,6 +93,7 @@ type WidgetRT struct {
 	gadgets  *GadgetService                      // ストップウォッチなどの状態。nil ならタップしても何もしない
 	calc     *CalcService                        // 電卓。nil ならボタンを押しても何もしない
 	envFn    func() WidgetEnv                    // 今の時刻とデータ。nil なら Todo だけ
+	touchFn  func() WidgetEnv                    // タップの処理（エンジンのロックを持っている）で使う軽いもの。nil なら envFn
 	poke     func()                              // 画面の描き直し。待たずに返ること
 	pen      *Pen                                // ペンタブレットの出力。nil なら送らない
 	memos    *MemoService                        // 手書きメモ。nil なら書けない
@@ -129,6 +130,24 @@ func (rt *WidgetRT) SetEnv(f func() WidgetEnv) {
 	rt.mu.Lock()
 	rt.envFn = f
 	rt.mu.Unlock()
+}
+
+// SetTouchEnv は、エンジンのロックを持ったタップの処理で使う env を設定する（エンジンや設定の置き場所のロックを取らないもの）。
+func (rt *WidgetRT) SetTouchEnv(f func() WidgetEnv) {
+	rt.mu.Lock()
+	rt.touchFn = f
+	rt.mu.Unlock()
+}
+
+// touchEnv は、タップの処理（エンジンのロックを持っている）で使う env。
+func (rt *WidgetRT) touchEnv() WidgetEnv {
+	rt.mu.Lock()
+	f := rt.touchFn
+	rt.mu.Unlock()
+	if f != nil {
+		return f()
+	}
+	return rt.env()
 }
 
 func (rt *WidgetRT) env() WidgetEnv {
@@ -381,7 +400,7 @@ func (w *WidgetDef) touchDown(rt *WidgetRT, t widgetTouch, label string) {
 	if !w.ownsTouch() || rt == nil || w.pager == nil { // トラックパッドは Pad が処理する
 		return
 	}
-	env := rt.env()
+	env := rt.touchEnv()
 	var (
 		g     todoGeom
 		items []TodoItem

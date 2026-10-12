@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	evdev "github.com/holoplot/go-evdev"
@@ -209,6 +210,7 @@ type Engine struct {
 	term     *TermMode    // 端末モード。nil なら terminal は何もしない。端末モードのあいだ、入力はここに回す
 	pressing string       // press の途中で、押している入力（レイヤーが変わっても、この入力のマウスのボタンは離さない）
 	rot      int          // 画面の向き（rotate.go）
+	rotNow   atomic.Int32 // rot の写し。Rotation がエンジンのロックを取らずに読む（描画や設定のアプリの写しから呼ばれるので）
 	pw, ph   int          // 物理の画面の大きさ。0 なら 800x480
 	rotStore *RotateStore // 向きの保存。nil なら保存しない
 	onRotate func(int)    // 向きが変わったとき（ログと設定 GUI への通知）。ロックを持ったまま呼ぶので、待たずに返ること
@@ -226,6 +228,7 @@ func (e *Engine) SetRotation(rot, pw, ph int, rs *RotateStore) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.rot, e.pw, e.ph, e.rotStore = rot, pw, ph, rs
+	e.rotNow.Store(int32(rot))
 	e.view = nil
 	e.refresh()
 }
@@ -237,11 +240,10 @@ func (e *Engine) SetOnRotate(f func(int)) {
 	e.mu.Unlock()
 }
 
-// Rotation は今の画面の向き。
+// Rotation は今の画面の向き。エンジンのロックは取らない（ロックを持ったままのタップの処理や、画面のロックを持った描画から、
+// 設定のアプリの写しを通して呼ばれる。取るとデッドロックする。K5 の実機の試験で、アプリのセルのタップで止まった）。
 func (e *Engine) Rotation() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.rot
+	return int(e.rotNow.Load())
 }
 
 // Rotate は、画面の向きを変える（rotateNext なら 90 度回す）。設定 GUI の set_rotate からも使う。
@@ -261,6 +263,7 @@ func (e *Engine) rotateLocked(r int) {
 		return
 	}
 	e.rot = r
+	e.rotNow.Store(int32(r))
 	e.pad.Cancel()
 	e.rotStore.Save(r, e.km.Rotate)
 	log.Printf("rotate: %d", r)

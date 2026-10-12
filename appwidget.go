@@ -487,7 +487,7 @@ func (rt *WidgetRT) appTouch(w *WidgetDef, t widgetTouch, label string) {
 	if rt == nil || rt.apps == nil {
 		return
 	}
-	env := rt.env()
+	env := rt.touchEnv()
 	env.Apps = rt.apps
 	v := rt.apps.View(w.ID)
 	if v == nil || v.Def == nil {

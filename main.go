@@ -1619,7 +1619,9 @@ func main() {
 	})
 	e.SetWidgets(widgetRT)
 	bootTrace.mark("widgets")
-	widgetEnv := func() WidgetEnv {
+	// touch が真のときは、エンジンのロックを持ったタップの処理から呼ぶ（todo、月の表示、アプリ）。設定のアプリ、ファイル、ヘルプの写しは
+	// 作らない（設定の置き場所やエンジンのロックを取るものがあり、デッドロックする。それぞれ自分のタップの処理を持つので要らない）
+	widgetEnvOf := func(touch bool) WidgetEnv {
 		env := clock.Env()
 		env.Texts = texts.Snapshot()
 		env.QR = qrs.Snapshot()
@@ -1631,9 +1633,11 @@ func main() {
 		env.Calc = calc.Snapshot()
 		env.Memo = memos.Snapshot()
 		env.Reader = reader.Snapshot()
-		env.Files = filesUI.Snapshot()
-		env.Settings = settingsUI.Snapshot()
-		env.Help = helpUI.Snapshot()
+		if !touch {
+			env.Files = filesUI.Snapshot()
+			env.Settings = settingsUI.Snapshot()
+			env.Help = helpUI.Snapshot()
+		}
 		env.Apps = apps
 		env.MouseOff = !s.mouse.Available()
 		env.Gadgets = gadgets.Snapshot()
@@ -1651,7 +1655,9 @@ func main() {
 		}
 		return env
 	}
+	widgetEnv := func() WidgetEnv { return widgetEnvOf(false) }
 	widgetRT.SetEnv(widgetEnv)
+	widgetRT.SetTouchEnv(func() WidgetEnv { return widgetEnvOf(true) })
 	calc.SetTyper(func(text string) error {
 		if !link.Online() {
 			return errOffline

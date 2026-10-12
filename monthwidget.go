@@ -557,7 +557,7 @@ func drawMonthDay(cv *Canvas, d monthDay, s, dot int) {
 // ▲▼ で月を送り、日付で選び、帯の中央で今月と今日に戻る。どこを押しても「触った」ことにする。
 // 予定は見ずに、格子の配置だけで押した位置を解く（入力の goroutine を待たせない）。
 func (w *WidgetDef) monthTouch(rt *WidgetRT, t widgetTouch, label string) {
-	now := rt.env().Now
+	now := rt.touchEnv().Now // エンジンのロックを持っているので、軽いほう
 	area := widgetArea(t.cell, label)
 	s := w.month
 	s.mu.Lock()
