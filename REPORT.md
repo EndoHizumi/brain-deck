@@ -6,6 +6,62 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：K4 と K5 を本番に入れ、起動を速くする段階 1〜3 を適用（2026-10-12 昼、ユーザーあり）
+
+### 本番の状態（終わったとき）
+
+- デーモン **d18b7d39e6c6**（`.prev` 8a09379808bb）。`brain-deck update --status` は「8a09379808bb → d18b7d39e6c6、成功」。設定は config/current.yaml のまま（`config get` と一致。例のアプリは入れていない）。本番の画面と `-render-png` は 0 画素の違い。PC の `~/.local/bin/brain-deck` も d18b7d39e6c6。
+- `/etc/systemd/system/lefthand.service` を新しいものに（`After=` から getty@tty1 を外した。前のものは `lefthand.service.prev`。ユーザーの許可を得て入れ替えた）。
+- 起動を速くする段階 1〜3 を適用（`/etc/lefthand/boot-tune.state` に 12 のユニット）。電池は始めるとき 4.08 V、終わるとき 3.76 V（USB 給電）。
+
+### 1. アプリの上限（決めたとおりに。829e849、985e9ed）
+
+- 既定：メモリ 32 MB、時間 10 秒、同時に 3 つ、出力 32 KiB。`app.yaml` の `memory_mb`、`timeout`、`output_kb`（新しい項目。stream は 10 秒にこの 2 倍）でアプリごとに変えられる。
+- 全体の上限は設定の `apps`（`max_memory_mb` 既定 64、`max_timeout` 既定 60s、`max_output_kb` 既定 256、`max_running` 既定 3）。超える値は入れるときに断り、置いたあとで上限を下げたら「使えません」にする（動いていれば止める）。docs/apps.md、docs/config.md、README。
+
+### 2. 試験のデーモンで確かめたこと
+
+- `config put`、上書きの設定と取り消し、`profile use`（カレンダーに切り替わり、帯に label「試験PC」が水色で出た。d1fc0a3 の直しを実機で確かめた）と `profile use none`、`startup:` の行（1.9〜2.1 秒）。
+- アプリ：例の 3 つ（sdcard、dice、load）が user・nice 15 で動いた。上限：時間 2 秒、出力 1 KiB、メモリ 16 MB のアプリがそれぞれ止まり、赤で理由が出た。`memory_mb: 128` は install で断られた。ユーザーが、サイコロの「面の数」の入力欄（日本語入力）、負荷のアプリのボタン、カレンダーの月の表示のタップを確かめた。
+
+### 3. 実機で見つけて直した不具合
+
+- **アプリが user で 1 つも動かなかった**（d666a95）：apps-data の親を 0700（root）で作っていて、`fork/exec /bin/sh: permission denied`。PC のテストは自分の権限で動かすので見つからなかった。親は 0755、アプリごとのフォルダは 0700 で user のもの。重なった tick が、すぐに終わった stream をもう一度動かす競合も直した。
+- **タップでデーモンが固まった**（d18b7d3。ユーザーが「本体がフリーズしてます」と知らせた）：エンジンのロックを持ったタップの処理（アプリ、月の表示、Todo）が `WidgetRT.env()` を呼び、設定のアプリの写し（`settingsRows` → `Engine.Rotation`）が同じロックを取り直していた。描画、キー、シリアル、終了がすべて止まり、SIGTERM でも終わらなかった（SIGQUIT で全体の様子を取って原因を見つけた）。**月の表示は K1 からこの形で、8a09379808bb でも月の表示のタップで固まる**（本番のコードで同じテストをして確かめた）。`Engine.Rotation` は atomic で読み、タップの処理には設定のアプリなどの写しを作らない軽い env（`SetTouchEnv`）を使う。
+- アプリのテストの直し（同時に動かす枠の取り合い、後片付けで動いているものを待つ）。`go test -race ./...` はすべて通る。
+
+### 4. 起動を速くする（段階 1〜3）
+
+| | 前 | 段階 1 | 段階 2 | 段階 3（今） |
+| --- | --- | --- | --- | --- |
+| 起動の合計（kernel + userspace） | 84.2 秒（4.0 + 80.2） | 79.7 秒 | 60.2 秒 | **59.3 秒**（4.0 + 55.3） |
+| lefthand が起動 | 80.9 秒 | 76.2 秒 | 58.9 秒 | 57.9 秒 |
+| lefthand の準備ができた | 86.1 秒 | 81.6 秒 | 71.0 秒 | **69.8 秒** |
+
+- **段階 1**：accounts-daemon、udisks2、e2scrub_reap、triggerhappy（service と socket）、avahi-daemon（socket は `Also=` で一緒に）。
+- **段階 2**（ユーザーに一覧を見せて決めた）：NetworkManager（wait-online、dispatcher は `Also=` で一緒に）、systemd-timesyncd、networking、apt-daily.timer、apt-daily-upgrade.timer。usb0 は NetworkManager の管理の外（unmanaged）で、止めたあとも 192.168.7.2 が付いた。resolvconf、fstrim などのタイマーは残した。
+- **段階 3**：ly と、lefthand.service の `After=` から getty@tty1 を外す。lefthand が待つのは ethernet_gadget だけになった。lefthand を止めると tty1 になり、**Enter を押すと `brain login:` が出る**（ユーザーが確かめた。押すまでは画面が描き直されない）。
+- 段階ごとに、ssh、`brain-deck status`、USB のシリアル（ttyGS0 に `brain login:`）、画面、`systemctl --failed`（0 件）を確かめた。どの段階も revert は要らなかった。
+- **残っている遅れ**：段階 2 と 3 のあと、lefthand の exec から準備まで約 12 秒（ふだん 2〜5 秒）。段階 2 は exec から main まで 10.3 秒、段階 3 は「起動中」の画面に 8.0 秒（VT の切り替えの 3 秒の打ち切りは出ていない）。ほかのサービスと同時に起動して SD カードを取り合っていると思われるが、確かめていない。
+- **boot-tune.sh**（3f9f8cc、7fabf2b）：`plan`、`apply`、`revert` に段階（1 2 3）か項目を渡せる。`revert 3` のように段階だけを戻せる。`systemctl disable` が止まったのに 1 を返すことがあり（e2scrub_reap）、そこで終わっていたので、結果を `is-enabled` で確かめるようにした。Brain の `systemd-sysv-install` は遅く、1 つに数十秒かかる。
+
+### 元に戻す方法
+
+- 起動の設定：`ssh brain 'sudo sh boot/boot-tune.sh revert'`（すべて。`revert 3` で ly だけ、`revert 2` で段階 2 だけ）→ `brain-deck reboot`。lefthand のユニットも戻すなら `sudo cp -p /etc/systemd/system/lefthand.service.prev /etc/systemd/system/lefthand.service && sudo systemctl daemon-reload`。ssh が使えなければ USB のシリアル（`screen /dev/ttyACM0 115200`）か tty1。どれも使えなければ SD カードを PC で開き、`boot-tune.state` のユニットのリンクを `/etc/systemd/system/*.wants/` に戻す（README の「復旧の手段」）。
+- デーモン：`brain-deck update --rollback`（8a09379808bb に戻る。ただし月の表示のタップで固まる不具合がある）。
+
+### 目で確かめてほしいこと
+
+1. 電源を入れて、ly の画面が出ずに「起動中… brain-deck d18b7d39e6c6」からホーム画面になること（電源から約 70 秒）。
+2. カレンダーの月の表示、Todo のページ送り、設定のアプリのタップで固まらないこと。
+3. 設定のアプリの「画面の向き」の行と、回転のボタン（`Engine.Rotation` の読み方を変えた）。
+4. PC ごとの設定を使うとき、帯の左に水色で label が出ること。
+
+### 決めてほしいこと
+
+- 残っている lefthand の起動中の約 12 秒を調べるか（起動中の様子を記録する仕掛けを入れて、もう一度再起動する必要がある）。
+- tty1 の画面が Enter まで描き直されないままでよいか（lefthand が終わるときに tty1 を描き直させる案がある）。
+
 ## 無人のセッションのまとめ（2026-10-12、K4 → K5）
 
 - **K4（起動を速くする）**：終わり。実機で測り（下の「フェーズ K4」）、デーモンの起動中の画面と起動の時間のログを作り、止めるサービスの案とスクリプト（contrib/boot）を用意した。**本番には反映していない**。
