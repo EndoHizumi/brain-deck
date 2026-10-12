@@ -1,0 +1,6 @@
+# Brain の負荷（brain-deck の自分で足すアプリの例。docs/apps.md）
+title: Brain の負荷
+description: CPU、メモリ、負荷の平均、電池の電圧を、動き続けて 2 秒ごとに描き直す
+icon: graph
+mode: stream
+memory_mb: 32

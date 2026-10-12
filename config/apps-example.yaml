@@ -1,0 +1,665 @@
+# config/apps-example.yaml
+# 自分で足すアプリ（widget: app。フェーズ K5）の例。本番の設定（config/current.yaml）に、contrib/apps の 3 つのアプリの
+# レイヤー（SD カード、サイコロ、負荷）と、ホーム画面の 3 ページ目を足したもの。本番には入れていない。
+# 使うには、先にアプリを Brain に置く：brain-deck app install contrib/apps/sdcard（dice、load も）。
+# 書き方は docs/apps.md。セルは {widget: app, name: <アプリの名前>}（見出しは label か、アプリの @title / title）。
+hid_device: /dev/hidg0
+keyboard: brain-kbd-i2c
+touch:
+  device: mxs-lradc-ts
+  min_x: 226
+  max_x: 3938
+  min_y: 3803
+  max_y: 384
+  soft_areas:
+    back: {x: [3740, 4095], "y": [812, 1239]}
+    down: {x: [3740, 4095], "y": [2522, 2948]}
+    enter: {x: [3740, 4095], "y": [1240, 1666]}
+    home: {x: [3740, 4095], "y": [3377, 4095]}
+    left: {x: [3740, 4095], "y": [1667, 2094]}
+    menu: {x: [3740, 4095], "y": [0, 811]}
+    right: {x: [3740, 4095], "y": [2095, 2521]}
+    up: {x: [3740, 4095], "y": [2949, 3376]}
+layers:
+  - name: base
+    label: 基本
+    keys:
+      KEY_0: "0"
+      KEY_1: "1"
+      KEY_2: "2"
+      KEY_3: "3"
+      KEY_4: "4"
+      KEY_5: "5"
+      KEY_6: "6"
+      KEY_7: "7"
+      KEY_8: "8"
+      KEY_9: "9"
+      KEY_A: A
+      KEY_APOSTROPHE: APOSTROPHE
+      KEY_B: B
+      KEY_BACKSLASH: BACKSLASH
+      KEY_BACKSPACE: BACKSPACE
+      KEY_C: C
+      KEY_COMMA: COMMA
+      KEY_D: D
+      KEY_DELETE: DELETE
+      KEY_DOT: DOT
+      KEY_DOWN: DOWN
+      KEY_E: E
+      KEY_ENTER: ENTER
+      KEY_EQUAL: EQUAL
+      KEY_ESC: ESC
+      KEY_F: F
+      KEY_G: G
+      KEY_GRAVE: GRAVE
+      KEY_H: H
+      KEY_I: I
+      KEY_INSERT: INSERT
+      KEY_J: J
+      KEY_K: K
+      KEY_L: L
+      KEY_LEFT: LEFT
+      KEY_LEFTALT: LALT
+      KEY_LEFTBRACE: LEFTBRACE
+      KEY_LEFTCTRL: LCTRL
+      KEY_LEFTSHIFT: LSHIFT
+      KEY_M: M
+      KEY_MINUS: MINUS
+      KEY_N: "N"
+      KEY_O: O
+      KEY_P: P
+      KEY_PAGEDOWN: PAGEDOWN
+      KEY_PAGEUP: PAGEUP
+      KEY_Q: Q
+      KEY_R: R
+      KEY_RIGHT: RIGHT
+      KEY_RIGHTBRACE: RIGHTBRACE
+      KEY_S: S
+      KEY_SEMICOLON: SEMICOLON
+      KEY_SLASH: SLASH
+      KEY_SPACE: SPACE
+      KEY_T: T
+      KEY_TAB: TAB
+      KEY_U: U
+      KEY_UP: UP
+      KEY_V: V
+      KEY_W: W
+      KEY_X: X
+      KEY_Y: "Y"
+      KEY_Z: Z
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LGUI+S, label: 保存}
+        "0,1": {key: LGUI+C, label: コピー}
+        "0,2": {layer_toggle: menu, label: メニュー}
+        "1,0": {key: LGUI+Z, label: 取り消し}
+        "1,1": {key: LGUI+V, label: 貼り付け}
+        "1,2": {key: LGUI, label: "Cmd\n押す間"}
+        "2,0": {key: LGUI+LSHIFT+Z, label: やり直し}
+        "2,1": {key: LGUI+X, label: 切り取り}
+        "2,2": {key: LGUI+TAB, label: "アプリ\n切替"}
+        "3,0": {key: LGUI+F, label: 検索}
+        "3,1": {key: LGUI+A, label: 全選択}
+        "3,2": {key: LGUI+SPACE, label: Spotlight}
+      background: b3cd3062dfbfbad2
+    soft_keys:
+      back: LGUI
+      down: {layer_toggle: browser}
+      enter: {layer_toggle: symbol}
+      menu: {layer_toggle: menu}
+      right: {layer_toggle: debug}
+      up: {layer_toggle: code}
+  - name: menu
+    label: メニュー
+    touch:
+      cols: 4
+      rows: 2
+      cells:
+        "0,0": {layer_to: code, label: コード}
+        "0,1": {layer_to: symbol, label: 記号}
+        "1,0": {layer_to: browser, label: ブラウザ}
+        "1,1": {layer_to: window, label: ウィンドウ}
+        "2,0": {layer_to: debug, label: デバッグ}
+        "2,1": {layer_to: dashboard, label: "ダッシュ\nボード"}
+        "3,0": {layer_to: input}
+        "3,1": {layer_to: base, label: 基本}
+  - name: code
+    label: コード
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LGUI+LSHIFT+P, label: "コマンド\nパレット"}
+        "0,1": {key: F12, label: 定義へ}
+        "0,2": {key: LSHIFT+LALT+F, label: 整形}
+        "1,0": {key: LGUI+P, label: "ファイル\nを開く"}
+        "1,1": {key: LSHIFT+F12, label: 参照}
+        "1,2": {key: LGUI+SLASH, label: コメント}
+        "2,0": {key: LGUI+LSHIFT+F, label: "全体を\n検索"}
+        "2,1": {key: LCTRL+MINUS, label: "前の\n位置へ"}
+        "2,2": {key: LGUI+D, label: "次の一致\nも選択"}
+        "3,0": {key: LGUI+B, label: "サイド\nバー"}
+        "3,1": {key: F2, label: "名前の\n変更"}
+        "3,2": {key: LGUI+DOT, label: "クイック\n修正"}
+  - name: browser
+    label: ブラウザ
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LGUI+LALT+I, label: "開発\nツール"}
+        "0,1": {key: LGUI+R, label: "再読み\n込み"}
+        "0,2": {key: LCTRL+LSHIFT+TAB, label: "前の\nタブ"}
+        "1,0": {key: LGUI+LSHIFT+C, label: "要素を\n選択"}
+        "1,1": {key: LGUI+LSHIFT+R, label: "強制\n再読込"}
+        "1,2": {key: LCTRL+TAB, label: "次の\nタブ"}
+        "2,0": {key: LGUI+LALT+K, label: "コン\nソール"}
+        "2,1": {key: LGUI+L, label: "アドレス\nバー"}
+        "2,2": {key: LGUI+EQUAL, label: 拡大}
+        "3,0": {key: LGUI+LALT+M, label: "レスポン\nシブ"}
+        "3,1": {key: LGUI+LSHIFT+T, label: "閉じた\nタブ"}
+        "3,2": {key: LGUI+MINUS, label: 縮小}
+  - name: debug
+    label: デバッグ
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: F5, label: "開始\n続行"}
+        "0,1": {key: F9, label: "ブレーク\nポイント"}
+        "0,2": {key: F8, label: "FF\n再開"}
+        "1,0": {key: F10, label: "ステップ\nオーバー"}
+        "1,1": {key: LSHIFT+F5, label: 停止}
+        "1,2": {key: LGUI+B, label: "FF\nブレーク"}
+        "2,0": {key: F11, label: "ステップ\nイン"}
+        "2,1": {key: LGUI+LSHIFT+F5, label: 再起動}
+        "2,2": {key: LGUI+LSHIFT+B, label: "FF条件付\nブレーク"}
+        "3,0": {key: LSHIFT+F11, label: "ステップ\nアウト"}
+        "3,1": {key: LGUI+LSHIFT+D, label: "実行と\nデバッグ"}
+        "3,2": {key: LGUI+LALT+Z, label: "FF\nデバッガ"}
+  - name: symbol
+    label: 記号
+    touch:
+      cols: 5
+      rows: 4
+      cells:
+        "0,0": {key: LSHIFT+9, label: (}
+        "0,1": {key: LSHIFT+DOT, label: '>'}
+        "0,2": {key: LSHIFT+1, label: '!'}
+        "0,3": {key: LSHIFT+6, label: ^}
+        "1,0": {key: LSHIFT+0, label: )}
+        "1,1": {key: LSHIFT+APOSTROPHE, label: '"'}
+        "1,2": {key: LSHIFT+2, label: '@'}
+        "1,3": {key: LSHIFT+7, label: '&'}
+        "2,0": {key: LSHIFT+LEFTBRACE, label: '{'}
+        "2,1": {key: LSHIFT+SEMICOLON, label: ':'}
+        "2,2": {key: LSHIFT+3, label: '#'}
+        "2,3": {key: LSHIFT+8, label: '*'}
+        "3,0": {key: LSHIFT+RIGHTBRACE, label: '}'}
+        "3,1": {key: LSHIFT+BACKSLASH, label: '|'}
+        "3,2": {key: LSHIFT+4, label: $}
+        "3,3": {key: LSHIFT+EQUAL, label: +}
+        "4,0": {key: LSHIFT+COMMA, label: <}
+        "4,1": {key: LSHIFT+MINUS, label: _}
+        "4,2": {key: LSHIFT+5, label: '%'}
+        "4,3": {key: LSHIFT+SLASH, label: '?'}
+  - name: window
+    label: ウィンドウ
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {key: LGUI+TAB, label: "アプリ\n切替"}
+        "0,1": {key: LCTRL+LEFT, label: "左の\nスペース"}
+        "0,2": {key: LGUI+M, label: しまう}
+        "1,0": {key: LGUI+GRAVE, label: "同じアプリ\nの次"}
+        "1,1": {key: LCTRL+RIGHT, label: "右の\nスペース"}
+        "1,2": {key: LGUI+H, label: 隠す}
+        "2,0": {key: LCTRL+UP, label: "Mission\nControl"}
+        "2,1": {key: LCTRL+LGUI+F, label: "フル\nスクリーン"}
+        "2,2": {key: LGUI+W, label: 閉じる}
+        "3,0": {key: LCTRL+DOWN, label: "アプリの\nウィンドウ"}
+        "3,1": {key: LGUI+LSHIFT+5, label: "スクリーン\nショット"}
+        "3,2": {key: LGUI+SPACE, label: Spotlight}
+  - name: dashboard
+    label: ダッシュボード
+    # 状態の帯を出す（キーのレイヤーは、セルの大きさを優先して出さない）
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        "0,0": {label: お知らせ, span: [3, 1], background: 868d2da70c741221, widget: text, id: notify}
+        "0,1": {label: node20 -> 26アップデート, span: [2, 2], background: f9e5473c67c4e8e5, widget: todo}
+        "2,1": {label: 予定, span: [2, 2], background: f0ee9a9d1371e9e0, widget: calendar}
+        "3,0": {background: c02c10a2672cce46, widget: clock}
+    soft_keys:
+      back: {layer_to: dashboard}
+  - name: input
+    label: 入力
+    touch:
+      cols: 4
+      rows: 4
+      cells:
+        "0,0": {span: [4, 3], widget: trackpad}
+        "0,3": {mouse: left}
+        "1,3": {mouse: middle}
+        "2,3": {mouse: right}
+        "3,3": {usb_mode: toggle}
+    soft_keys:
+      back: ESC
+      down: {mouse: scroll_down}
+      enter: ENTER
+      left: {mouse: scroll_right}
+      menu: {terminal: toggle}
+      right: {mouse: scroll_left}
+      up: {mouse: scroll_up}
+  # ここから下はフェーズ R で足したアプリのレイヤー。どれもホーム画面から入り、HOME で戻る
+  - name: todo
+    label: Todo
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 項目を 0.5 秒押し続けると完了を切り替える。PC からは brain-deck todo add で足す
+        "0,0": {widget: todo, span: [2, 3], label: Todo}
+        "2,0": {widget: clock, span: [2, 1]}
+        # Brain のキーボードで Todo を足す（英数字と記号。日本語は入れられない）。PC から外していても使える
+        "2,1": {input: todo, label: "Todo\n追加"}
+        # PC がないときに、Brain のキーボードで時刻を合わせる（2026-10-10 09:41 の形）
+        "3,1": {input: clock, label: 時刻合わせ}
+        "2,2": {widget: text, id: notify, span: [2, 1], label: お知らせ}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: clock, span: [2, 1]}
+        "0,1": {widget: todo, span: [2, 2], label: Todo}
+        "0,3": {input: todo, label: "Todo\n追加"}
+        "1,3": {input: clock, label: 時刻合わせ}
+    # Todo のレイヤーでは、決定（KEY_ENTER）でも Todo を足す欄を開く（PC には送らない）
+    keys:
+      KEY_ENTER: {input: todo}
+  - name: calendar
+    label: カレンダー
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 月の表示。▲▼ で前後の月、日付をタップでその日の予定を右に出す。1 分触らなければ今日に戻る
+        "0,0": {widget: month, id: cal, span: [2, 3]}
+        "2,0": {widget: clock, span: [2, 1]}
+        "2,1": {widget: calendar, follow: cal, span: [2, 2], label: 予定}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: month, id: cal, span: [2, 2]}
+        "0,2": {widget: calendar, follow: cal, span: [2, 2], label: 予定}
+  - name: weather
+    label: 天気
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 予報は PC の brain-deck weather sync で送る（~/.config/brain-deck/weather.yaml の city が要る）
+        "0,0": {widget: weather, span: [2, 3]}
+        "2,0": {widget: clock, span: [2, 1]}
+        "2,1": {widget: calendar, span: [2, 2], label: 予定}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: weather, span: [2, 2]}
+        "0,2": {widget: clock, span: [2, 1]}
+        "0,3": {widget: calendar, span: [2, 1], label: 予定}
+  - name: calc
+    label: 電卓
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 「入力」で結果を PC に打ち込む。電卓のセルがあるあいだ、Brain のキーは電卓の入力になる
+        "0,0": {widget: calculator, span: [3, 3]}
+        "3,0": {key: LGUI+C, label: コピー}
+        "3,1": {key: LGUI+V, label: 貼り付け}
+        "3,2": {key: TAB, label: Tab}
+  - name: tools
+    label: 道具
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # タップで開始と停止、0.5 秒押し続けると 0 に戻す
+        "0,0": {widget: stopwatch, span: [2, 1], label: ストップウォッチ}
+        "2,0": {widget: battery, label: 電池}
+        # タップで +1、0.5 秒押し続けると 0 に戻す
+        "3,0": {widget: counter, label: カウンター}
+        "0,1": {widget: pomodoro, span: [2, 2], work: 25m, break: 5m, label: ポモドーロ}
+        # 在席ランプ。タップで次の状態。PC から brain-deck presence 会議中 でも変えられる
+        "2,1": {widget: presence, span: [2, 2]}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: stopwatch, span: [2, 1], label: ストップウォッチ}
+        "0,1": {widget: pomodoro, span: [2, 2], work: 25m, break: 5m, label: ポモドーロ}
+        "0,3": {widget: counter, label: カウンター}
+        "1,3": {widget: presence}
+  - name: presen
+    label: 発表
+    touch:
+      cols: 4
+      rows: 3
+      cells:
+        # 持ち時間 20 分（残り 5 分で黄、1 分で赤、過ぎたら赤で点滅）。動いているあいだは自動減光しない
+        "0,0": {widget: presenter, id: talk, duration: 20m, label: 発表 20分, span: [2, 2]}
+        # スライド送り（プレゼンター用のリモコンと同じ PageUp と PageDown）
+        "2,0": {key: PAGEUP, label: 前へ, span: [1, 2]}
+        "3,0": {key: PAGEDOWN, label: 次へ, span: [1, 2]}
+        "0,2": {key: F5, label: "開始\n(F5)"}
+        "1,2": {key: B, label: 黒い画面}
+        "2,2": {key: ESC, label: 終了}
+        "3,2": {key: HOME, label: 最初へ}
+    soft_keys:
+      # 画面右の帯の ◀ ▶ でも、前後のスライドに移る
+      left: LEFT
+      right: RIGHT
+  - name: system
+    label: 本体
+    status_bar: true
+    touch:
+      cols: 4
+      rows: 4
+      cells:
+        "0,0": {widget: battery, label: 電池}
+        "1,0": {widget: clock, span: [2, 1]}
+        "3,0": {input: clock, label: 時刻合わせ}
+        # USB をキーボードとマウスの形に切り替える（USB を付け直すので 2〜3 秒切れる）
+        "0,1": {usb_mode: toggle, span: [2, 1]}
+        "2,1": {terminal: on, label: 端末, span: [2, 1]}
+        "0,2": {layer_to: rotate, label: 画面の向き, span: [2, 1]}
+        "2,2": {layer_to: input, label: トラックパッド, span: [2, 1]}
+        # 画面に十字を出して、タッチの位置のずれを直す（5 点。保存したときだけ使う。PC がなくてもできる）
+        "0,3": {calibrate: touch, label: タッチ調整, span: [4, 1]}
+    touch_portrait:
+      cols: 2
+      rows: 5
+      cells:
+        "0,0": {widget: battery, label: 電池}
+        "1,0": {input: clock, label: 時刻合わせ}
+        "0,1": {widget: clock, span: [2, 1]}
+        "0,2": {usb_mode: toggle}
+        "1,2": {terminal: on, label: 端末}
+        "0,3": {layer_to: rotate, label: 画面の向き}
+        "1,3": {layer_to: input, label: トラックパッド}
+        "0,4": {calibrate: touch, label: タッチ調整, span: [2, 1]}
+  - name: rotate
+    label: 画面の向き
+    status_bar: true
+    touch:
+      cols: 2
+      rows: 2
+      cells:
+        # 向きは保存され、再起動しても残る。縦向きは、本体を反時計回りに 90 度回して持つ（ソフトキーの帯が上）
+        "0,0": {rotate: 0, label: 横向き}
+        "1,0": {rotate: 90, label: 縦向き}
+        "0,1": {rotate: next, label: "回す\n(90 度ずつ)"}
+        "1,1": {rotate: 270, label: "縦向き\n(逆)"}
+    # 縦向きでも同じ並び（書かなければ列と行が入れ替わる）
+    touch_portrait:
+      cols: 2
+      rows: 2
+      cells:
+        "0,0": {rotate: 0, label: 横向き}
+        "1,0": {rotate: 90, label: 縦向き}
+        "0,1": {rotate: next, label: "回す\n(90 度ずつ)"}
+        "1,1": {rotate: 270, label: "縦向き\n(逆)"}
+  # ここから下はフェーズ R3 で足したアプリのレイヤー（読み物、手書きメモ、ファイル、ペンタブレット、同期）。ホーム画面から入り、HOME で戻る
+  - name: read
+    label: 読む
+    status_bar: true
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # 左右をタップしてめくり、真ん中で道具（一覧、目次、文字の大きさ、縦書き・横書き）。本体キーの ← → とスペースでもめくる
+        "0,0": {widget: reader}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: reader}
+  - name: memo
+    label: メモ
+    status_bar: true # レイヤーの名前の札を帯に出す（右上の札がメモの「次」に重なる）
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # スタイラスで書いて保存する。PC では brain-deck memo get <番号> -o メモ.png で描き出す
+        "0,0": {widget: memo}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: memo}
+  - name: files
+    label: ファイル
+    status_bar: true
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # 見られる場所は既定（ホーム /home/user と、写真、メモ、読み物のデータ）。行の長押しで消す
+        "0,0": {widget: files}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: files}
+  # フェーズ K1：設定のアプリとヘルプ。どちらもレイヤー全体の 1 つのセル
+  - name: settings
+    label: 設定
+    status_bar: true
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # 明るさ、暗くなるまで、フォトフレーム、画面の向き、読み物の文字、ふた、時刻合わせ。情報と電源のタブ。
+        # 変えた値は設定ファイルを書き換えず、/var/lib/lefthand/overrides.json に上書きとして置く
+        "0,0": {widget: settings}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: settings}
+  - name: help
+    label: ヘルプ
+    status_bar: true
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # 使い方（lefthand に入っている help/ja.md）。左右のタップでめくり、真ん中で目次
+        "0,0": {widget: help}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: help}
+  - name: pen
+    label: ペン
+    status_bar: true # レイヤーの名前の札を帯に出す（右上の札がメモの「次」に重なる）
+    touch:
+      cols: 4
+      rows: 4
+      cells:
+        # なぞると PC にペンとして届く。キーボードとマウスの形（下の「マウス切替」）のときだけ使える
+        "0,0": {widget: pentablet, span: [4, 3]}
+        "0,3": {usb_mode: toggle, span: [2, 1]}
+        "2,3": {layer_to: input, label: トラックパッド, span: [2, 1]}
+    touch_portrait:
+      cols: 2
+      rows: 4
+      cells:
+        "0,0": {widget: pentablet, span: [2, 3]}
+        "0,3": {usb_mode: toggle}
+        "1,3": {layer_to: input, label: トラックパッド}
+  - name: sync
+    label: 同期
+    status_bar: true
+    touch:
+      cols: 2
+      rows: 2
+      cells:
+        # Ctrl+F18 を送る。PC のショートカットで brain-deck sync を動かす（README の「同期」。PC から外しているあいだは休み）
+        "0,0": {key: LCTRL+F18, label: "同期\n(brain-deck sync)", span: [2, 1]}
+        "0,1": {widget: clock}
+        "1,1": {input: clock, label: 時刻合わせ}
+    touch_portrait:
+      cols: 1
+      rows: 3
+      cells:
+        "0,0": {key: LCTRL+F18, label: "同期\n(brain-deck sync)"}
+        "0,1": {widget: clock}
+        "0,2": {input: clock, label: 時刻合わせ}
+  - name: sdcard
+    label: SD カード
+    status_bar: true
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # contrib/apps/sdcard（5 分ごと。タップで今すぐ）
+        "0,0": {widget: app, name: sdcard}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: app, name: sdcard}
+  - name: dice
+    label: サイコロ
+    status_bar: true
+    touch:
+      cols: 2
+      rows: 1
+      cells:
+        # contrib/apps/dice（タップ、スペース、決定で振る）。右は時計
+        "0,0": {widget: app, name: dice}
+        "1,0": {widget: clock}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: app, name: dice}
+  - name: load
+    label: 負荷
+    status_bar: true
+    touch:
+      cols: 1
+      rows: 1
+      cells:
+        # contrib/apps/load（mode: stream。画面にあるあいだ動き続ける）
+        "0,0": {widget: app, name: load}
+    touch_portrait:
+      cols: 1
+      rows: 1
+      cells:
+        "0,0": {widget: app, name: load}
+# ホーム画面。起動するとここから始まり、画面右の帯の HOME でどのレイヤーからも戻る。
+# 1 ページは横向き 4×3、縦向き 3×4。2 ページ目へは下の ▶ か画面右の帯の ▶
+home:
+  cols: 4
+  rows: 3
+  portrait: {cols: 3, rows: 4}
+  apps:
+    # 1 ページ目：よく使うもの
+    - {name: 左手デバイス, icon: keyboard, layer: base}
+    - {name: ダッシュボード, icon: info, layer: dashboard}
+    - {name: Todo, icon: todo, layer: todo}
+    - {name: カレンダー, icon: month, layer: calendar}
+    - {name: 天気, icon: weather, layer: weather}
+    - {name: 読む, icon: reader, layer: read}
+    - {name: メモ, icon: memo, layer: memo}
+    - {name: 電卓, icon: calculator, layer: calc}
+    - {name: 道具, icon: stopwatch, layer: tools}
+    - {name: 入力, icon: trackpad, layer: input}
+    - {name: 同期, icon: sync, layer: sync}
+    - {name: 設定, icon: settings, layer: settings}
+    # 2 ページ目
+    - {name: 本体, icon: battery, layer: system}
+    - {name: ペン, icon: pentablet, layer: pen}
+    - {name: ファイル, icon: files, layer: files}
+    - {name: 発表, icon: presenter, layer: presen}
+    - {name: 画面の向き, icon: rotate, layer: rotate}
+    - {name: メニュー, icon: app, layer: menu}
+    - {name: コード, icon: code, layer: code}
+    - {name: ブラウザ, icon: browser, layer: browser}
+    - {name: デバッグ, icon: command, layer: debug}
+    - {name: 記号, icon: symbol, layer: symbol}
+    - {name: ウィンドウ, icon: window, layer: window}
+    - {name: ヘルプ, icon: help, layer: help}
+    # 3 ページ目：自分で足したアプリ
+    - {name: SD カード, icon: files, layer: sdcard}
+    - {name: サイコロ, icon: counter, layer: dice}
+    - {name: 負荷, icon: graph, layer: load}
+# 状態の帯は、ホーム画面（既定で出す）と、status_bar: true を書いたレイヤー（ダッシュボードと、足したアプリ）にだけ出す。
+# キーのレイヤー（base、メニュー、コードなど）、入力、電卓、発表は、セルの大きさを優先して出さない
+status_bar:
+  show: false
+# 自動減光。つないでいるときは 3 分触らなければ暗くし、15 分で消す。PC から外しているあいだは 1 分で暗く、5 分で消す。
+# 暗いときのタッチは明るくするだけ（セルは押さない）。本体キーはそのまま PC に送り、画面も明るくする。端末モードのあいだは暗くしない。
+# 「暗くする」段階では、Brain の写真（photo）を出す。写真がなければ、今までどおり暗くするだけ
+backlight:
+  dim_after: 3m
+  dim_level: 1
+  off_after: 15m
+  wake_on_key: true
+  in_terminal: false
+  photo: true # 暗くする代わりに写真を出す
+  offline:
+    dim_after: 1m
+    off_after: 5m
+    photo: true # PC から外しているあいだも写真を出す
+# フォトフレーム（backlight.photo で使う）。写真は設定 GUI の「写真」か brain-deck photo add で足す
+photo:
+  interval: 1m # 1 枚を出す時間
+  order: sequential # 足した順
+  night: "23:00-07:00" # 写真を出さずに画面を消す時間帯
+  level: 4 # 写真を出すときの明るさ（0〜7）
+  max: 10 # 置ける写真の枚数
+# PC から外れたら（USB を抜いた、PC の電源が切れた）、ホーム画面に切り替え、つなぎ直したら前の画面に戻す
+offline:
+  home: true
+# 電池：残り（%）の見積もりはまだ正確でないので、電池の電圧で決める。3.5 V を下回ったら知らせ、3.4 V を下回ったら
+# 60 秒後にデータを保存して電源を切る（キーかタッチで取りやめる）。Brainux では USB につないでも充電されないので、
+# USB の 5V があるあいだも同じにする（README の「充電」。充電は純正のファームウェアで行う）。電圧の記録（battery-log.csv）は既定で取る
+battery:
+  warn: 0 # 残り（%）では知らせない
+  critical: 0
+  warn_mv: 3500
+  poweroff_mv: 3400
+  poweroff_plugged: true
+# ふたを閉じたら画面を消し、タッチを受け付けない（開けたら元の画面に戻す）。閉じているあいだも時計やタイマーは進む
+lid:
+  close: off
+# 日本語の入力（uim-fep。フェーズ K2）：入っている方式（この Brain では anthy-utf8）を自動で使う。Brain のシェルでも使う。
+# 10 分使わなければ uim-fep を止める。使わないなら method: off（Brain の設定のアプリでも変えられる。上書き ime.method）
+ime:
+  method: auto
+  idle: 10m
+  terminal: true
+# 時刻：起動したとき、時刻が合っていなければ内蔵 RTC の時刻に合わせる（狂っていれば使わない）。
+# PC から時刻を合わせたら、RTC にも書き戻す（フェーズ R2）
+clock:
+  rtc: write
+display:
+  enabled: true
+  device: /dev/fb0

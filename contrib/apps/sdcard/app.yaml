@@ -1,0 +1,6 @@
+# SD カードの空きの内訳（brain-deck の自分で足すアプリの例。docs/apps.md）
+title: SD カード
+description: SD カードの空きと、おもな場所の大きさ（5 分ごと。タップで今すぐ）
+icon: files
+every: 5m
+timeout: 30s

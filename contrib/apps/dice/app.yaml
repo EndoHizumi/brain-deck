@@ -1,0 +1,6 @@
+# サイコロ（brain-deck の自分で足すアプリの例。docs/apps.md）
+title: サイコロ
+description: タップかスペースで振る。2 個、面の数、履歴
+icon: counter
+every: "off"
+keys: [space, enter, "2"]
