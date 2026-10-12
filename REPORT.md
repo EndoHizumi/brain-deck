@@ -44,7 +44,7 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 - 更新：文字を lefthand と組で入れ替え、`.prev` を残し、`--rollback` で一緒に戻す。初めて置いたときに失敗したら消す。新しい lefthand の `-check-fonts` で確かめる。入っていなくて Brain にもなければ注意。**中身が同じファイルは入れ替えない**（試験のデーモンで、2 回目の更新で `.prev` が同じ版に上書きされ、本当の前の版に戻れなくなるのを見つけて直した）。
 - mkupdate：`-ldflags "-s -w"` でビルドし、文字を入れる（`-fonts none` で入れない）。install.sh が文字を置く。brain-deck update の表示に文字と「.prev はそのまま」。
 - バックアップ：設定、データ、日本語入力の学習だけで、プログラムのファイル（lefthand、gadget-setup.sh、文字）は入れない。今までどおり。
-- 試験のデーモン（`/tmp/lhu`、`-font-dir /tmp/lhu/share`）：古いデーモンが文字の入った更新のファイルを断る、2 回に分けた更新、`--rollback` と戻し直し、`config put` 2 回、上書きの set と clear。読み物を明朝体で描けているかは、ユーザーに見てもらう（まだ）。
+- 試験のデーモン（`/tmp/lhu`、`-font-dir /tmp/lhu/share`）：古いデーモンが文字の入った更新のファイルを断る、2 回に分けた更新、`--rollback` と戻し直し、`config put` 2 回、上書きの set と clear。読み物の文字は、本番でユーザーがヘルプの画面（本文の明朝体）を開き、明朝体で出ていることを確かめた（2026-10-13 01:12 の写真）。
 - 再起動のあと：ssh、`brain-deck status`、USB のシリアル、usb0、画面（ホーム）、`systemctl --failed` 0 件。
 
 ### 元に戻す方法
