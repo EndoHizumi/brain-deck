@@ -216,7 +216,7 @@
 | contrib/profile.d/brain-terminal.sh | PC 用。端末モードでログインしたときに端末の大きさを合わせる |
 | contrib/brain/lefthand-ime.sh | Brain 用。Brain のシェルで uim-fep を通す（`/etc/profile.d/`） |
 | contrib/apps/ | 自分で足すアプリの例（sdcard、dice、load） |
-| contrib/boot/ | 起動を速くする案（boot-tune.sh、boot-measure.sh。適用していない） |
+| contrib/boot/ | 起動を速くする（boot-tune.sh の段階 1〜3、boot-measure.sh。本番に適用した） |
 | contrib/graph/linux-stats.sh | PC の CPU などをグラフに送る例 |
 | contrib/shortcuts/ | PC の OS のショートカットに割り当てるスクリプトの例 |
 | tools/mkupdate | 更新のファイルを作る |

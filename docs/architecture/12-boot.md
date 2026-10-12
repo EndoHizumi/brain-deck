@@ -8,13 +8,13 @@
 
 ```mermaid
 flowchart TD
-  K["カーネル（約 4 秒）"] --> FS["SD カードのマウント、sysinit、basic.target<br/>（ここまでで約 47 秒。CPU を取り合う）"]
+  K["カーネル（約 4 秒）"] --> FS["SD カードのマウント、sysinit、basic.target<br/>（ここまでで約 44 秒。CPU を取り合う）"]
   FS --> EG["ethernet_gadget.service<br/>drop-in で lefthand-gadget-setup を実行<br/>NCM + HID + ACM + ACM を作り、usb0 に 192.168.7.2"]
-  FS --> DBUS["dbus → NetworkManager → network.target"]
-  DBUS --> LY["ly（tty2 のログイン画面）"]
+  FS --> DBUS["dbus、ssh、logind、getty@tty1<br/>（NetworkManager は本番では止めている）"]
+  DBUS -. "ly を使うときだけ" .-> LY["ly（tty2 のログイン画面。本番では止めている）"]
   EG --> TTY["/dev/ttyGS0、/dev/ttyGS1、/dev/hidg0 ができる"]
   TTY --> SG["serial-getty@ttyGS0<br/>（console-setup.sh on のとき。デバイスができたら起動）"]
-  LY --> LH["lefthand.service<br/>After: ethernet_gadget、ly、getty@tty1"]
+  LY -.-> LH["lefthand.service<br/>After: ethernet_gadget、ly"]
   EG --> LH
   LH --> READY["/run/lefthand-ready<br/>ホーム画面、キーが PC に届く"]
 ```
@@ -22,14 +22,14 @@ flowchart TD
 | ユニット | ファイル | 役目 |
 | --- | --- | --- |
 | `ethernet_gadget.service`（Brainux のもの）+ drop-in | systemd/ethernet_gadget.service.d/lefthand.conf | `ExecStart` を `/usr/local/sbin/lefthand-gadget-setup` に置き換え、`RemainAfterExit=yes` |
-| `lefthand.service` | systemd/lefthand.service | `ExecStart=/usr/local/bin/lefthand /etc/lefthand/config.yaml`。`Wants`/`After=ethernet_gadget.service`、`After=ly.service getty@tty1.service`。`Restart=on-failure`、`ExecStopPost=-/usr/local/bin/lefthand -restore-console`、`KillSignal=SIGTERM`、`TimeoutStopSec=5` |
+| `lefthand.service` | systemd/lefthand.service | `ExecStart=/usr/local/bin/lefthand /etc/lefthand/config.yaml`。`Wants`/`After=ethernet_gadget.service`、`After=ly.service`（2026-10-12 に getty@tty1 を外した）。`Restart=on-failure`、`ExecStopPost=-/usr/local/bin/lefthand -restore-console`、`KillSignal=SIGTERM`、`TimeoutStopSec=5` |
 | `serial-getty@ttyGS0.service`（systemd のもの）+ drop-in | systemd/serial-getty@ttyGS0.service.d/lefthand.conf | `TERM=xterm-256color`、`TTYReset=no`、agetty の `--wait-cr`（Enter が届くまでログイン画面を出さない）。console-setup.sh が enable と `dev-ttyGS0.device.wants` のリンクを置く |
 | `lefthand-update`（一時的なユニット） | なし（`systemd-run` で作る） | 更新、再起動、復元の係（[11.](11-maintenance.md)） |
 
 - `Wants=` なので、ガジェットの作成が失敗しても lefthand は起動する（HID への書き込みの失敗は中で吸収する）。
-- lefthand は ly のあとに起動する。ly は起動するときに tty2 へ切り替えるので、lefthand が先に専用の VT を取っても画面を取られる（REPORT.md のフェーズ K4。「lefthand を ly より先に起動する案は取らない」）。
-- 実機の測った値（2026-10-12、REPORT.md のフェーズ K4）：kernel 4.0 秒 + userspace 76.6 秒 = 約 80 秒。ly が約 73 秒、lefthand の起動が約 77 秒、シリアルで答えるのが約 82 秒。CPU が 1 つなので、並んで起動するサービスが CPU を取り合う。
-  起動を速くする案（止めてよいサービス）は contrib/boot/boot-tune.sh に用意してあるが、**まだ適用していない**（README の「Brain の起動を速くする」）。
+- ly を使うときは、lefthand は ly のあとに起動する。ly は起動するときに tty2 へ切り替えるので、lefthand が先に専用の VT を取っても画面を取られる。tty1 の getty は VT を切り替えないので待たない（getty@tty1 は network.target などのあとで、待つと遅くなる）。
+- **本番の Brain は、contrib/boot/boot-tune.sh の段階 1〜3 を適用している**（2026-10-12）。止めたのは accounts-daemon、udisks2、e2scrub_reap、triggerhappy、avahi（段階 1）、NetworkManager、timesyncd、networking、apt-daily のタイマー（段階 2）、ly（段階 3）。記録は `/etc/lefthand/boot-tune.state`、戻すのは `boot-tune.sh revert [段階]`。lefthand が待つのは ethernet_gadget だけで、ly がないので、lefthand を止めると tty1（Enter で `brain login:`）。
+- 実機の測った値（2026-10-12、boot-measure.sh）：前は kernel 4.0 秒 + userspace 80.2 秒 = 84.2 秒、lefthand の準備 86.1 秒。段階 3 のあとは 4.0 + 55.3 = 59.3 秒、lefthand の起動 57.9 秒、準備 69.8 秒。残る遅れは、lefthand の exec から準備までの約 12 秒（ふだんは 2〜5 秒。ほかのサービスと同時に起動して取り合っていると思われる）。README の「Brain の起動を速くする」。
 
 ## デーモンの中の順（main.go の `main`）
 
