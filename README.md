@@ -35,6 +35,7 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 - **ヘルプ**：使い方の説明を、Brain の画面で読む（デーモンに入っていて、版と合う）。
 - **ふた**：ふたを閉じたら画面を消し、タッチを受け付けず、描き直しも止める。開けたら元の画面に戻す。画面を裏返したタブレットの形のあいだは、本体のキーを使わない（`lid`）。
 - **バックアップと復元**：Brain の設定ファイルとデータ（Todo、メモ、読み物、写真、背景画像、上書きの値、日本語入力の学習など）を 1 つのファイルにして PC に残し（`brain-deck backup`。同期のときに自動でも取る）、Brain に戻す（`brain-deck restore`。失敗したら元に戻す）。SD カードを入れ直したあとにも戻せる。
+- **自分で足すアプリ**：Brain に置いたスクリプト（sh だけで書ける）の出力を、セルに描く（`widget: app`）。文字、色、一覧、進み具合の帯、ボタン、文字の入力（日本語も）を簡単な形で書け、タップやボタンやキーはスクリプトに渡る。Brain の user として、時間とメモリの上限を付けて動かす（[自分で足すアプリ](#自分で足すアプリ)、[docs/apps.md](docs/apps.md)）。
 - **PC ごとの設定**：PC の brain-deck が、つないだときに PC の名前を知らせ、Brain は名前ごとの設定（最初に開くアプリ、Mac 用の修飾キーの入れ替え、キーやセルの違い、ホーム画面の並び）を重ねる（`profiles`）。手でも選べる。
 
 設定に `home` を書かなければ、今までどおり左手デバイス（base のレイヤー）から始まる。
@@ -63,14 +64,15 @@ Brain 上の Brainux で動くデーモン **lefthand** と、PC で動くコマ
 19. [タッチのキャリブレーション](#タッチのキャリブレーション)
 20. [設定のアプリとヘルプ、ふた](#設定のアプリとヘルプふた)
 21. [バックアップと復元、PC ごとの設定](#バックアップと復元pc-ごとの設定)
-22. [Brain の起動を速くする](#brain-の起動を速くする)
-23. [日常の操作](#日常の操作)
-24. [シリアルコンソール](#シリアルコンソール)
-25. [端末モード](#端末モード)
-26. [画面とコンソール](#画面とコンソール)
-27. [困ったとき](#困ったとき)
-28. [開発](#開発)
-29. [フォントとライセンス](#フォントとライセンス)
+22. [自分で足すアプリ](#自分で足すアプリ)
+23. [Brain の起動を速くする](#brain-の起動を速くする)
+24. [日常の操作](#日常の操作)
+25. [シリアルコンソール](#シリアルコンソール)
+26. [端末モード](#端末モード)
+27. [画面とコンソール](#画面とコンソール)
+28. [困ったとき](#困ったとき)
+29. [開発](#開発)
+30. [フォントとライセンス](#フォントとライセンス)
 
 ## 仕組み
 
@@ -481,6 +483,8 @@ layers:
 | images/index.json | 背景画像の名前（元のファイル名など）、大きさ、SHA-256、足した時刻、送った側 |
 | overrides.json | Brain の設定のアプリで変えた上書きの値（明るさ、暗くなるまで、フォトフレーム、ふた）。設定ファイルの値の代わりに使う。上書きがなければファイルはない（[設定のアプリとヘルプ、ふた](#設定のアプリとヘルプふた)） |
 | profile.json | PC ごとの設定の状態（最後に名乗った PC、手で選んだプロファイル）。PC が名乗るか手で選ぶまでファイルはない（[PC ごとの設定](#pc-ごとの設定profiles)） |
+| apps/&lt;名前&gt;/ | 自分で足したアプリ（app.yaml とスクリプト。root のもの。`brain-deck app install`。[docs/apps.md](docs/apps.md)） |
+| apps-data/&lt;名前&gt;/ | アプリが書ける場所（user のもの。`BRAIN_APP_DATA`）。アプリを消すと消える |
 | backup/ | バックアップを渡すあいだの一時ファイルと、復元の前の状態（`before-restore.tar.gz`。`brain-deck restore --undo` で戻す）。root だけが読める（0700） |
 
 - **書き込み**：一時ファイルに書いて rename する。SD カードへの書き込みは数秒かかることがあるので、通信の返事は書き込みを待たずに返す。続けて書き換えたときは、まとめて 1 回書く。
@@ -2100,6 +2104,25 @@ profiles:
 6. 日本語入力：Todo を足す欄は［かな］で開き、「時刻合わせ」の欄は［英数］で開く（Todo の欄で英数にしてから閉じても、次はかなで開く）。
 7. ふたを閉じて 1 分以上たってから開ける：状態の帯の時計が今の時刻になっている（閉じているあいだは描き直さない）。画面を裏返したタブレットの形のあいだ、本体のキーを押しても何も起きない（タッチは効く）。
 
+## 自分で足すアプリ
+
+Brain に置いたスクリプトの出力を、セルに描く（フェーズ K5）。詳しい書き方は [docs/apps.md](docs/apps.md)。
+
+```sh
+brain-deck app install contrib/apps/dice     # フォルダ（app.yaml とスクリプト）を Brain の /var/lib/lefthand/apps/dice/ に置く
+brain-deck app list                          # 置いてあるアプリと、動きの様子
+brain-deck app rm dice                       # 消す（アプリが書いたデータも）
+```
+
+- **セル**：`{widget: app, name: dice}`。ホーム画面から開くには、そのセルを置いたレイヤーを作り、`home.apps` に足す。例の設定は [config/apps-example.yaml](config/apps-example.yaml)（本番の設定に、例の 3 つのアプリのレイヤーとホーム画面の 3 ページ目を足したもの）。
+- **出力**：ふつうの行は文字、`@title`、`@big`、`@color`、`@bar`、`@row`、`@item`、`@sep`、`@button`、`@input`、`@clear`。
+- **渡すもの**：タップ（`tap`）、ボタン（`button <id>`）、行（`item <id>`）、本体キー（`key <名前>`。`app.yaml` の `keys`）、文字（`input <id>`。入力欄で、日本語も）。interval は引数と標準入力、stream は標準入力の 1 行。
+- **動かし方**：`interval`（画面にあるあいだ `every` ごと。タップのときも）と `stream`（動き続け、1 行ごとに描き直す）。
+- **安全**：root ではなく Brain の user として動かす。メモリ、CPU の時間、ファイルの大きさ、プロセスの数に上限を掛け、時間（既定 10 秒）と出力（32 KiB）を超えたら止めて、セルの下に出す。同時に 3 つまで。入力と描画は待たない。フォルダの中はふつうのファイルだけ（リンクやほかの場所を指す名前は断る）。
+- **言語**：Brain には sh（dash）、bash、busybox、awk、perl、lua 5.1、python3 3.13 が入っている。python3 は起動に約 0.9 秒かかるので、よく動かすものは sh と awk がおすすめ（[docs/apps.md](docs/apps.md) の表）。
+- **設定 GUI**：「アプリ」のタブで一覧を見て消せる。セルの種類「ウィジェット」→「アプリ（自分で足す）」で名前を選ぶ。プレビューでは説明だけを描く。
+- **バックアップ**：`apps/` と `apps-data/` も入る。
+
 ## Brain の起動を速くする
 
 電源を入れてから使えるまで、約 80 秒かかる（フェーズ K4 で測った。2026-10-12、本番 8a09379808bb）。ほとんどは Brainux のサービスの起動で、lefthand 自身は 2〜5 秒。
@@ -2629,6 +2652,10 @@ Brain の画面は、tty2 のログイン画面（ly）と、tty1 の getty も�
 | lid.go | ふたの開け閉め（SW_LID。閉じたら画面を消し、タッチを捨て、描き直しを止める）、タブレットの形（SW_TABLET_MODE。本体のキーを使わない） |
 | backup.go | バックアップと復元（tar.gz を作る・確かめる、受け取って係に渡す、係が入れ替えて元に戻す） |
 | profile.go | PC ごとの設定（profiles を重ねる、修飾キーの入れ替え、PC の名前と手で選んだものの状態） |
+| apps.go、appsrun.go、appwidget.go | 自分で足すアプリ（置き場所と app.yaml、受け取り、user の権限と上限で動かす係、出力の決まり、セルの描き方、タップとキー） |
+| cmd/brain-deck/apps.go、contrib/apps/、docs/apps.md | brain-deck app、例のアプリ（sdcard、dice、load）、作り方 |
+| startup.go、splash.go | 起動の段階ごとの時間のログ、起動中の画面（フェーズ K4） |
+| contrib/boot/ | 起動を速くする案（boot-tune.sh、boot-measure.sh。[Brain の起動を速くする](#brain-の起動を速くする)） |
 | cmd/brain-deck/backup.go、profile.go | brain-deck backup、restore、profile、同期のバックアップ |
 | ime.go | 日本語の入力（uim-fep を user の権限で 2 行の端末に動かし、欄に貸す。Brain のシェルに渡す環境変数。uim.scm、inputrc、line.sh を作る） |
 | readfont.go | 読み物の文字（font/reader-*.lrf.gz）と、縦書きの文字の向き |
@@ -2947,6 +2974,8 @@ lefthand -update-apply plan.json             更新・再起動の係として�
          -unit name                          自分の systemd のサービス（省略すると /proc/self/cgroup から読む）
 lefthand -render-png out.png [config.yaml]   画面の見た目を PNG に書き出して終わる
          -render-layer name[:hold]           base に重ねるレイヤー（hold なら一時的な色）
+         -render-app name=file               widget: app のセルに、このファイル（スクリプトの出力）を描く
+         -render-profile name                状態の帯に、使っているプロファイルの名前を出す
          -render-pressed "列,行 ..."         押下中として描くセル
          -render-press-style border|fill     設定の display.press_style の代わりに使う見せ方
          -render-size 800x480                画面の大きさ

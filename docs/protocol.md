@@ -728,6 +728,23 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 - メモの JSON：`{"id":"m1","created":…,"updated":…,"pages":[{"w":776,"h":410,"strokes":[{"w":4,"p":[x0,y0,x1,y1,…]},{"w":20,"e":true,"p":[…]}]}]}`。`w`、`h` はページの大きさ（ドット）、線の `w` は太さ、`e` は消しゴム（紙の色で塗る）、`p` は点の列。描き方は `internal/ink`（丸いペン先を点と点のあいだに動かした跡）。
 - ない id は `not_found`。
 
+## 自分で足したアプリ（list_apps、delete_app）
+
+`/var/lib/lefthand/apps/<name>/` のアプリ（[docs/apps.md](apps.md)）。足すのは `upload_*` の `kind: app`（`name` はアプリの名前、中身はフォルダの中のファイルを並べた tar.gz。ふつうのファイルだけで、名前は英数字と `_ . -`。Brain が確かめてから入れ替え、`upload_end` の結果は `list_apps` の 1 つと同じ形）。使えないものは `rejected`。
+
+```json
+→ {"id":1,"cmd":"list_apps"}
+← {"id":1,"ok":true,"result":{"dir":"/var/lib/lefthand/apps","apps":[
+     {"name":"dice","title":"サイコロ","description":"…","icon":"counter","mode":"interval","every":"off","bytes":1820,"files":2,"last_run":"2026-10-12T10:00:00+09:00"},
+     {"name":"load","title":"Brain の負荷","mode":"stream","bytes":2101,"files":2,"status":"動いています"},
+     {"name":"broken","bytes":10,"files":1,"error":"not a usable app: app.yaml is missing"}]}}
+→ {"id":2,"cmd":"delete_app","app":"dice"}
+← {"id":2,"ok":true,"result":{"deleted":"dice"}}
+```
+
+- `status` は、動いているか、最後の知らせ（「止めました：時間の上限（10s）を超えました」など）。`error` は使えない理由。
+- `delete_app` は、アプリのデータ（`/var/lib/lefthand/apps-data/<name>/`）も消す。ないアプリは `not_found`。
+
 ## 読み物（list_reads、delete_read）
 
 読み物のアプリ（widget: reader）の読み物（`/var/lib/lefthand/reader/<id>.json.gz`）。足すのは `upload_*` の `kind: read`（brain-deck read add）。

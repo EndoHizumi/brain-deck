@@ -713,6 +713,19 @@ Brain だけで、よく変える設定を変える画面（`settingswidget.go`�
 - **道具**：真ん中をタップ（か BS）で、目次、最初のページ、困ったとき、文字の大きさ（24・32。読み物と同じ）、読みつづける。
 - **章と節**：`help/ja.md` の `# ` は章（新しいページから）、`## ` は節。下の帯に今の節の名前とページ。
 
+#### 自分で足すアプリ（app）
+
+Brain の `/var/lib/lefthand/apps/<name>/` に置いたアプリ（`app.yaml` とスクリプト。`brain-deck app install`）の出力を描く（`apps.go`、`appsrun.go`、`appwidget.go`）。項目は `name` だけで、ほかはアプリの `app.yaml` に書く。大きさは 1×1（レイヤー全体）がおすすめ。書き方は [docs/apps.md](apps.md)、例は [config/apps-example.yaml](../config/apps-example.yaml)。
+
+```yaml
+"0,0": { widget: app, name: dice }
+"1,0": { widget: app, name: sdcard, label: SD }   # 見出し（省略すると出力の @title か、app.yaml の title）
+```
+
+- **動かすとき**：セルが画面にあるあいだだけ。タップ、ボタン、文字（入力欄。日本語入力も）、`app.yaml` の `keys` の本体キー（このときは PC に送らない）は、スクリプトに渡す。
+- **置いていないアプリ**：「置かれていません」と描く（設定はエラーにしない。アプリを後から置ける）。使えないアプリ（app.yaml の書き間違いなど）は「使えません」と理由。
+- **プレビュー**：設定 GUI と `-render-png` は説明だけ描く（`-render-app <名前>=<出力のファイル>` で出力を描く）。
+
 #### 電池（battery）
 
 ```yaml
