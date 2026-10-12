@@ -60,7 +60,7 @@ USB ガジェットは NCM + HID + ACM + ACM の複合デバイスにしてあ�
 - `version` はデーモンをビルドした git のリビジョン（12 桁）。作業中の変更を含むと `+dirty` が付く。
 - `commands` は、このデーモンが受け付けるコマンド。コマンドを足しただけ（前の版の GUI もそのまま使える）のときは、`protocol` を上げない。GUI は、`set_time` があるときだけ時刻を合わせ、`get_text` があるときだけテキストを読み、`get_todo` があるときだけ Todo を読み、`get_calendar` があるときだけ予定を読み、`image_begin` があるときだけ背景画像を扱い、`get_qr`・`get_widgets` があるときだけ QR コードとストップウォッチなどの状態を読み、`get_graph` があるときだけグラフの値を読み、`set_rotate` があるときだけ「Brain もこの向きにする」を出す。brain-deck は、使うコマンドがなければ「lefthand を新しくしてください」で終わる。
 - `client`（省略可）は、つないだ側の名前。デーモンは `-v` のときログに出すだけ。
-- `upload_kinds` は、`upload_begin` で受け取れる種類（`update`、`image`、`weather_icon`）。この項目がなければ、`upload_*` がない版。
+- `upload_kinds` は、`upload_begin` で受け取れる種類（`update`、`image`、`photo`、`read`、`file`、`backup`、`app`、`weather_icon`。版によって少ないことがある）。この項目がなければ、`upload_*` がない版。
 
 ### get_config
 
@@ -685,6 +685,8 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 | `photo` | 768,008 バイト | `{"id":"<写真の id>","count":3,"max":10}`。800×480 か 480×800 の LHI1 だけ。`upload_begin` に `"of":"<横向きの写真の id>"` を付けると、その写真を縦向きに切り抜き直したもの（480×800 だけ）。枚数が `photo.max` に達していれば `quota_exceeded`、SD カードの空きが足りなければ `no_space`（同じ写真は数えない） |
 | `read` | 8 MiB | `{"id":"<読み物の id>","title":"…","chars":3127}`。gzip した読み物の JSON（下の「読み物」）。確かめて断るものは `bad_request`、合計が 32 MiB を超えるときは `quota_exceeded`、SD カードの空きが足りなければ `no_space` |
 | `backup` | 192 MiB | `{"restore":"<名前>","summary":{…}}`。復元するバックアップ（下の「バックアップと復元」）。確かめて断るものは `update_rejected` |
+| `file` | 64 MiB | 置いたファイル。`upload_begin` に `path`（置くフォルダ）と `name` を書く（下の「ファイル」） |
+| `app` | 2 MiB | `list_apps` の 1 つと同じ形。`upload_begin` に `name`（アプリの名前）を書く（下の「自分で足したアプリ」） |
 | `weather_icon` | 460,808 バイト | `{"name":"101-87x58","w":77,"h":58,"bytes":13406}`（消したものがあれば `removed`）。`name` は `<番号>-<幅>x<高さ>`（箱の大きさ）。形は上の `get_weather_icon` の `.lha` |
 
 - **順番**：`offset` は、それまでに受け取った大きさと同じでなければ `bad_request`（受け取りは続く）。言った大きさを超えたら捨てる。
@@ -850,7 +852,7 @@ Brain のデータが変わったことを、通知で知らせる。今は Todo
 
 - **backup_create**：`<data-dir>/backup/.out-<名前>.tar.gz` に作る（gzip は速さ優先）。作るあいだ返事を待たせる（2.5 MB のデータで 4 秒ほど）。まだ書いていない Todo、メモの線、しおりを先に書く。前に作ったものは消す。SD カードの空きが足りなければ `no_space`。
 - **backup_read**：96 KiB ずつ base64（`length` で小さくできる）。`total` までくり返す。`backup_done` か、10 分読まなければ消える。違う名前は `not_found`。
-- **ファイルの形**：`config/config.yaml`、`data/<名前>`（`todo.json`、`widgets.json`、`calc.json`、`display.json`、`overrides.json`、`touch-cal.json`、`profile.json`、`memo/…`、`reader/…`、`photos/…`、`images/…`）、`anthy/<名前>`、最後に `manifest.json`（`format`、`kind: brain-deck-backup`、`created`、`version`、`host`、`profile`、`files`（`path`、`bytes`、`sha256`））。
+- **ファイルの形**：`config/config.yaml`、`data/<名前>`（`todo.json`、`widgets.json`、`calc.json`、`display.json`、`overrides.json`、`touch-cal.json`、`profile.json`、`memo/…`、`reader/…`、`photos/…`、`images/…`、`apps/…`、`apps-data/…`）、`anthy/<名前>`、最後に `manifest.json`（`format`、`kind: brain-deck-backup`、`created`、`version`、`host`、`profile`、`files`（`path`、`bytes`、`sha256`））。
 - **受け取り**（kind: backup）：gzip と tar、名前（上のものだけ。`..`、`/` で始まる、`.` で始まる名前は断る）、manifest.json と中身の大きさと SHA-256、`.json` が JSON か、を確かめる。形の版が新しすぎれば断る。設定ファイルが今のデーモンで使えなければ `summary.problems` に書く（そのときは `items.config: false` でなければ restore_apply を断る）。確かめたものは 1 つだけ置く。
 - **restore_apply**：今の状態を `<data-dir>/backup/before-restore.tar.gz` に作り直してから、係（`lefthand-update`）を起動して返事をする。係は lefthand を止め、`<data-dir>/backup/.restore-new` に展開し、データの置き場所の上のものを入れ替え（前のものは `.restore-old` へ。バックアップにないものも動かす）、設定ファイルを書き（前の版は `.prev`）、学習を `ime.user` の `~/.anthy` に user の持ち物で書く。起動、`-ready-file`、`update_confirm` を `update_*` と同じに待ち、満たされなければ元に戻して起動し直す（`rolled_back`）。`.restore-old` が残っていれば（途中で止まった復元）、断る。`undo: true` は before-restore.tar.gz を戻す（戻す前に、今の状態を before-restore.tar.gz に作り直す）。`items` を省略するとすべて戻す。
 - **get_status の backup**：`{"items":[…],"before_restore":{"at":"…","bytes":…}}`（before_restore は、あるときだけ）。
