@@ -6,6 +6,51 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：フェーズ K7　実行ファイルを小さくする（2026-10-12 夜〜10-13、ユーザーあり）
+
+### 本番の状態（終わったとき）
+
+- デーモン **5c08f95ede53**（`.prev` 7a97a93e5130）。読み物の本文の文字を `/usr/local/share/lefthand/reader-24.lrf.gz`、`reader-32.lrf.gz` に置いた（`lefthand -check-fonts` で ok）。PC の brain-deck も新しい版。
+- 入れ方：本番の 7a97a93e5130 は知らないファイルの入った更新のファイルを断るので、`mkupdate -fonts none`（3.2 MB）で 5c08f95ede53 にし、文字の入ったもの（5.6 MB）をもう一度送った。2 回目は実行ファイルが同じなので入れ替えず、`.prev` は 7a97a93e5130 のまま。
+
+### 大きさの内訳（13.4 MB）
+
+| 中身 | 大きさ |
+| --- | --- |
+| コード（.text） | 3.9 MB（lefthand 自身は約 1.4 MB。yaml、encoding/json/v2、runtime など） |
+| 埋め込んだデータ（.noptrdata） | 2.8 MB（読み物の 32 ドット 1.53 MB、24 ドット 1.06 MB、k8x12 0.11 MB、ルビ、ヘルプ） |
+| 関数の表（.gopclntab） | 2.3 MB（Go の実行に要る） |
+| デバッグの情報（.debug_*、.symtab、.strtab） | 約 2.9 MB |
+| そのほか（.rodata、.go.type など） | 約 1.1 MB |
+
+`-s -w` で 10.4 MB、本文の文字を外に出して **7.9 MB**（−41%）。ルビ（12、16 ドット、約 30 KB）、k8x12、ヘルプは埋め込んだまま。
+
+### 起動の時間（変わらなかった）
+
+| | 7a97a93e5130（13.4 MB） | 5c08f95ede53（7.9 MB） |
+| --- | --- | --- |
+| SD カードから、ページキャッシュを捨てて `-version`（5 回） | 708〜728 ms | 706〜722 ms |
+| 試験のデーモンの exec から main まで | 約 0.67 秒 | 約 0.65〜0.68 秒 |
+| 起動のとき（段階 6）：exec から main まで | 2.6〜2.9 秒 | 2.7 秒 |
+| 起動のとき：「起動中」の画面 / 準備 / PC へのキー | 24.3〜24.4 / 26.4〜28.2 / 26.6〜27.9 秒 | 24.6 / 28.7 / 26.9 秒 |
+| 起動の合計 | 55.2〜57.6 秒 | 58.2 秒 |
+
+- Linux は実行ファイルを触ったページだけ読む。デバッグの情報はもともと読み込まれず（PT_LOAD にない）、本文の文字も読み物を開くまで触らないので、起動で読む量は変わらなかった。起動のときの exec から main までの 2.7 秒は、udev の coldplug や journald との取り合い。
+- 小さくした効き目は、SD カードの容量、更新のファイル（約 4 MB → 3.2 MB。文字を入れて 5.6 MB）、`.prev` の大きさ。
+
+### 変えたこと（f938146、cd0e985、5c08f95、HEAD）
+
+- readfont.go：本文の文字は `-font-dir`（既定 `/usr/local/share/lefthand`）から、読み物を開いたときに読む。なければ k8x12 で描く（PC ではリポジトリの font/ も見る）。`-check-fonts`。`-version` に `reader_fonts`。
+- 更新：文字を lefthand と組で入れ替え、`.prev` を残し、`--rollback` で一緒に戻す。初めて置いたときに失敗したら消す。新しい lefthand の `-check-fonts` で確かめる。入っていなくて Brain にもなければ注意。**中身が同じファイルは入れ替えない**（試験のデーモンで、2 回目の更新で `.prev` が同じ版に上書きされ、本当の前の版に戻れなくなるのを見つけて直した）。
+- mkupdate：`-ldflags "-s -w"` でビルドし、文字を入れる（`-fonts none` で入れない）。install.sh が文字を置く。brain-deck update の表示に文字と「.prev はそのまま」。
+- バックアップ：設定、データ、日本語入力の学習だけで、プログラムのファイル（lefthand、gadget-setup.sh、文字）は入れない。今までどおり。
+- 試験のデーモン（`/tmp/lhu`、`-font-dir /tmp/lhu/share`）：古いデーモンが文字の入った更新のファイルを断る、2 回に分けた更新、`--rollback` と戻し直し、`config put` 2 回、上書きの set と clear。読み物を明朝体で描けているかは、ユーザーに見てもらう（まだ）。
+- 再起動のあと：ssh、`brain-deck status`、USB のシリアル、usb0、画面（ホーム）、`systemctl --failed` 0 件。
+
+### 元に戻す方法
+
+- `brain-deck update --rollback`（7a97a93e5130。文字を埋め込んだ版なので、`/usr/local/share/lefthand/` は残っても使わない）。
+
 ## 追記：フェーズ K6　起動をさらに速くする（2026-10-12 夕〜夜、ユーザーあり）
 
 ### 本番の状態（終わったとき）
