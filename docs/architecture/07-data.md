@@ -83,6 +83,7 @@ Brain の上で lefthand が読み書きするファイル。3 つに分けて�
 | --- | --- | --- |
 | `/usr/local/bin/lefthand`（と `.prev`） | デーモン。`.prev` は 1 つ前の版 | install.sh、更新の係 |
 | `/usr/local/sbin/lefthand-gadget-setup`（と `.prev`） | gadget-setup.sh | install.sh、更新の係 |
+| `/usr/local/share/lefthand/reader-24.lrf.gz`、`reader-32.lrf.gz`（と `.prev`） | 読み物の本文の文字（フェーズ K7 から lefthand に埋め込まない。`-font-dir`）。プログラムの一部なので、バックアップには入れない | install.sh、更新の係 |
 | `/etc/systemd/system/lefthand.service`、`ethernet_gadget.service.d/lefthand.conf`、`serial-getty@ttyGS0.service.d/lefthand.conf` | systemd のユニットと drop-in | install.sh、console-setup.sh |
 | `/etc/profile.d/lefthand-ime.sh` | Brain のシェルで uim-fep を通す | install.sh |
 | `/home/user/` | ファイルエクスプローラの既定の場所（見る、消す、PC から足す） | ユーザー |

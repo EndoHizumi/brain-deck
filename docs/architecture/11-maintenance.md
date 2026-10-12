@@ -33,7 +33,7 @@ flowchart TD
 
 ### 更新のファイル
 
-`go run ./tools/mkupdate -bin <lefthand> -version <版> -o <名前>.update.tar.gz` で作る。中身は `manifest.json`（形の版、版、ファイルごとの SHA-256）、`lefthand`（ARMv5 の実行ファイル）、`gadget-setup.sh`。
+`go run ./tools/mkupdate -bin <lefthand> -version <版> -o <名前>.update.tar.gz` で作る。中身は `manifest.json`（形の版、版、ファイルごとの SHA-256）、`lefthand`（ARMv5 の実行ファイル。`-ldflags "-s -w"` でビルドする）、`gadget-setup.sh`、読み物の本文の文字（`reader-24.lrf.gz`、`reader-32.lrf.gz`。フェーズ K7 から。`-fonts none` で入れない）。文字は lefthand と組で `/usr/local/share/lefthand/` に入れ替え、`.prev` を残す（`--rollback` で一緒に戻す。初めて置いたときに失敗したら消す）。新しい lefthand の `-check-fonts` で確かめ、入っていなくて Brain にもなければ注意を返す。K7 より前のデーモンは知らないファイルの入った更新のファイルを断るので、K7 にする最初の一度は、文字なしと文字ありの 2 回に分けて送る。
 
 ### 流れ
 

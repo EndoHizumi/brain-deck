@@ -115,11 +115,11 @@ PC のブラウザ（設定 GUI） ←─ USB シリアル ─→ /dev/ttyGS1（
 PC で、ARMv5（ARM926EJ-S）向けにクロスコンパイルする。
 
 ```sh
-GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -o lefthand
+GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o lefthand
 go test ./...
 ```
 
-できる実行ファイルは約 13 MB（読み物の明朝体を含む。2026-10-12 のコードでビルドした値）で、フォントも含めてこれ 1 つで動く。
+できる実行ファイルは約 7.9 MB（2026-10-12 のコードでビルドした値）。`-ldflags "-s -w"` はデバッグの情報を入れない（約 3 MB 小さくなる。パニックのときのスタックトレースの関数名と行番号は残る）。画面の文字（k8x12）と読み物のルビは埋め込むが、読み物の本文の明朝体（`font/reader-24.lrf.gz`、`reader-32.lrf.gz`。合わせて 2.6 MB）は別のファイルで、install.sh が `/usr/local/share/lefthand/` に置き、`brain-deck update` が lefthand と組で入れ替える（フェーズ K7。なければ読み物は k8x12 で描く）。
 
 ## インストール
 
@@ -128,14 +128,14 @@ go test ./...
 **SD カードに直接入れる**：Brainux を書いた SD カードを PC に挿し、ルートのパーティションがマウントされた場所を `--root` に書く。ファイルを置き、lefthand.service を有効にする（`/boot` には触らない）。SD カードを Brain に戻して起動すれば、USB キーボードとして動き、brain-deck で操作できる。
 
 ```sh
-GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -o lefthand
+GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o lefthand
 sudo sh install.sh --root /media/$USER/rootfs     # rootfs はルートのパーティションの名前（環境による）
 ```
 
 **ssh で入れる**：PC から Brain にファイルを送り、Brain 上で install.sh を実行する。
 
 ```sh
-scp -r lefthand config.yaml install.sh gadget-setup.sh console-setup.sh systemd contrib brain:lefthand/
+scp -r lefthand config.yaml install.sh gadget-setup.sh console-setup.sh systemd contrib font brain:lefthand/
 ssh brain 'cd ~/lefthand && sudo sh install.sh'
 ```
 
@@ -144,6 +144,7 @@ install.sh は次のファイルを配置し、`systemctl daemon-reload` を行�
 | 手元のファイル | Brain 上の配置先 |
 | --- | --- |
 | lefthand | /usr/local/bin/lefthand |
+| font/reader-24.lrf.gz、font/reader-32.lrf.gz | /usr/local/share/lefthand/（読み物の本文の文字。lefthand の `-font-dir`） |
 | gadget-setup.sh | /usr/local/sbin/lefthand-gadget-setup |
 | config.yaml | /etc/lefthand/config.yaml（まだ無いときだけ） |
 | systemd/ethernet_gadget.service.d/lefthand.conf | /etc/systemd/system/ethernet_gadget.service.d/ |
@@ -1454,7 +1455,7 @@ Brainux は内蔵 RTC を使っていないので、lefthand が起動したと�
 一度 lefthand を入れたあとは（[インストール](#インストール)。SD カードに直接入れれば、最初から ssh は要らない）、USB のシリアルだけで、更新、再起動、ログ、設定の読み書きができる。どれも Brain の画面での確認はしない（USB でつながっていることを、手元の PC からの操作とみなす）。そのかわり、失敗したら戻せるようにしてある。
 
 ```sh
-go run ./tools/mkupdate                      # ARMv5 向けにビルドし、lefthand-<版>.update.tar.gz を作る（約 4 MB）
+go run ./tools/mkupdate                      # ARMv5 向けに -ldflags "-s -w" でビルドし、lefthand-<版>.update.tar.gz を作る（約 5.5 MB。読み物の文字を含む）
 brain-deck update lefthand-<版>.update.tar.gz   # 送る → Brain で確かめる → 入れ替える → つなぎ直して確かめる
 brain-deck update --rollback                 # 前の版に戻す（もう一度実行すると、戻す前の版になる）
 brain-deck update --status                   # 今の版、前の版があるか、最後の更新の結果
@@ -1471,7 +1472,10 @@ brain-deck poweroff                          # Brain の電源を切る
 
 ### 更新（update）
 
-lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタを同じにしておく必要があるので、いつも**組で**入れ替える。更新のファイル（`tools/mkupdate` が作る tar.gz）には、`manifest.json`、`lefthand`、`gadget-setup.sh` が入っている。
+lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタを同じにしておく必要があるので、いつも**組で**入れ替える。更新のファイル（`tools/mkupdate` が作る tar.gz）には、`manifest.json`、`lefthand`、`gadget-setup.sh` と、読み物の本文の文字（`reader-24.lrf.gz`、`reader-32.lrf.gz`。フェーズ K7 から）が入っている。
+
+- **読み物の文字**：lefthand と組で `/usr/local/share/lefthand/`（`-font-dir`）に入れ替え、`.prev` も残す（`--rollback` で一緒に戻す。初めて置いたときに失敗したら消す）。新しい lefthand の `-check-fonts` で確かめる。文字の入っていない更新のファイルも受け付けるが、新しい lefthand が文字を別のファイルに置く版で、Brain にもなければ注意を出す（読み物は k8x12 で描かれる）。
+- **K7 より前のデーモンに送るとき**：K7 より前のデーモンは、知らないファイル（文字）の入った更新のファイルを断る。最初に `go run ./tools/mkupdate -fonts none` で文字なしの更新のファイルを送って K7 のデーモンにし、もう一度、文字の入ったものを送る（2 回目は同じ版で、文字だけが入る）。
 
 1. **送る**：brain-deck が 96 KiB ずつ送る（実機で 4.3 MB を 6.8 秒）。途中で切れたら、Brain は受け取ったものを捨てる。
 2. **確かめる**（まだ何も変えない）：SHA-256（全体と manifest のファイルごと）、新しい lefthand を実際に `-version` で実行して manifest の版と同じか（CPU の種類が違えばここで分かる）、`-check-gadget` で新しい lefthand のディスクリプタと gadget-setup.sh のものが同じか、`-check` で今の設定を新しい lefthand が読めるか、`bash -n`。gadget-setup.sh が変わるときは、`GADGET_CHECK=1` で USB の付け直しが要るかを調べる。brain-deck は結果（版、gadget-setup.sh が変わるか、付け直しが要るか、その理由）を出す。`--dry-run` ならここで消して終わる。
@@ -2064,7 +2068,7 @@ SD カードが壊れたときや、新しい SD カードに Brainux を書き�
 1. 前もって、PC にバックアップを取っておく（`brain-deck backup`、または同期で自動で取ったもの。`brain-deck backup list`）。
 2. Brainux を SD カードに書き、PC に挿して、[インストール](#インストール)の「SD カードに直接入れる」のとおり入れる：
    ```sh
-   GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -o lefthand
+   GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o lefthand
    sudo sh install.sh --root /media/$USER/rootfs
    ```
 3. SD カードを Brain に戻して起動する。Brain が USB キーボードとして動き、`brain-deck status` が答えることを確かめる（設定は例の設定）。
@@ -2148,7 +2152,7 @@ brain-deck app rm dice                       # 消す（アプリが書いたデ
 
 - 時刻は systemd の monotonic（`systemctl show -p ExecMainStartTimestampMonotonic` など）と、lefthand の `startup:` の行の内訳から計算した。journal の時刻は、journald が起動する前の行（約 20 秒まで）で数秒ずれる。boot-measure.sh の「起動中の画面」は journal の時刻を使うので、段階 4 からは数秒大きく出る。
 - **起動の最初の部分**（段階 3 のとき）：カーネル 3.2 秒（ドライバはすべて組み込み。モジュールはない）→ systemd の準備 4〜7.6 秒（generator 2.5 秒）→ 最初のマウント、fake-hwclock、modprobe@ が 4 つ（空振りなのに 1 つ約 5 秒）、journald の起動（9 秒）、remount-fs（20 秒に終わる）→ udev の coldplug（16.5〜30 秒）とデバイスの処理（32〜46 秒。内蔵の eMMC も調べる）、journal-flush（25〜34 秒、116 MB のジャーナル）→ SD カードの boot 区画 46 秒 → basic.target 50.6 秒 → ethernet_gadget 9.6 秒 → lefthand 60.9 秒。lefthand に要るもの（入力、フレームバッファ、VT、ルートの区画の /etc と /var/lib）は最初からあるので、段階 4 で basic.target を待たないようにした。
-- **lefthand の約 9 秒**（exec から準備）：exec から main まで 2.6〜2.9 秒、設定の読み込み 3.1〜3.4 秒など。udev の coldplug と同じ時刻に動くための取り合い。段階 3 までの約 12 秒は、exec から main までが 8.8 秒（logind、ssh、brain-config と同時に、13 MB の実行ファイルを読んでいた）。
+- **lefthand の約 9 秒**（exec から準備）：exec から main まで 2.6〜2.9 秒、設定の読み込み 3.1〜3.4 秒など。udev の coldplug と同じ時刻に動くための取り合い。段階 3 までの約 12 秒は、exec から main までが 8.8 秒（logind、ssh、brain-config と同時に、13 MB の実行ファイルを読んでいた。フェーズ K7 で 7.9 MB にした）。
 
 ### 測った結果（2026-10-12、段階 1〜3。contrib/boot/boot-measure.sh）
 
@@ -2768,7 +2772,7 @@ Brain の画面は、tty2 のログイン画面（ly。本番の Brain では止
 | config/media-example.yaml | メディアキーと F13〜F24 の例（current.yaml に「メディア」と「F13〜F24」のレイヤーを足したもの） |
 | config/pda-example.yaml | 「PC のための手元の PDA」の例（ホーム画面、状態の帯、縦向きの格子、画面の向きのセル、PC から外したとき、Todo 追加と時刻合わせ、電池、内蔵 RTC。gadgets-example.yaml に月、天気、電卓、グラフ、マウス、発表、メモ、端末、本体のレイヤーを足したもの） |
 | config/gadgets-example.yaml | 電池、ストップウォッチ、ポモドーロ、カウンター、QR コード、在席ランプと、自動減光の例（widgets-example.yaml に「道具」と「共有」のレイヤーと backlight を足したもの） |
-| tools/mkupdate/ | brain-deck update で送る更新のファイル（manifest.json、lefthand、gadget-setup.sh の tar.gz）を作る |
+| tools/mkupdate/ | brain-deck update で送る更新のファイル（manifest.json、lefthand、gadget-setup.sh、読み物の文字の tar.gz）を作る |
 | config/shortcuts-example.yaml | コマンドのショートカットの例（current.yaml に「コマンド」のレイヤーを足したもの。F14〜F18、Ctrl + F14〜F16、結果のタイル） |
 | contrib/shortcuts/ | PC 用。OS のショートカットに割り当てるスクリプトの例（brain-deck exec でビルド、サービスの再起動） |
 | tools/record-touch.sh | トラックパッドの調整のために、動きごとにタッチを記録する（Brain で実行） |
@@ -3013,7 +3017,7 @@ sudo systemctl daemon-reload
 sudo systemd-run --unit=lefthand-hwtest-end --on-active=20min /bin/sh -c "systemctl stop lefthand-hwtest; systemctl start lefthand.service"
 sudo systemctl start lefthand-hwtest
 # PC：版を変えてビルドし、更新のファイルを作って送る
-GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=hwtest-b" -o lefthand-b .
+GOOS=linux GOARCH=arm GOARM=5 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=hwtest-b" -o lefthand-b .
 go run ./tools/mkupdate -bin lefthand-b -version hwtest-b -o b.tar.gz && brain-deck update b.tar.gz
 ```
 
@@ -3033,6 +3037,8 @@ lefthand -dump-json [config.yaml]            layers の形にそろえた JSON �
 lefthand -restore-console                    残った専用 VT を元に戻して終わる
 lefthand -version                            版を JSON で書いて終わる（{"version":"…","update":1}。brain-deck update が新しい版を確かめる）
 lefthand -check-gadget gadget-setup.sh       gadget-setup.sh のディスクリプタが、この lefthand のものと同じかを確かめて終わる
+lefthand -check-fonts dir                    dir の読み物の文字（reader-24.lrf.gz、reader-32.lrf.gz）を、この lefthand で読めるかを確かめて終わる
+         -font-dir dir                       読み物の本文の文字を置く場所（既定 /usr/local/share/lefthand。brain-deck update もここに入れ替える）
 lefthand -update-apply plan.json             更新・再起動の係として動いて終わる（デーモンが systemd-run で起動する。手で使わない）
          -update-bin path                    brain-deck update で入れ替える lefthand（既定 /usr/local/bin/lefthand）
          -update-gadget path                 brain-deck update で入れ替える gadget-setup.sh（既定 /usr/local/sbin/lefthand-gadget-setup）

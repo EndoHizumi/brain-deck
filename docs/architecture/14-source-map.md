@@ -82,7 +82,7 @@
 | vt.go | 専用 VT の確保と、元の VT への復帰（`-restore-console`） |
 | splash.go | 起動中の画面（フェーズ K4） |
 | font.go | k8x12 フォントの埋め込みと字形 |
-| readfont.go | 読み物の明朝体（gzip で埋め込み、使うときに戻す）、縦書きの文字の向き |
+| readfont.go | 読み物の明朝体（ルビは埋め込み、本文は `-font-dir` の別のファイル。使うときに戻す。`-check-fonts`）、縦書きの文字の向き |
 | statusbar.go | 状態の帯 |
 | prompt.go | 画面の下に重ねる知らせと、文字を入れる欄（`Prompt`、`Overlay`） |
 | rotate.go | 画面の回転、向きの保存（`RotateStore`）、タッチの座標の変換（`touchMap`）、縦向きの格子 |
@@ -140,7 +140,7 @@
 | profile.go | PC ごとの設定 |
 | ime.go | 日本語の入力（uim-fep） |
 | term.go、termdraw.go、termkeys.go、termmode.go、termpty.go | 端末モード（[9.](09-terminal-ime-apps.md)） |
-| update.go、updatehelper.go | 更新、再起動、電源、ログ、入れ替えの係 |
+| update.go、updatehelper.go | 更新（lefthand、gadget-setup.sh、読み物の文字を組で）、再起動、電源、ログ、入れ替えの係 |
 | backup.go | バックアップと復元 |
 
 ### 内部のパッケージ
