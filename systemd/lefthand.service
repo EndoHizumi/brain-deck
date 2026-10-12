@@ -2,9 +2,11 @@
 Description=Brain left-hand device daemon (evdev -> USB HID keyboard)
 # ガジェット（NCM+HID+ACM）は ethernet_gadget.service の drop-in で作る。
 # Wants= なので、ガジェット作成が失敗しても本体は起動する
-# （hidg0 への書き込み失敗は内部で吸収する）
+# （hidg0 への書き込み失敗は内部で吸収する）。
+# ガジェットの作成は待たない（After= にしない。フェーズ K6）。/dev/hidg0 ができるまでは、PC から外れているときと
+# 同じに動き、できたら HID の形を読み直す（usbboot.go）。lefthand が gadget-setup.sh を動かすとき（USB の形の切り替え、
+# 端末モード）は、ethernet_gadget の gadget-setup.sh が終わるのを待ってから動かす
 Wants=ethernet_gadget.service
-After=ethernet_gadget.service
 # 画面は専用の VT（tty8）に描く。ly（tty2）は起動時に自分の VT へ切り替えるので、ly を使うときはそのあとに起動する。
 # ly を止めたとき（contrib/boot/boot-tune.sh の段階 3）は ly を待たない。tty1 の getty は VT を切り替えないので待たない
 # （getty@tty1 は network.target などのあとなので、待つと遅くなる）

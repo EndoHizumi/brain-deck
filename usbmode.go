@@ -41,15 +41,18 @@ type USBMode struct {
 	dev       string
 	script    string
 	switching bool
+	preparing bool                                                                 // 起動のときの USB の準備を待っている（usbboot.go）
 	terminal  bool                                                                 // 端末モード（構成の名前に terminal を付ける。termmode.go）
 	onChange  []func()                                                             // 切り替えたあと（画面の描き直し、トラックパッドの取り消し）
 	run       func(ctx context.Context, script string, mouse, terminal bool) error // テストで差し替える
 	unbind    func(ctx context.Context, script string) error                       // 切り離すだけ（テストで差し替える）
 	detect    func(dev string) HIDLayout
+	waitUnit  func() // gadget-setup.sh を動かす前に、ethernet_gadget の終わりを待つ（usbboot.go）
 }
 
 func NewUSBMode(s *State, hid *HIDWriter, dev, script string) *USBMode {
-	return &USBMode{s: s, hid: hid, dev: dev, script: script, run: runGadgetSetup, unbind: runGadgetUnbind, detect: detectHID}
+	return &USBMode{s: s, hid: hid, dev: dev, script: script, run: runGadgetSetup, unbind: runGadgetUnbind, detect: detectHID,
+		waitUnit: func() { waitGadgetUnitFor(script) }}
 }
 
 // OnChange は、切り替えたあとに呼ぶ関数を足す。
@@ -143,14 +146,11 @@ func (u *USBMode) applyHook(mouse bool, unbound func()) error {
 	start := time.Now()
 	u.s.releaseAll()
 	// 付け直しのあいだは、キーボードとマウスのレポートを書かせない（入力は、終わってから届く）
-	u.s.mu.Lock()
-	u.s.mouse.mu.Lock()
-	u.s.media.mu.Lock()
-	if u.s.pen == nil {
-		u.s.pen = NewPen(u.hid, 0)
-	}
-	u.s.pen.mu.Lock()
+	u.lockReports()
 	u.hid.Close()
+	if u.waitUnit != nil {
+		u.waitUnit()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	u.mu.Lock()
 	terminal := u.terminal
@@ -163,20 +163,8 @@ func (u *USBMode) applyHook(mouse bool, unbound func()) error {
 	}
 	err := u.run(ctx, u.script, mouse, terminal)
 	cancel()
-	l := u.detect(u.dev)
-	u.s.kbdID = l.KeyboardID
-	u.s.mouse.id = l.MouseID
-	u.s.mouse.on.Store(l.MouseID != 0)
-	u.s.mouse.held = map[string]byte{}
-	u.s.mouse.dirty = false
-	u.s.media.reset(l.MediaID)
-	u.s.pen.reset(l.PenID)
-	u.s.pen.mu.Unlock()
-	u.s.media.mu.Unlock()
-	u.s.active = map[string]Combo{}
-	u.s.dirty = true // 付け直したあとに、何も押していない状態を送る
-	u.s.mouse.mu.Unlock()
-	u.s.mu.Unlock()
+	l := u.reloadLayout() // 付け直したあとに、何も押していない状態を送る
+	u.unlockReports()
 	if err != nil {
 		log.Printf("usb: switching failed: %v", err)
 	}

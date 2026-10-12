@@ -1423,13 +1423,14 @@ func main() {
 	bootTrace.mark("clock")
 
 	// 入力デバイスを先に開く。失敗したら HID に何も送らずに終わる
-	kbd, err := openInput(cfg.Keyboard)
+	// 起動のときは、ドライバの読み込みが遅れることがあるので、少し待つ（ふだんはすぐ開ける。usbboot.go）
+	kbd, err := openInputWait(cfg.Keyboard, inputBootWait)
 	if err != nil {
 		log.Fatalf("open keyboard: %v", err)
 	}
 	var touch *evdev.InputDevice
 	if cfg.Touch != nil {
-		if touch, err = openInput(cfg.Touch.Device); err != nil {
+		if touch, err = openInputWait(cfg.Touch.Device, inputBootWait); err != nil {
 			log.Fatalf("open touch: %v", err)
 		}
 	}
@@ -1454,6 +1455,8 @@ func main() {
 	usb := NewUSBMode(s, hid, cfg.HIDDevice, *gadgetSetup)
 	usb.OnChange(pad.Cancel)
 	e.SetUSB(usb)
+	// USB の構成（ethernet_gadget.service）を待たずに起動したとき：/dev/hidg0 ができるまでは、PC から外れているときと同じに動く
+	usb.StartBoot(isCharDevice, usbBootPoll, usbBootLimit)
 	var curCfg atomic.Pointer[Config] // 今の設定（端末モードに入るときに terminal を読む）
 	curCfg.Store(cfg)
 	term := NewTermMode(curCfg.Load, usb, s, *gadgetSetup)
@@ -1728,6 +1731,9 @@ func main() {
 		// 画面が使えなくても入力は動かす
 		if cfg.displayEnabled() {
 			first := buildLayout(km, e.View())
+			if splash == nil {
+				waitDevice(cfg.Display.Device, inputBootWait) // 起動のとき、フレームバッファのドライバが遅れても画面を出す
+			}
 			d, err := StartDisplayFrom(splash, cfg.Display, first, widgetEnv, images)
 			splash = nil
 			bootTrace.mark("display")

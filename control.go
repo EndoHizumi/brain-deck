@@ -564,7 +564,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 	case "get_status":
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
-			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "usb_state": USBState()},
+			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "preparing": c.usb.Preparing(), "usb_state": USBState()},
 			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(), "sync": c.sync.Info(),
 			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "ime": c.ime.Info(), "overrides": c.store.Overrides(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()},
 			"profile": c.profileInfo(), "backup": c.backup.Info()})

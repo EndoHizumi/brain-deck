@@ -1200,6 +1200,7 @@ func restoreTerminal(script string) {
 	fmt.Sscanf(strings.TrimSpace(string(b)), "getty=%s active=%d", &getty, &on)
 	log.Printf("terminal: restoring after an unclean exit (getty %s, was active %v)", getty, on == 1)
 	mouse := detectHID("/dev/hidg0").MouseID != 0
+	waitGadgetUnitFor(script) // 起動のときなら、ethernet_gadget の gadget-setup.sh が終わるのを待つ
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := runGadgetSetup(ctx, script, mouse, false); err != nil {
 		log.Printf("terminal: %v", err)
