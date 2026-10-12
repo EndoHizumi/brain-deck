@@ -141,8 +141,13 @@ apply)
 			case $st in
 			enabled | enabled-runtime)
 				echo "$u $st" >>"$STATE"
-				$SYSTEMCTL disable "$u"
-				echo "止めた：$u（前は $st）"
+				# disable は、止まっていても 0 でない値を返すことがある（e2scrub_reap で起きた）。結果は is-enabled で確かめる
+				$SYSTEMCTL disable "$u" || true
+				now=$(is_enabled "$u")
+				case $now in
+				enabled | enabled-runtime) echo "止められませんでした：$u（今も $now）" >&2 ;;
+				*) echo "止めた：$u（前は $st、今は $now）" ;;
+				esac
 				;;
 			*)
 				echo "そのまま：$u（$st。もともと起動のときに動かない、またはない）"
@@ -161,8 +166,8 @@ revert)
 	if [ $# -eq 0 ]; then
 		while read -r u st; do
 			[ -n "$u" ] || continue
-			$SYSTEMCTL enable "$u"
-			echo "戻した：$u（$st）"
+			$SYSTEMCTL enable "$u" || true
+			echo "戻した：$u（$st、今は $(is_enabled "$u")）"
 		done <"$STATE"
 		mv "$STATE" "$STATE.reverted"
 		echo "記録は $STATE.reverted に移しました。効き目は再起動のあと"
@@ -179,8 +184,8 @@ revert)
 		[ -n "$u" ] || continue
 		case " $want " in
 		*" $u "*)
-			$SYSTEMCTL enable "$u"
-			echo "戻した：$u（$st）"
+			$SYSTEMCTL enable "$u" || true
+			echo "戻した：$u（$st、今は $(is_enabled "$u")）"
 			echo "$u $st" >>"$STATE.reverted"
 			;;
 		*) echo "$u $st" >>"$keep" ;;

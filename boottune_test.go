@@ -19,7 +19,7 @@ db=`+db+`
 echo "$*" >> `+filepath.Join(dir, "log")+`
 case $1 in
 is-enabled) s=$(grep "^$2 " $db | cut -d' ' -f2); [ -n "$s" ] && echo $s || { echo not-found; exit 1; }; [ "$s" = enabled ] ;;
-disable) sed -i "s/^$2 .*/$2 disabled/" $db ;;
+disable) sed -i "s/^$2 .*/$2 disabled/" $db; [ "$2" != e2scrub_reap.service ] ;; # 実機の e2scrub_reap は、止めても 1 を返した
 enable) sed -i "s/^$2 .*/$2 enabled/" $db ;;
 esac
 `), 0o755)
