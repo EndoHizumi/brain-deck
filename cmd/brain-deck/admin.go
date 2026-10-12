@@ -321,6 +321,12 @@ func runUpdate(o *options, stdout, stderr io.Writer) int {
 	msg := fmt.Sprintf("更新しました：lefthand %s（前の版 %s は .prev に残しました。戻すときは brain-deck update --rollback）", info.Version, info.CurrentVersion)
 	if info.Action == "rollback" {
 		msg = fmt.Sprintf("前の版に戻しました：lefthand %s（%s は .prev に残しました。もう一度 --rollback で戻せます）", info.Version, info.CurrentVersion)
+	} else if !info.BinChanged {
+		// 同じ実行ファイルは入れ替えないので、.prev はそのまま（読み物の文字だけを足す更新など）
+		msg = fmt.Sprintf("更新しました：lefthand %s（実行ファイルは同じなので入れ替えず、.prev はそのまま）", info.Version)
+		if len(info.Fonts) > 0 && info.FontsChanged {
+			msg += "。読み物の文字を入れ替えました"
+		}
 	}
 	if st.Rebound {
 		msg += "。USB を付け直しました"
