@@ -97,12 +97,14 @@ sequenceDiagram
 - 切り替えは USB の付け直しなので、2〜3 秒のあいだ、キー入力、SSH、シリアル（設定 GUI、brain-deck）が切れる。
 - 付け直すときに `/dev/hidg0` を開いたままだと、このカーネル（6.1）の f_hid は、そのあと ENXIO で開けなくなる。そのため lefthand が自分で閉じてから実行する（`LEFTHAND_SELF=1` を渡し、スクリプトに lefthand.service を止めさせない）。
   ほかから gadget-setup.sh を実行したときは、スクリプトが lefthand.service を止めてから付け直し、終わったら再開する（`/run/lefthand-gadget-restart` の印）。
+- **起動のときの USB の準備中**（フェーズ K6、usbboot.go）：lefthand は USB の構成を待たずに起動するので、`/dev/hidg0` がまだないことがある。そのあいだは「準備中」（`USBMode.preparing`）として、切り替えを断る（`Request` は `switching` と同じく `errUSBBusy`）。端末モードは待たせる。`/dev/hidg0` ができたら（0.25 秒ごとに見る。3 分まで）HID の形を読み直す（`StartBoot`、`reloadLayout`）。
+- lefthand が gadget-setup.sh を動かす前（形の切り替え、端末モード、端末モードの後始末）は、`ethernet_gadget.service` が `activating` のあいだ待つ（`waitGadgetUnit`。起動のときの gadget-setup.sh と同時に configfs を書き換えないように）。
 - ACM のファンクション自体は消さない（リンクを外して付け直すだけ）。`/dev/ttyGS0` と `/dev/ttyGS1` は同じ番号のまま残る。
 - 実装：usbmode.go の `USBMode.Request`、`applyHook`、`runGadgetSetup`。
 
 ## gadget-setup.sh の役目
 
-何度実行してもよい（冪等な）スクリプト。起動したときは `ethernet_gadget.service` の drop-in から、動いているあいだは lefthand から呼ばれる。
+何度実行してもよい（冪等な）スクリプト。起動したときは `ethernet_gadget.service` の drop-in から（本番では段階 4 の `boot-early.conf` で basic.target を待たずに。[12. 起動の流れ](12-boot.md)）、動いているあいだは lefthand から呼ばれる。起動のときは、ガジェットを作ってから最後に 1 回だけ UDC に付ける（付け直さない）。
 
 1. ガジェット `eth` がなければ、Brainux と同じ値で NCM だけのものを作る（`create_eth`）。
 2. HID と ACM（1 つ目）がリンクされていなければ足す（`add_hid_acm`）。足せなくても、NCM だけは残して SSH を使えるようにする。

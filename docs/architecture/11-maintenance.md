@@ -65,6 +65,7 @@ sequenceDiagram
 - **確かめ**（入れ替える前。update.go）：manifest の SHA-256、新しい lefthand の `-version`（manifest の版と同じか）、`-check-gadget`（新しい lefthand のディスクリプタと gadget-setup.sh のものが同じか）、`-check`（今の設定を新しい lefthand が読めるか）、`GADGET_CHECK=1`（USB の付け直しが要るか）。ここで断ったら何も変えない（`update_rejected`）。空きも確かめる（16 MiB か、ファイルシステムの 10% を残す）。
 - **入れ替えの係**：デーモンは自分を止められないので、別のユニット（`lefthand-update`）として、自分の実行ファイルを `-update-apply <plan.json>` で起動する。進み具合は `/var/lib/lefthand/update/state.json` に書き、`update_status` と `brain-deck logs` で見られる。
 - **自動で戻す**：新しいデーモンが 45 秒以内に起動を知らせない、版が違う、PC が 90 秒以内につなぎ直して `update_confirm` を送らない、確認のあと 2 秒以内に落ちた、のどれでも、前の版（と前の gadget-setup.sh）に戻して起動し直す。PC がつなぎ直せることまで確かめるのは、新しい版で USB やシリアルが壊れていたら、PC から直せなくなるため。
+- **中身が同じファイルは入れ替えない**（5c08f95）：SHA-256 が同じなら、そのファイルは置き換えず、`.prev` もそのまま残す（同じ gadget-setup.sh は実行もしない）。文字だけを足す 2 回目の更新で、`lefthand.prev` が今と同じ版に上書きされ、本当の前の版に戻れなくなったため。brain-deck は「.prev はそのまま」と出す。
 - **前の版に戻す**（`brain-deck update --rollback`）：`.prev` を「受け取ったもの」として同じ手順で入れ替える（今の版が `.prev` になる）。
 - **再起動**（`brain-deck restart`、`restart --usb`）も同じ係が行う。**電源**（`reboot`、`poweroff`）は 0.5 秒待って `systemctl` に頼む（返事を送り終えるため）。
 - brain-deck は、ポートが切れてもロック（ほかの brain-deck との順番待ち）は持ったまま、つなぎ直して結果を確かめる（cmd/brain-deck/admin.go の `session`、`redial`、`waitHelper`）。

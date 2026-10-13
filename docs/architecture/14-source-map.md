@@ -36,6 +36,8 @@
 | PC ごとの設定 | profile.go、apply.go（`Reprofile`）、cmd/brain-deck/profile.go、sync.go |
 | 設定の保存と反映 | apply.go（`configStore`）、main.go（`cstore` の `apply` と `light`） |
 | 更新、再起動 | update.go、updatehelper.go、tools/mkupdate、cmd/brain-deck/admin.go |
+| 読み物の文字の置き場所（`-font-dir`、`-check-fonts`） | readfont.go、update.go、install.sh、tools/mkupdate |
+| 起動を速くする段階（止めるサービス、drop-in） | contrib/boot/boot-tune.sh、boot-measure.sh、boottune_test.go |
 | バックアップと復元 | backup.go（`backupItems`）、updatehelper.go（`restore`）、cmd/brain-deck/backup.go |
 | 起動の順、起動中の画面 | main.go（`main`）、startup.go、splash.go、usbboot.go、systemd/、contrib/boot/ |
 | PC 側のポートの探し方、排他 | cmd/brain-deck/ports.go、os_linux.go、os_darwin.go、serial_unix.go、gui/src/ports.ts |
@@ -220,7 +222,7 @@
 | contrib/boot/ | 起動を速くする（boot-tune.sh の段階 1〜6、boot-measure.sh。本番に適用した） |
 | contrib/graph/linux-stats.sh | PC の CPU などをグラフに送る例 |
 | contrib/shortcuts/ | PC の OS のショートカットに割り当てるスクリプトの例 |
-| tools/mkupdate | 更新のファイルを作る |
+| tools/mkupdate | 更新のファイルを作る（`-ldflags "-s -w"` でビルドし、読み物の文字を入れる。`-fonts none` で入れない） |
 | tools/mkfont、tools/mkreadfont | フォントを埋め込みの形にする |
 | tools/mkbg | 例の背景画像を作る |
 | tools/fbshot.sh | Brain の画面を PC に PNG で取る |

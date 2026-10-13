@@ -45,6 +45,9 @@
 | **オフライン**、**PC から外したとき**（`offline`） | PC と通信していない状態（電源だけ、外れている）。PC に送るものを休みにする |
 | **PCなし** | オフラインのあいだ、PC に送るセルや PC から受け取るタイルに出す札 |
 | **USB の形**（`usb_mode`） | HID の形。「キーボードだけ」（ブートキーボード、起動したとき）か「キーボードとマウス」 |
+| **USB の準備中**（`preparing`） | 起動したときに、USB の構成（`/dev/hidg0`）がまだできていない状態。PC から外れているときと同じに動き、形の切り替えを断る（フェーズ K6） |
+| **段階**（起動を速くする） | contrib/boot/boot-tune.sh で選ぶ、起動を速くする変更のまとまり（1〜3 はサービスを止める、4 は lefthand と USB を早く起動する、5 は表示と udev、6 はジャーナル）。本番は 1〜6 を適用 |
+| **読み物の文字**（`-font-dir`） | 読み物の本文の明朝体（`reader-24.lrf.gz`、`reader-32.lrf.gz`）。フェーズ K7 から実行ファイルに埋め込まず、`/usr/local/share/lefthand/` に置く |
 | **同期**（`brain-deck sync`） | PC の名前、時刻、予定、天気、RSS、メモ、バックアップをまとめて行うこと |
 | **更新の係**、**入れ替えの係**（`lefthand -update-apply`、`lefthand-update`） | 更新、再起動、復元のときに、デーモンの代わりにサービスを止めて入れ替えるもの |
 | **更新のファイル**（`*.update.tar.gz`） | `tools/mkupdate` が作る、lefthand と gadget-setup.sh と manifest.json の組 |

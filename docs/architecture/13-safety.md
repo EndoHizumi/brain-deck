@@ -75,7 +75,7 @@
 | --- | --- | --- |
 | 設定の保存 | 反映に失敗したら、ファイルと動作を前の設定に戻す。前の版は `.prev` | apply.go |
 | 再起動が要る設定（`put_config_text` の restart） | 新しいデーモンが起動しなければ `.prev` に戻して起動し直す | updatehelper.go の `restoreConfig` |
-| 更新 | 起動しない、版が違う、PC がつなぎ直せない、すぐ落ちる、のどれでも前の版に戻す。`--rollback` でも戻せる | updatehelper.go |
+| 更新 | 起動しない、版が違う、PC がつなぎ直せない、すぐ落ちる、のどれでも前の版（lefthand、gadget-setup.sh、読み物の文字の組）に戻す。`--rollback` でも戻せる。中身が同じファイルは入れ替えず、`.prev` を上書きしない | updatehelper.go |
 | 復元 | 前の状態を `before-restore.tar.gz` に残す。起動しなければ元に戻す。`--undo` | backup.go、updatehelper.go |
 | タッチのキャリブレーション | 保存の前に確かめの画面。前のものは `.prev`。`--reset` で設定の値に戻る | calibui.go、touchcal.go |
 | USB の構成 | HID や ACM を足せなくても、NCM だけは残して SSH を使えるようにする。HID の形を変えられなくても、リンクは必ず元に戻す | gadget-setup.sh |

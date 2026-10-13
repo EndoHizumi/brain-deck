@@ -17,7 +17,7 @@ Brain の上で lefthand が読み書きするファイル。3 つに分けて�
 | `config.yaml` | 設定ファイル（YAML。docs/config.md） | 設定 GUI（`set_config`。コメントは消える）、`brain-deck config put`（`put_config_text`。コメントは残る）、手で編集、復元 | 設定 | 入る（`config/config.yaml`） |
 | `config.yaml.prev` | 1 つ前の設定ファイル。最後の保存の前の版だけ | 保存のたびに | 設定（戻すため） | 入らない |
 | `gadget.env` | gadget-setup.sh の環境変数（`HID_MOUSE=1`、`USB_WAKEUP`、`GADGET_MAX_POWER`）。なくてもよい | 手で | 設定 | 入らない |
-| `boot-tune.state` | contrib/boot/boot-tune.sh が止めたサービスの記録（`revert` で戻すため）。適用したときだけ | boot-tune.sh | 記録 | 入らない |
+| `boot-tune.state` | contrib/boot/boot-tune.sh が止めたサービス、置いたファイル、mask したものの記録（`revert` で戻すため）。本番では段階 1〜6 を適用している | boot-tune.sh | 記録 | 入らない |
 
 ## `/var/lib/lefthand/`（データ。lefthand の `-data-dir`）
 
@@ -86,6 +86,10 @@ Brain の上で lefthand が読み書きするファイル。3 つに分けて�
 | `/usr/local/share/lefthand/reader-24.lrf.gz`、`reader-32.lrf.gz`（と `.prev`） | 読み物の本文の文字（フェーズ K7 から lefthand に埋め込まない。`-font-dir`）。プログラムの一部なので、バックアップには入れない | install.sh、更新の係 |
 | `/etc/systemd/system/lefthand.service`、`ethernet_gadget.service.d/lefthand.conf`、`serial-getty@ttyGS0.service.d/lefthand.conf` | systemd のユニットと drop-in | install.sh、console-setup.sh |
 | `/etc/profile.d/lefthand-ime.sh` | Brain のシェルで uim-fep を通す | install.sh |
+| `/etc/systemd/system/lefthand.service.d/boot-early.conf`、`ethernet_gadget.service.d/boot-early.conf` | 段階 4：lefthand と USB の構成を basic.target より前に起動する（`DefaultDependencies=no`） | boot-tune.sh |
+| `/etc/systemd/system.conf.d/brain-deck-boot.conf`、`/etc/sysctl.d/90-brain-deck-console.conf`、`/etc/systemd/journald.conf.d/brain-deck.conf` | 段階 5 と 6：起動中の表示を減らす、コンソールに出すカーネルのログを減らす、ジャーナルを 32 MB まで | boot-tune.sh |
+| `/etc/udev/rules.d/` の 4 つ（triggerhappy、udisks2、e2scrub など） | 段階 5：止めたサービスの udev の規則を `/dev/null` へのリンクで隠す | boot-tune.sh |
+| `/etc/systemd/system/lefthand.service.prev`、`.prev2` | 本番で手で入れ替えたユニットの前の版（段階 3 の前と、K6 の前）。リポジトリにはない | 手で（REPORT.md のフェーズ K6） |
 | `/home/user/` | ファイルエクスプローラの既定の場所（見る、消す、PC から足す） | ユーザー |
 
 ## PC の側

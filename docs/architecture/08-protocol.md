@@ -122,7 +122,7 @@ sequenceDiagram
 | 分類 | コマンド |
 | --- | --- |
 | 設定 | `get_config`、`validate`、`set_config`、`get_config_text`、`put_config_text`、`get_keymap`、`get_overrides`、`set_override`、`clear_overrides` |
-| 状態 | `hello`、`get_status`、`get_logs`、`get_battery_log` |
+| 状態 | `hello`、`get_status`（`hid.preparing` は起動のときの USB の準備中）、`get_logs`、`get_battery_log` |
 | 切り替え | `set_usb_mode`、`set_terminal`、`set_rotate`、`set_pc`、`get_profile`、`set_profile`、`calibrate` |
 | データ（PC → Brain） | `set_time`、`set_text`、`set_qr`、`set_calendar`、`set_weather`、`add_graph`、`clear_graph`、`set_presence`、`set_sync` |
 | データ（読む・変える） | `get_text`、`get_qr`、`get_calendar`、`get_weather`、`get_weather_icon`、`get_widgets`、`get_graph`、`get_todo`、`todo_*` |
