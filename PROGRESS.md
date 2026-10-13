@@ -1,6 +1,6 @@
-# 進み具合（2026-10-11、2026-10-12）
+# 進み具合（2026-10-11〜2026-10-13）
 
-フェーズ R2 → G → H → I → P3 → J を順に行う。各フェーズの記録は REPORT.md の「追記：フェーズ …」。
+フェーズ R2 → G → H → I → P3 → J → R3 → K1〜K7 の順に行った。各フェーズの記録は REPORT.md の「追記：フェーズ …」。
 
 | フェーズ | 状態 | 本番への反映 |
 | --- | --- | --- |
@@ -15,18 +15,24 @@
 | K1 ふた、設定のアプリ、ヘルプ | 終わり（ふたと再起動のボタンも実機で確かめた） | デーモン a30ea9e82e31、設定 config/current.yaml（d79939f） |
 | K2 日本語の入力（uim-fep と Anthy） | 終わり（欄はキーの注入で実機で確かめた。Brain のシェルのログインはユーザーが確かめる） | デーモン e338b6168600、設定 config/current.yaml（e338b61）。Brain の /etc/profile.d/lefthand-ime.sh |
 | K3 バックアップと復元、PC ごとの切り替え（と、ふたの描き直し、タブレットの形、日本語入力の調整） | 終わり（ふた、タブレットの形、日本語入力、設定の並びはユーザーが実機で確かめた。バックアップと復元とプロファイルは試験のデーモンで確かめた） | デーモン 8a09379808bb、PC の brain-deck 8a09379808bb。設定は変えていない |
-| K4 起動を速くする（2026-10-12） | 終わり（起動中の画面と起動の時間のログ。段階 1〜3 を本番に適用し、84.2 → 59.3 秒、lefthand の準備 86.1 → 69.8 秒） | デーモン d18b7d39e6c6、boot-tune.sh の段階 1〜3、lefthand.service（getty@tty1 を待たない） |
+| K4 起動を速くする（2026-10-12） | 終わり（起動中の画面と起動の時間のログ。段階 1〜3 を本番に適用し、84.2 → 59.3 秒、lefthand の準備 86.1 → 69.8 秒） | デーモン d18b7d39e6c6、boot-tune.sh の段階 1〜3、lefthand.service（getty@tty1 を待たない。前は `.prev`） |
 | K5 自分でアプリを足す仕組み（2026-10-12） | 終わり（試験のデーモンで確かめた。上限を決めたとおりに直した。実機で見つけた 2 つの不具合を直した） | デーモン d18b7d39e6c6。本番の設定には入れない（例は config/apps-example.yaml） |
+| K6 起動をさらに速くする（2026-10-12 夕〜夜） | 終わり（lefthand が USB の構成を待たない。段階 4〜6 を本番に適用し、起動の合計 69.2 → 55.2 秒、PC へのキー 約 71 → 約 28 秒） | デーモン 7a97a93e5130、boot-tune.sh の段階 4〜6、lefthand.service（ethernet_gadget を待たない。前は `.prev2`） |
+| K7 実行ファイルを小さくする（2026-10-12 夜〜10-13） | 終わり（13.4 → 7.9 MB。読み物の本文の文字を別のファイルに。起動の時間は変わらなかった。本番のヘルプの明朝体はユーザーが確かめた） | デーモン 5c08f95ede53（2 回に分けて更新）、`/usr/local/share/lefthand/` に読み物の文字 |
 
 ## 次にすること
 
 - 充電：Brainux では充電されない。充電は純正のファームウェアで行う。内蔵の充電器を動かす案は保留（作るならカーネルのドライバとして、Brain Hackers で見てもらう）。電池は電圧で守る（3.5 V で知らせ、3.4 V で電源を切る。本番の設定）。
-- 次：REPORT.md の「追記：K4 と K5 を本番に入れ、起動を速くする段階 1〜3 を適用」の、目で確かめてほしいことと決めてほしいこと（残る起動中の 12 秒、tty1 の描き直し）。
+- 決めてほしいこと：tty1 の画面が Enter まで描き直されないままでよいか（lefthand が終わるときに描き直させる案がある。REPORT.md の「K4 と K5 を本番に入れ」）。起動中の lefthand の約 12 秒は K6 で調べた（今は exec から準備まで約 9 秒。udev の coldplug と journald との取り合い）。
+- 分かっていないこと：段階 6 の再起動で一度、起動がルートのマウントより前で止まった（REPORT.md のフェーズ K6）。もう一度起きたら記録する。
+- 次：特になし（新しいフェーズはユーザーと決める）。
 
 ## 本番の状態（最後に確かめたとき）
 
-- 2026-10-12 16:20：デーモン d18b7d39e6c6（`.prev` 8a09379808bb）。設定は config/current.yaml（profiles なし、例のアプリなし）。PC の brain-deck は d18b7d39e6c6。
-- Brain：boot-tune.sh の段階 1〜3 を適用（`/etc/lefthand/boot-tune.state`）。ly は止めている（Brain の画面のログインは、lefthand を止めて tty1 で Enter）。`/etc/systemd/system/lefthand.service` は getty@tty1 を待たない版（前は `.prev`）。Brain の ~/boot に contrib/boot の写し。
+- 2026-10-13 01:12（フェーズ K7 の終わり）：デーモン 5c08f95ede53（`.prev` 7a97a93e5130）。読み物の本文の文字は `/usr/local/share/lefthand/reader-24.lrf.gz`、`reader-32.lrf.gz`（`-check-fonts` で ok）。設定は config/current.yaml（profiles なし、例のアプリなし）。PC の `~/.local/bin/brain-deck` は 4a1cd8cc04ba（「.prev はそのまま」の表示を直した版。デーモンの側は 5c08f95 と同じ）。
+- Brain：boot-tune.sh の段階 1〜6 を適用（`/etc/lefthand/boot-tune.state`）。ly は止めている（Brain の画面のログインは、lefthand を止めて tty1 で Enter）。`/etc/systemd/system/lefthand.service` は getty@tty1 も ethernet_gadget も待たない版（段階 3 の前は `.prev`、K6 の前は `.prev2`）。Brain の ~/boot に contrib/boot の写し。
+- 戻すとき：`brain-deck update --rollback` は 7a97a93e5130（文字を埋め込んだ版。今のユニットと組み合わせてよい）。d18b7d39e6c6 以前に戻すなら、先にユニットを `.prev2` に戻し、段階 4 も戻す。8a09379808bb には月の表示のタップで固まる不具合がある（docs/architecture/16-limitations.md）。
+- 2026-10-13 にこのファイルを直したとき、Brain は PC につながっていなかった（`brain-deck status` で見つからない、ssh も届かない）ので、上はフェーズ K7 の記録のまま。
 - 試験のユニット、タイマー、/tmp/lhu は残していない。
 - 本番に反映しない、と決めたフェーズ：なし。
 
