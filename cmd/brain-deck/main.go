@@ -1483,7 +1483,8 @@ func netModeCommand(o *options) (func(*Client) (string, error), error) {
 		s := "USB のネットワークを " + netModeName(mode, mac) + " に切り替えます。数秒、キー入力、SSH、シリアルが切れます。" +
 			"終わったら brain-deck net-mode で確かめてください"
 		if mac == "phone" {
-			s += "。PC では、ネットワークの名前が enx88158b443a01 に変わります（PC の 192.168.7.1 の設定は当たりません。戻すには brain-deck net-mode ncm）"
+			s += "。PC では、ネットワークの名前が enx88158b443a01 に変わります。PC の 192.168.7.1 の設定がこの名前にも当たるようにしていなければ、" +
+				"ssh できません（README の「USB のネットワークの方式」。戻すには brain-deck net-mode ncm）"
 		}
 		return s, nil
 	}, nil

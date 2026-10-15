@@ -31,8 +31,10 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 ### 本番の状態（終わったとき）
 
-- デーモンは本番の 5c08f95ede53 のまま（今回の版は本番に入れていない）。USB は NCM と pc（gadget-setup.sh も本番の古いもの）。試験のユニット、タイマー、ログのサービス、dhclient は止めた。`/tmp/lhu` と `/tmp/phone*` に試験の写しとログが残っている（再起動で消える）。
-- 終わったときの電池は 3.59 V（試験の初めは 3.81 V）。
+- 19:31 に本番へ入れた：デーモン 476947020804（`brain-deck update`。`.prev` は 5c08f95ede53。gadget-setup.sh も入れ替えたが、USB の付け直しは要らなかった）。入れる前に、試験のデーモンで `config put` と上書きの設定と解除を 3 回ずつ行い、止まらないことを確かめた。PC の `~/.local/bin/brain-deck` も入れ替えた（前のものは `brain-deck.prev`）。
+- ユーザーが「切り替えずに PC とスマホの両方で使う」形を選んだ：Brain の `/etc/lefthand/gadget.env` に `NET_MAC=phone`（新しく作った）。PC の NetworkManager の brain の設定 2 つ（1b90a6d6…、29f50787…）は、ユーザーが `match.interface-name "enx8a158b443a01 enx88158b443a01"` にした。`brain-deck net-mode phone` で切り替え、PC の enx88158b443a01 に 192.168.7.1 が付き、ssh と brain-deck が使えることを確かめた。
+- 試験のユニット、タイマー、ログのサービス、dhclient は止めた。`/tmp/lhu` と `/tmp/phone*` に試験の写しとログが残っている（再起動で消える）。
+- 終わったときの電池は 3.57 V（試験の初めは 3.81 V）。純正のファームウェアでの充電をユーザーに頼んだ。
 
 ### 次にすること（Brain の中で同期を動かすなら）
 

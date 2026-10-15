@@ -642,7 +642,21 @@ USB のネットワークの方式と、相手から見た Brain の MAC を切�
 - **切り替えると USB を付け直す**：数秒、キー入力、SSH、シリアルが切れる。ネットワークのファンクションは作り直す（Brain の usb0 も一度消えて、同じ名前ででき直し、192.168.7.2 も付け直す）。HID と ACM は消さない。
 - **変わらないもの**：インターフェイスの番号（シリアルの `-if03`、`-if05`）。どの方式もネットワークのインターフェイスは 2 つ（0 と 1）なので、brain-deck、設定 GUI、PC の udev の規則はそのまま使える。USB の形（マウス）や端末モードを切り替えても、方式と MAC はそのまま。
 - **起動し直すと戻る**：`brain-deck net-mode` で選んだものは、Brain を起動し直すと `gadget.env` の値（書いていなければ NCM と pc）に戻る。
-- **phone のときの PC**：PC のネットワークの名前が `enx88158b443a01` に変わり、192.168.7.1 の設定（NetworkManager などで enx8a158b443a01 に付けたもの）が当たらないので、ssh できない。brain-deck と設定 GUI（シリアル）は使えるので、PC に戻したら `brain-deck net-mode ncm` で戻す。phone のままでも PC で ssh したいなら、PC で `enx88158b443a01` にも 192.168.7.1/24 を付ける設定を足す。
+- **phone のときの PC**：PC のネットワークの名前が `enx88158b443a01` に変わる。192.168.7.1 の設定（NetworkManager などで enx8a158b443a01 に付けたもの）がこの名前に当たらないと、ssh できない（PC の NetworkManager は名前の変わったインターフェイスで DHCP を試しては失敗し、IPv6 のリンクローカルも続かない）。brain-deck と設定 GUI（シリアル）は使えるので、`brain-deck net-mode ncm` で戻すか、次の「ずっと phone で使う」のように PC の設定を両方の名前に当てる。
+
+**ずっと phone で使う（切り替えずに、PC とスマホの両方で使う）**
+
+phone の MAC は PC でもそのまま使える（PC のカーネルは `eth0` と名付け、udev が `enx88158b443a01` に付け直す）。PC の 192.168.7.1 の設定を両方の名前に当てておけば、切り替えなしで PC でもスマホでも使える（2026-10-15 からこの Brain はこの形）。
+
+1. PC（NetworkManager）：192.168.7.1 の設定を、両方の名前に当てる。設定が 2 つ以上あれば、それぞれに行う（`nmcli -f NAME,UUID con show` で UUID を見る）。
+   ```sh
+   nmcli con modify <UUID> connection.interface-name "" match.interface-name "enx8a158b443a01 enx88158b443a01"
+   ```
+2. Brain：`/etc/lefthand/gadget.env` に `NET_MAC=phone` と書く（起動したときから phone）。今すぐ変えるなら `brain-deck net-mode phone`。
+3. 確かめ方：PC で `ip -br addr` に `enx88158b443a01 … 192.168.7.1/24`、`ssh brain` が通る、`brain-deck net-mode` が「NCM、スマホ向けの MAC」。
+
+- `88:15:8b` は「ローカルに割り当てた」印のない値で、本来はどこかの会社に割り当てられた番号。USB の 1 対 1 のつながりの中だけで使うので困ることはまずないが、印を立てると Android で使えないので避けられない。
+- 戻すときは、gadget.env の `NET_MAC=phone` を消して `brain-deck net-mode ncm`（PC の設定は両方に当てたままでよい）。
 
 **スマホのイーサネットテザリングで使う**（2026-10-15、Xperia 1 IV、Android 15 で確かめた）
 
