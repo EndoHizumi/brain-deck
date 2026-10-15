@@ -1,6 +1,6 @@
-# 進み具合（2026-10-11〜2026-10-13）
+# 進み具合（2026-10-11〜2026-10-15）
 
-フェーズ R2 → G → H → I → P3 → J → R3 → K1〜K7 の順に行った。各フェーズの記録は REPORT.md の「追記：フェーズ …」。
+フェーズ R2 → G → H → I → P3 → J → R3 → K1〜K7 → USB のネットワークの方式 → タブレットの形のキー の順に行った。各フェーズの記録は REPORT.md の「追記：フェーズ …」。
 
 | フェーズ | 状態 | 本番への反映 |
 | --- | --- | --- |
@@ -20,21 +20,23 @@
 | K6 起動をさらに速くする（2026-10-12 夕〜夜） | 終わり（lefthand が USB の構成を待たない。段階 4〜6 を本番に適用し、起動の合計 69.2 → 55.2 秒、PC へのキー 約 71 → 約 28 秒） | デーモン 7a97a93e5130、boot-tune.sh の段階 4〜6、lefthand.service（ethernet_gadget を待たない。前は `.prev2`） |
 | K7 実行ファイルを小さくする（2026-10-12 夜〜10-13） | 終わり（13.4 → 7.9 MB。読み物の本文の文字を別のファイルに。起動の時間は変わらなかった。本番のヘルプの明朝体はユーザーが確かめた） | デーモン 5c08f95ede53（2 回に分けて更新）、`/usr/local/share/lefthand/` に読み物の文字 |
 | USB のネットワークの方式とスマホのイーサネット テザリング（2026-10-15） | 終わり（NCM と phone の MAC で、Xperia 1 IV の Android 15 からインターネットに出られた。RNDIS と ECM と MAC の切り替えも作った） | デーモン 3a63395abf17（brain-deck run も。gadget-setup.sh は 476947020804 で入れた）、PC の brain-deck。Brain の gadget.env に `NET_MAC=phone`、PC の NetworkManager は両方の名前に当てた（ユーザー）。REPORT.md の「USB のネットワークの方式」 |
+| タブレットの形のキー（2026-10-15） | 終わり（PW-SH2 はタブレットの形のあいだキーを送らない、と実機で確かめた。設定のアプリの行と上書き `lid.tablet_keys` を消した。設定ファイルの `lid.tablet_keys` と keyFilter は残す） | デーモン 99b412788322、PC の brain-deck 99b412788322。REPORT.md の「タブレットの形のキー」 |
 
 ## 次にすること
 
 - 充電：Brainux では充電されない。充電は純正のファームウェアで行う。内蔵の充電器を動かす案は保留（作るならカーネルのドライバとして、Brain Hackers で見てもらう）。電池は電圧で守る（3.5 V で知らせ、3.4 V で電源を切る。本番の設定）。
 - 決めてほしいこと：tty1 の画面が Enter まで描き直されないままでよいか（lefthand が終わるときに描き直させる案がある。REPORT.md の「K4 と K5 を本番に入れ」）。起動中の lefthand の約 12 秒は K6 で調べた（今は exec から準備まで約 9 秒。udev の coldplug と journald との取り合い）。
 - 分かっていないこと：段階 6 の再起動で一度、起動がルートのマウントより前で止まった（REPORT.md のフェーズ K6）。もう一度起きたら記録する。
+- Brain の時計が 1 日進んでいる（上の「本番の状態」）。PC につないで `brain-deck time sync`（か `sync`）をすれば直り、RTC にも書き戻す。RTC が 1 日進む理由はまだ分からない（純正のファームウェアの時計と比べる）。
 - 次：Brain の中で同期を動かすか（REPORT.md の見積もり、3〜4 日）。スマホ（Xperia）で、ずっと phone の形のままテザリングできるかと、つないだまま Brain のキーボードで打てるかを、ユーザーに確かめてもらう。
 
 ## 本番の状態（最後に確かめたとき）
 
-- 2026-10-16 21:45：デーモン 99b412788322（`.prev` は同じコードの 99b412788322+dirty。その前は 3a63395abf17）。PC の brain-deck も 99b412788322。設定のアプリの「タブレットの形の本体キー」の行と上書き `lid.tablet_keys` を消した（PW-SH2 はタブレットの形のあいだキーを送らない。REPORT.md の「タブレットの形のキー」）。本番の上書きはなし。
+- 2026-10-15 22:00（PC の時刻。読むだけで確かめた）：デーモン 99b412788322 が動いている（lefthand.service は active、試験のユニットはない）。USB は キーボードだけの形、ネットワークは NCM とスマホ向けの MAC（gadget.env の `NET_MAC=phone`）。**Brain の時計が PC より 23 時間 59 分進んでいる**（起動したときに内蔵 RTC から合わせた。R2 と同じ 1 日のずれ。合わせ直していない）。
+- 2026-10-15 21:45 ごろ（PC の時刻。Brain の時計では 10-16）：デーモン 99b412788322（`.prev` は同じコードの 99b412788322+dirty。その前は 3a63395abf17）。PC の brain-deck も 99b412788322。設定のアプリの「タブレットの形の本体キー」の行と上書き `lid.tablet_keys` を消した（PW-SH2 はタブレットの形のあいだキーを送らない。REPORT.md の「タブレットの形のキー」）。本番の上書きはなし。
 - 2026-10-13 01:12（フェーズ K7 の終わり）：デーモン 5c08f95ede53（`.prev` 7a97a93e5130）。読み物の本文の文字は `/usr/local/share/lefthand/reader-24.lrf.gz`、`reader-32.lrf.gz`（`-check-fonts` で ok）。設定は config/current.yaml（profiles なし、例のアプリなし）。PC の `~/.local/bin/brain-deck` は 4a1cd8cc04ba（「.prev はそのまま」の表示を直した版。デーモンの側は 5c08f95 と同じ）。
 - Brain：boot-tune.sh の段階 1〜6 を適用（`/etc/lefthand/boot-tune.state`）。ly は止めている（Brain の画面のログインは、lefthand を止めて tty1 で Enter）。`/etc/systemd/system/lefthand.service` は getty@tty1 も ethernet_gadget も待たない版（段階 3 の前は `.prev`、K6 の前は `.prev2`）。Brain の ~/boot に contrib/boot の写し。
-- 戻すとき：`brain-deck update --rollback` は 7a97a93e5130（文字を埋め込んだ版。今のユニットと組み合わせてよい）。d18b7d39e6c6 以前に戻すなら、先にユニットを `.prev2` に戻し、段階 4 も戻す。8a09379808bb には月の表示のタップで固まる不具合がある（docs/architecture/16-limitations.md）。
-- 2026-10-13 にこのファイルを直したとき、Brain は PC につながっていなかった（`brain-deck status` で見つからない、ssh も届かない）ので、上はフェーズ K7 の記録のまま。
+- 戻すとき：`brain-deck update --rollback` の行き先（`.prev`）は 99b412788322+dirty（今と同じコード）。その前の 3a63395abf17 や 7a97a93e5130 には `--rollback` では戻れないので、戻すならその版でビルドした更新のファイルを `brain-deck update` で送る。d18b7d39e6c6 以前に戻すなら、先にユニットを `.prev2` に戻し、段階 4 も戻す。8a09379808bb には月の表示のタップで固まる不具合がある（docs/architecture/16-limitations.md）。
 - 試験のユニット、タイマー、/tmp/lhu は残していない。
 - 本番に反映しない、と決めたフェーズ：なし。
 
