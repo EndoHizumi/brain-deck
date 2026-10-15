@@ -982,6 +982,21 @@ README の「Brain の保守」。lefthand が systemd のサービスとして�
 - **restart**：係が、サービスを止めて起動し、起動の知らせを待つ。`usb` なら、止めているあいだに `GADGET_UNBIND_ONLY=1` で切り離して gadget-setup.sh で付け直す（USB の形は保つ）。結果は `update_status` の `state`（同じ `stage`）。
 - **power**：`action` は `reboot` か `poweroff`。返事のあと 0.5 秒で `systemctl --no-block <action>`。係が動いているあいだは `conflict`。
 
+### run
+
+Brain でコマンドを動かす（`runcmd.go`。`brain-deck run`）。`argv` はコマンドと引数（シェルは通さない）、`limit_ms` は時間の上限（省くと 1 分、10 分まで）。
+
+```json
+→ {"id":9,"cmd":"run","argv":["sh","-c","uptime; exit 3"],"limit_ms":60000}
+← {"id":9,"ok":true,"result":{"exit":3,"stdout":" 19:50:01 up …\n","stderr":"","took_ms":41,"user":"user"}}
+```
+
+- デーモンが root なら、ユーザー `user`（とそのグループ）で動かす。HOME はそのホーム、PATH は決まったもの、`LANG=C.UTF-8`、`TERM=dumb`、標準入力は /dev/null。
+- `exit` はコマンドの終了コード（シグナルで止まったら 128 + 番号、見つからないなど動かせなかったら 127、時間切れは 124 と `timed_out`）。`stdout` と `stderr` はそれぞれ 64 KiB まで（超えたら `truncated`）。
+- 返事は、コマンドが終わってから送る。そのあいだ、この接続のほかの要求は待つ。
+- ジャーナルに `run: as user: <コマンド> (limit …)` と `run: exit … after …` を書く（出力の中身は書かない）。
+- **誤り**：`argv` がない、ユーザーが見つからないときは `bad_request`。
+
 ### get_logs
 
 ```json

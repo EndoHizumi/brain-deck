@@ -70,6 +70,7 @@
 | media.go | メディアキー（Consumer Control）と、`media:` の割り当て |
 | pen.go | ペンタブレット（`widget: pentablet`）のレポート、PC の画面への当てはめ、筆圧 |
 | usbmode.go | USB の形の切り替え（`USBMode`）、端末モードの構成の名前、gadget-setup.sh の実行 |
+| runcmd.go | `run`（PC の `brain-deck run` から、Brain のふつうのユーザーでコマンドを動かし、ジャーナルに残す） |
 | netmode.go | USB のネットワークの方式（NCM、ECM、RNDIS）と相手から見た MAC（pc、phone）の切り替え（`RequestNet`）、今の方式を configfs から読む（`detectNetMode`）、カーネルにある方式か（`/proc/config.gz`） |
 | usbboot.go | 起動のときの USB の準備（`/dev/hidg0` ができるのを待つ `StartBoot`、ethernet_gadget を待つ `waitGadgetUnit`）、入力とフレームバッファを待つ（フェーズ K6） |
 | wakeup.go | スリープ中の PC を起こす（`Waker`） |

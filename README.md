@@ -1529,6 +1529,7 @@ brain-deck config check brain.yaml           # Brain で検証するだけ
 brain-deck config put brain.yaml             # 検証してから、そのまま書き、すぐ反映する（前の版は .prev）
 brain-deck reboot                            # Brain を再起動し、起動するまで待つ（約 1 分）
 brain-deck poweroff                          # Brain の電源を切る
+brain-deck run -- uptime                     # Brain でコマンドを動かす（user で。root が要るときは sudo。下の「コマンド（run）」）
 ```
 
 ### 更新（update）
@@ -1554,6 +1555,24 @@ lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタ
 - **restart**：係が lefthand.service を止めて起動し、新しい lefthand が起動を知らせるまで待つ（実機で 11 秒）。`--usb` なら、止めているあいだに UDC から切り離して gadget-setup.sh で付け直す（15 秒）。lefthand が自分で自分を止めることはできないので、どれも係（別のユニット）が行う。
 - **reboot**：Brain が返事を送ってから 0.5 秒後に `systemctl reboot`。brain-deck は Brain のポートが消えるのを待ち、また現れて lefthand が答えるまで待つ（`--timeout` の既定 4 分）。`--no-wait` なら頼んだらすぐ終わる。
 - **poweroff**：同じく `systemctl poweroff`。ポートが消えたら終わる。起動するときは Brain の電源ボタン。
+
+### コマンド（run）
+
+ssh が使えないとき（USB のネットワークの名前が変わった、PC の設定が壊れたなど）でも、シリアルだけで Brain のコマンドを動かせる。
+
+```sh
+brain-deck run -- uptime
+brain-deck run -- sh -c 'ip -br addr; ip route'      # シェルの書き方は sh -c で（シェルは通さない）
+brain-deck run -- sudo cat /etc/lefthand/gadget.env  # root が要るときは sudo
+brain-deck run --limit 5m -- sudo apt-get update      # 時間の上限（既定 1m、10m まで）
+```
+
+- **ユーザー**：Brain のふつうのユーザー（`user`）で動く。ホームは /home/user、標準入力はない（/dev/null）。入力を待つコマンド（パスワードを聞く sudo など）は、時間切れまで待って止まる。
+- **出力**：標準出力と標準エラーを、終わってからまとめて出す（それぞれ 64 KiB まで。超えたら知らせる）。終了コードはコマンドのもの（時間切れは 124、見つからないは 127）。
+- **記録**：動かしたコマンド、ユーザー、終了コード、かかった時間、出力の大きさを、Brain のジャーナルに残す（`brain-deck logs` の `run: as user: …`）。出力の中身は残さない。
+- **時間切れ**：上限を過ぎたら、コマンドとその子のプロセスに SIGTERM、3 秒後に SIGKILL を送る。
+- **気をつけること**：PC で Brain のシリアルを開ける人（Linux の dialout のグループ）は、Brain で user として（sudo で root としても）コマンドを動かせる。これは `brain-deck update` で実行ファイルを入れ替えられるのと同じ強さで、新しく弱くしたわけではないが、手軽になった。共有の PC につなぐときは気をつける。
+- **ずっと動くもの、画面を使うもの**：向かない（終わるまで返らない。端末が要るものは、Brain の画面の端末モードか ssh で）。
 
 ### 設定（config）
 
@@ -1590,7 +1609,7 @@ lefthand（デーモン）と gadget-setup.sh は、HID のディスクリプタ
 ### まだ ssh（か Brain 本体でのログイン）が要ること
 
 - カーネルの入れ替え（[docs/kernel-build.md](docs/kernel-build.md)）、Brainux そのものの更新（apt）。
-- systemd のユニットと drop-in（`lefthand.service`、`ethernet_gadget.service.d`）、`/etc/lefthand/gadget.env`、シリアルコンソール（`console-setup.sh`）の変更。
+- systemd のユニットと drop-in（`lefthand.service`、`ethernet_gadget.service.d`）、`/etc/lefthand/gadget.env`、シリアルコンソール（`console-setup.sh`）の変更。どれも `brain-deck run -- sudo …` でもできる（端末が要らないもの）。
 - `/var/lib/lefthand/`（Todo、テキストなど）のバックアップ。
 - Brain の設定のアプリで変えた値（上書き）は、ssh なしで見る・消す：`brain-deck overrides`、`brain-deck overrides clear all`。
 - lefthand が起動しなくなったとき（係が戻せなかったとき）。Brain 本体のキーボードと画面で、ログイン画面（ly）からログインして直すこともできる。

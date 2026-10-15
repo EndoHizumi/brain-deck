@@ -134,3 +134,28 @@ PC と Brain のあいだのやり取りを、1 つのコマンドで順に行�
 
 - **なぜ同期を PC の側から始めるか**：Brain はインターネットに出ず、PC を呼び出す手段もない（シリアルは PC が開く）。PC が「つながった」ことを udev で知り、PC から始めるのが自然。
 - **なぜバックアップを同期に入れたか**：手で取るのを忘れても、ふだんの同期で 1 日 1 回残るように（README の「同期のときに自動で取る」）。
+
+## コマンド（`brain-deck run`）
+
+ssh が使えないとき（USB のネットワークの名前が変わり PC の設定が当たらない、PC の設定が壊れたなど）のために、シリアルだけで Brain のコマンドを動かせる（runcmd.go の `runUserCommand`、2026-10-15）。
+
+```mermaid
+sequenceDiagram
+  participant B as brain-deck run
+  participant L as lefthand（root）
+  participant C as コマンド（user）
+  participant J as ジャーナル
+  B->>L: run {argv, limit_ms}
+  L->>J: run: as user: <コマンド>
+  L->>C: user の uid、gid、グループで起動（シェルなし、標準入力なし）
+  C-->>L: 終わる（か、時間切れで SIGTERM → 3 秒後に SIGKILL）
+  L->>J: run: exit N after …
+  L-->>B: exit、stdout、stderr（それぞれ 64 KiB まで）
+```
+
+### なぜこうなっているか
+
+- **なぜ root でなく user か**：ユーザーが決めた（2026-10-15）。うっかりした操作で Brain を壊しにくくし、root が要るときは `sudo` と書いて分かるようにする。Brain の user は sudo をパスワードなしで使えるので、復旧には足りる。
+- **なぜシェルを通さないか**：brain-deck が受け取った引数を、そのまま Brain で同じ形にするため（引用符の解釈が 2 回にならない）。シェルの書き方は `sh -c` で明示する。
+- **なぜ終わってからまとめて返すか**：1 行 1 JSON のプロトコルのまま、要求と返事を 1 対 1 にするため。出力を流し続けるもの、端末が要るものは、端末モードか ssh を使う。
+- **守り**：シリアルを開ける人は、もともと `brain-deck update` で実行ファイルを入れ替えられる（root で動く）ので、run で新しく弱くはなっていない。そのかわり、動かしたものをジャーナルに残して、あとから分かるようにした。
