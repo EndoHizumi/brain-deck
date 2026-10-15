@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +23,7 @@ type fakeGadget struct {
 	block chan struct{} // 閉じるまで付け直しを終えない
 }
 
-func (g *fakeGadget) run(ctx context.Context, script string, mouse, terminal bool) error {
+func (g *fakeGadget) run(ctx context.Context, script string, mouse, terminal bool, net string) error {
 	if g.block != nil {
 		<-g.block
 	}
@@ -95,6 +98,94 @@ func TestUSBModeSwitch(t *testing.T) {
 	}
 	if len(g.runs) != 2 || !g.runs[0] || g.runs[1] {
 		t.Fatalf("runs %v", g.runs)
+	}
+}
+
+// TestNetModeSwitch は、ネットワークの方式の切り替えで、NET_MODE を一度だけ渡し、HID の形と端末モードを変えないことを確かめる。
+func TestNetModeSwitch(t *testing.T) {
+	old := usbSwitchDelay
+	usbSwitchDelay = 0
+	defer func() { usbSwitchDelay = old }()
+	oldCfg := procConfig
+	defer func() { procConfig = oldCfg }()
+	procConfig = filepath.Join(t.TempDir(), "config.gz")
+	var buf bytes.Buffer
+	z := gzip.NewWriter(&buf)
+	z.Write([]byte("CONFIG_USB_CONFIGFS_NCM=y\n# CONFIG_USB_CONFIGFS_ECM is not set\nCONFIG_USB_CONFIGFS_RNDIS=y\n"))
+	z.Close()
+	os.WriteFile(procConfig, buf.Bytes(), 0o644)
+
+	h := &hidRec{}
+	s := &State{hid: h, active: map[string]Combo{}, kbdID: hidKeyboardID, mouse: NewMouse(h, hidMouseID), media: NewMedia(h, hidMediaID)}
+	g := &fakeGadget{mouse: true}
+	var mu sync.Mutex
+	cur := "ncm"
+	var nets []string
+	u := NewUSBMode(s, NewHIDWriter(os.DevNull), "/dev/null", "gadget-setup")
+	u.detect = g.detect
+	u.netMode = func() string { mu.Lock(); defer mu.Unlock(); return cur }
+	u.run = func(ctx context.Context, script string, mouse, terminal bool, net string) error {
+		mu.Lock()
+		nets = append(nets, net)
+		if net != "" {
+			cur = net
+		}
+		mu.Unlock()
+		return g.run(ctx, script, mouse, terminal, net)
+	}
+	changed := make(chan struct{}, 4)
+	u.OnChange(func() { changed <- struct{}{} })
+
+	if ch, err := u.RequestNet("ecm"); err == nil || ch || !strings.Contains(err.Error(), "CONFIG_USB_CONFIGFS_ECM") {
+		t.Fatalf("ecm must be refused when the kernel lacks it: %v %v", ch, err)
+	}
+	if _, err := u.RequestNet("eem"); err == nil {
+		t.Fatal("bad mode should fail")
+	}
+	if ch, err := u.RequestNet("ncm"); err != nil || ch {
+		t.Fatalf("same mode: %v %v", ch, err)
+	}
+	if ch, err := u.RequestNet("rndis"); err != nil || !ch {
+		t.Fatalf("rndis: %v %v", ch, err)
+	}
+	<-changed
+	if u.NetMode() != "rndis" || !u.Mouse() {
+		t.Fatalf("after switching: net %q, mouse %v", u.NetMode(), u.Mouse())
+	}
+	// マウスの切り替えでは、方式を渡さない（スクリプトが今の方式のままにする）
+	if _, ch, err := u.Request(usbKeyboard); err != nil || !ch {
+		t.Fatal(err)
+	}
+	<-changed
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"rndis", ""}; strings.Join(nets, ",") != strings.Join(want, ",") {
+		t.Errorf("NET_MODE passed = %q, want %q", nets, want)
+	}
+	if want := []bool{true, false}; !equalBools(g.runs, want) {
+		t.Errorf("mouse = %v, want %v", g.runs, want)
+	}
+	// カーネルの設定が読めなければ、作れるとする
+	procConfig = filepath.Join(t.TempDir(), "none.gz")
+	if err := netModeSupported("ecm"); err != nil {
+		t.Errorf("unreadable config: %v", err)
+	}
+}
+
+// TestDetectNetMode は、構成にリンクしているネットワークのファンクションから方式を読むことを確かめる。
+func TestDetectNetMode(t *testing.T) {
+	old := configfsGadgets
+	defer func() { configfsGadgets = old }()
+	configfsGadgets = t.TempDir()
+	c := filepath.Join(configfsGadgets, "eth", "configs", "c.1")
+	os.MkdirAll(c, 0o755)
+	if m := detectNetMode(); m != "" {
+		t.Fatalf("no function: %q", m)
+	}
+	os.WriteFile(filepath.Join(c, "hid.usb0"), nil, 0o644)
+	os.WriteFile(filepath.Join(c, "rndis.usb0"), nil, 0o644)
+	if m := detectNetMode(); m != "rndis" {
+		t.Fatalf("rndis: %q", m)
 	}
 }
 

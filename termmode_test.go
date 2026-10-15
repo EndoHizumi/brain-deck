@@ -102,7 +102,7 @@ func newTermRig(t *testing.T) *termRig {
 	s := &State{hid: r.hid, active: map[string]Combo{}, mouse: NewMouse(r.hid, 0), media: NewMedia(r.hid, 0)}
 	r.e = NewEngine(km, s)
 	u := NewUSBMode(s, NewHIDWriter(os.DevNull), "/dev/null", "gadget-setup")
-	u.run = func(ctx context.Context, script string, mouse, terminal bool) error {
+	u.run = func(ctx context.Context, script string, mouse, terminal bool, net string) error {
 		r.log(map[bool]string{true: "usb terminal", false: "usb normal"}[terminal])
 		return nil
 	}

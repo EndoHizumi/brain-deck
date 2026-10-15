@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -84,8 +85,9 @@ func TestReportExitCodes(t *testing.T) {
 
 // fakeBrain は PTY のマスター側で、lefthand の代わりに返事をする。
 type fakeBrain struct {
-	mouse bool // USB にマウスがあるか（set_usb_mode）
-	term  bool // 端末モード（set_terminal）
+	mouse bool   // USB にマウスがあるか（set_usb_mode）
+	net   string // USB のネットワークの方式（set_net_mode。空なら ncm）
+	term  bool   // 端末モード（set_terminal）
 	// noPresence なら、get_widgets で在席ランプのセルがない設定のふりをする
 	noPresence bool
 	master     *os.File
@@ -178,7 +180,7 @@ func (f *fakeBrain) serve(commands []string) {
 			res = map[string]any{"protocol": 1, "daemon": "lefthand", "version": v, "commands": commands, "upload_kinds": []string{"update", "image"}}
 		case "get_status":
 			res = map[string]any{"time": map[string]any{"now": time.Now().Format(time.RFC3339Nano), "synced": true},
-				"hid":      map[string]any{"mouse": f.mouse, "switching": false},
+				"hid":      map[string]any{"mouse": f.mouse, "switching": false, "net": cmp.Or(f.net, "ncm")},
 				"terminal": map[string]any{"active": f.term, "state": map[bool]string{true: "on", false: "off"}[f.term], "transport": "serial", "cols": 100, "rows": 31}}
 		case "set_terminal":
 			want := map[string]bool{"on": true, "off": false, "toggle": !f.term}[req["mode"].(string)]
@@ -188,6 +190,14 @@ func (f *fakeBrain) serve(commands []string) {
 			want := map[string]bool{"mouse": true, "keyboard": false, "toggle": !f.mouse}[req["mode"].(string)]
 			res = map[string]any{"mouse": want, "switching": want != f.mouse}
 			f.mouse = want
+		case "set_net_mode":
+			if req["mode"] == "ecm" {
+				b, _ := json.Marshal(map[string]any{"id": req["id"], "ok": false, "error": map[string]any{"code": "bad_request", "message": "this kernel cannot make ECM"}})
+				f.master.Write(append(b, '\n'))
+				continue
+			}
+			res = map[string]any{"net": req["mode"], "switching": req["mode"] != cmp.Or(f.net, "ncm")}
+			f.net = req["mode"].(string)
 		case "set_text":
 			if req["style"] == "pink" {
 				b, _ := json.Marshal(map[string]any{"id": req["id"], "ok": false, "error": map[string]any{"code": "bad_request", "message": "unknown style"}})
@@ -333,6 +343,32 @@ func TestUSBMode(t *testing.T) {
 	}
 	if code, _, _ := runCLI(t, "--port", f.slave, "usb-mode", "on"); code != exitUsage {
 		t.Fatalf("bad mode: %d", code)
+	}
+}
+
+func TestNetMode(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := newFakeBrain(t)
+	go f.serve([]string{"hello", "get_status", "set_net_mode"})
+	if code, out, errs := runCLI(t, "--port", f.slave, "net-mode"); code != exitOK || !strings.Contains(out, "NCM（既定") {
+		t.Fatalf("show: %d %s %s", code, out, errs)
+	}
+	if code, out, errs := runCLI(t, "--port", f.slave, "net-mode", "rndis"); code != exitOK || !strings.Contains(out, "RNDIS（Android のイーサネットテザリング、Windows） に切り替えます") {
+		t.Fatalf("rndis: %d %s %s", code, out, errs)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "net-mode", "rndis"); code != exitOK || !strings.Contains(out, "すでに") {
+		t.Fatalf("again: %d %s", code, out)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "status"); code != exitOK || !strings.Contains(out, "USB のネットワーク\tRNDIS") {
+		t.Fatalf("status: %d %s", code, out)
+	}
+	if code, _, errs := runCLI(t, "--port", f.slave, "net-mode", "ecm"); code != exitBrainError || !strings.Contains(errs, "cannot make ECM") {
+		t.Fatalf("ecm: %d %s", code, errs)
+	}
+	for _, bad := range [][]string{{"net-mode", "eem"}, {"net-mode", "ncm", "rndis"}} {
+		if code, _, _ := runCLI(t, append([]string{"--port", f.slave}, bad...)...); code != exitUsage {
+			t.Fatalf("%v: %d", bad, code)
+		}
 	}
 }
 

@@ -1,11 +1,13 @@
 #!/bin/bash
-# USB ガジェット eth を NCM + HID（キーボードとマウス）+ CDC-ACM 2 つの複合デバイスにして、
-# usb0 に固定 IP を付ける。
+# USB ガジェット eth を ネットワーク（NCM か RNDIS。NET_MODE）+ HID（キーボードとマウス）+ CDC-ACM 2 つの
+# 複合デバイスにして、usb0 に固定 IP を付ける。
 #   hid.usb0 → /dev/hidg0：キーボード（ブートキーボード）。HID_MOUSE=1 ならキーボード（レポート ID 1）、マウス（レポート ID 2）、
 #                        メディアキー（レポート ID 3）
 #   acm.usb0 → /dev/ttyGS0：シリアルコンソール（getty）用
 #   acm.usb1 → /dev/ttyGS1：設定 GUI（lefthand の -serial）用
-# インターフェイスの番号は NCM 0〜1、HID 2、ACM 3〜4（コンソール）、ACM 5〜6（設定用）。
+# インターフェイスの番号は ネットワーク 0〜1、HID 2、ACM 3〜4（コンソール）、ACM 5〜6（設定用）。
+# ネットワークは、NCM、ECM、RNDIS のどれも 2 つのインターフェイス（制御とデータ）とエンドポイント 3 本
+# （IN 2 本、OUT 1 本）なので、方式を変えても、HID と ACM の番号（PC の -if03、-if05）は変わらない。
 #
 # マウスを別の HID のファンクションにしないのは、USB コントローラ（ci_hdrc）の IN のエンドポイントが
 # 7 本しかなく、NCM 2 本、HID 1 本、ACM 4 本ですべて使っているため。足すとガジェット全体がつながらなくなる。
@@ -43,6 +45,14 @@
 #                /etc/lefthand/gadget.env にも書ける。違っていれば、UDC から切り離して書き換える
 #   GADGET_UNBIND_ONLY=1  UDC から切り離すだけで終わる。lefthand の端末モードが、切り離しているあいだに
 #                    Brain の getty を止める・ttyGS0 を閉じるために使う（そのあと、もう一度このスクリプトで付ける）
+#   NET_MODE     ネットワークの方式。ncm（既定）、ecm、rndis。/etc/lefthand/gadget.env にも書ける。
+#                ncm は Linux と macOS と Windows 10 以降、rndis は Android のイーサネットテザリングや古い Windows 向け。
+#                ecm はこの Brain のカーネル（CONFIG_USB_CONFIGFS_ECM なし）では作れない（作れなければ今の方式のまま）。
+#                環境変数で渡さず、LEFTHAND_SELF=1 で、ガジェットにもうネットワークがあるときは、今の方式のまま
+#                （lefthand の USB の形の切り替えや更新で、brain-deck net-mode で選んだ方式が戻らないように）。
+#                lefthand から切り替えるときは brain-deck net-mode（環境変数で渡す）。
+#                方式を変えるときは、ネットワークのファンクションを作り直す（usb0 は消えて、同じ名前・同じ MAC で
+#                でき直す）。HID と ACM はリンクを外して付け直すだけで、ファンクションは消さない
 #   GADGET_CHECK=1   何も変えずに、このスクリプトを実行したら USB を付け直すかを調べる。付け直すなら理由を
 #                    「rebind: …」の行に書いて終了コード 10、今のままでよければ 0。brain-deck update が、
 #                    入れ替える前に知らせるために使う（lefthand の update.go）
@@ -53,6 +63,7 @@ GADGET_ENV=${GADGET_ENV:-/etc/lefthand/gadget.env}
 # 環境変数で HID_MOUSE を渡したときは、そちらを使う（lefthand からの切り替え）
 want_mouse=${HID_MOUSE:-}
 want_wakeup=${USB_WAKEUP:-}
+want_net=${NET_MODE:-}
 [ -r "$GADGET_ENV" ] && . "$GADGET_ENV"
 HID_MOUSE=${want_mouse:-${HID_MOUSE:-0}}
 USB_WAKEUP=${want_wakeup:-${USB_WAKEUP:-1}}
@@ -67,8 +78,34 @@ G=/sys/kernel/config/usb_gadget/${GADGET_NAME:-eth}
 UDC_NAME=ci_hdrc.0
 BRAIN_IP=192.168.7.2/24   # PC側は 192.168.7.1/24（手動設定）
 
+# net_linked は、構成にリンクしているネットワークのファンクションの名前（ncm.usb0 など）。なければ空
+net_linked() {
+  local f
+  for f in ncm.usb0 ecm.usb0 rndis.usb0; do
+    [ -e "$G/configs/c.1/$f" ] && { echo "$f"; return 0; }
+  done
+  return 0
+}
+
+# ネットワークの方式。環境変数 > （lefthand から呼ばれ、もうあれば）今の方式 > gadget.env > ncm
+gadget_env_net=${NET_MODE:-}
+if [ -n "$want_net" ]; then
+  NET_MODE=$want_net
+elif [ "${LEFTHAND_SELF:-0}" = 1 ] && [ -n "$(net_linked)" ]; then
+  NET_MODE=$(net_linked)
+  NET_MODE=${NET_MODE%.usb0}
+else
+  NET_MODE=${gadget_env_net:-ncm}
+fi
+case "$NET_MODE" in
+  ncm|ecm|rndis) ;;
+  *) echo "NET_MODE=$NET_MODE は ncm、ecm、rndis のどれでもありません。ncm にします" >&2; NET_MODE=ncm ;;
+esac
+net_ok=1
+
 # Brainux の enable_ethernet_gadget と同じ値。
 # host_addr を変えると PC 側のインターフェース名（enx8a158b443a01）が変わるので変えないこと
+# NCM のほか、ECM と RNDIS でも同じ値にする（PC は MAC から名前を付けるので、方式を変えても同じ名前になる）
 NCM_DEV_ADDR=8a:15:8b:44:3a:02
 NCM_HOST_ADDR=8a:15:8b:44:3a:01
 
@@ -116,6 +153,47 @@ if [ "${GADGET_UNBIND_ONLY:-0}" = 1 ]; then
   exit 0
 fi
 
+# conf_label は、構成の名前の先頭（今リンクしているネットワークの方式。NCM、ECM、RNDIS）
+conf_label() {
+  case "$(net_linked)" in
+    ecm.usb0) echo ECM ;;
+    rndis.usb0) echo RNDIS ;;
+    *) echo NCM ;;
+  esac
+}
+
+# make_net は、ネットワークのファンクション（$1 は ncm、ecm、rndis）を作り、MAC を書く。リンクはしない。
+# 作れなければ（カーネルにない）1 を返す。RNDIS のときは、Windows が自分の RNDIS のドライバーを使うように、
+# Microsoft OS ディスクリプタ（os_desc。互換 ID RNDIS、5162001）も書く。IAD は f_rndis が自分で付ける
+make_net() {
+  local f="$G/functions/$1.usb0"
+  if [ ! -d "$f" ] && ! mkdir "$f" 2>/dev/null; then
+    echo "functions/$1.usb0 を作成できません。カーネルが対応していない可能性があります" >&2
+    return 1
+  fi
+  echo "$NCM_DEV_ADDR" > "$f/dev_addr"
+  echo "$NCM_HOST_ADDR" > "$f/host_addr"
+  if [ "$1" = rndis ]; then
+    echo RNDIS > "$f/os_desc/interface.rndis/compatible_id"
+    echo 5162001 > "$f/os_desc/interface.rndis/sub_compatible_id"
+  fi
+}
+
+# set_os_desc は、ガジェットの os_desc を、RNDIS のときだけ使う（UDC から切り離しているときだけ書ける）
+set_os_desc() {
+  [ -d "$G/os_desc" ] || return 0
+  if [ "$1" = rndis ]; then
+    echo 0xcd > "$G/os_desc/b_vendor_code"
+    echo MSFT100 > "$G/os_desc/qw_sign"
+    echo 1 > "$G/os_desc/use"
+    [ -e "$G/os_desc/c.1" ] || ln -s "$G/configs/c.1" "$G/os_desc/c.1"
+  else
+    [ -e "$G/os_desc/c.1" ] && rm "$G/os_desc/c.1"
+    echo 0 > "$G/os_desc/use"
+  fi
+  return 0
+}
+
 create_eth() {
   modprobe libcomposite 2>/dev/null || true
   mkdir "$G"
@@ -128,11 +206,16 @@ create_eth() {
   echo "Brain" > strings/0x409/product
   mkdir -p configs/c.1/strings/0x409
   echo "$MAX_POWER" > configs/c.1/MaxPower
-  mkdir functions/ncm.usb0
-  echo "$NCM_DEV_ADDR" > functions/ncm.usb0/dev_addr
-  echo "$NCM_HOST_ADDR" > functions/ncm.usb0/host_addr
-  ln -s functions/ncm.usb0 configs/c.1/
-  echo "created: $G (NCM)"
+  # 方式のファンクションを作れなければ、NCM にする（SSH できる状態を必ず残す）
+  if ! make_net "$NET_MODE"; then
+    echo "$NET_MODE を作れないので、NCM にします" >&2
+    net_ok=0
+    NET_MODE=ncm
+    make_net ncm
+  fi
+  set_os_desc "$NET_MODE"
+  ln -s "functions/$NET_MODE.usb0" configs/c.1/
+  echo "created: $G ($NET_MODE)"
 }
 
 add_hid_acm() {
@@ -172,7 +255,7 @@ add_hid_acm() {
   for f in hid.usb0 acm.usb0; do
     [ -e "configs/c.1/$f" ] || ln -s "functions/$f" configs/c.1/
   done
-  echo "NCM+HID+ACM" > configs/c.1/strings/0x409/configuration
+  echo "$(conf_label)+HID+ACM" > configs/c.1/strings/0x409/configuration
   echo "added: HID + ACM"
 }
 
@@ -208,7 +291,7 @@ hid_matches() {
     [ "$(cat "$G/functions/hid.usb0/protocol")" = "$HID_PROTOCOL" ]
 }
 
-# LINK_ORDER は、NCM のあとにリンクするファンクションの順（インターフェイスの番号を決める）
+# LINK_ORDER は、ネットワークのあとにリンクするファンクションの順（インターフェイスの番号を決める）
 LINK_ORDER="hid.usb0 acm.usb0 acm.usb1"
 
 # update_hid は、リンク済みの HID の形を変える。HID の属性はリンク中は書けない（f_hid が EBUSY を返す）ので、
@@ -244,8 +327,37 @@ add_acm_gui() {
   fi
   unbind_udc
   ln -s functions/acm.usb1 configs/c.1/
-  echo "NCM+HID+ACM+ACM" > configs/c.1/strings/0x409/configuration
+  echo "$(conf_label)+HID+ACM+ACM" > configs/c.1/strings/0x409/configuration
   echo "added: ACM for the settings GUI (port $(cat functions/acm.usb1/port_num))"
+}
+
+# switch_net は、ネットワークの方式を NET_MODE に変える。新しいファンクションを先に作って（作れなければ何も変えない）、
+# UDC から切り離し、全部のリンクを外し、古いネットワークのファンクションを消し、新しいものを先頭に、
+# ほかを同じ順でリンクし直す（インターフェイスの番号は変わらない）。古いものを消すのは、残すと
+# usb0 の名前を持ったままで、新しいものが usb1 になるため。
+# ACM のファンクションは消さない（ttyGS を開いている getty で rmdir が止まる）
+switch_net() {
+  cd "$G"
+  local old f linked="" rc=0
+  old=$(net_linked)
+  make_net "$NET_MODE" || return 1
+  unbind_udc
+  [ -n "$old" ] && rm "configs/c.1/$old"
+  for f in $LINK_ORDER; do
+    if [ -e "configs/c.1/$f" ]; then
+      linked="$linked $f"
+      rm "configs/c.1/$f"
+    fi
+  done
+  set_os_desc "$NET_MODE" || rc=$?
+  [ -n "$old" ] && { rmdir "functions/$old" || rc=$?; }
+  ln -s "functions/$NET_MODE.usb0" configs/c.1/ || rc=$?
+  # 失敗しても、リンクは必ず元に戻す
+  for f in $linked; do
+    ln -s "functions/$f" configs/c.1/ || rc=$?
+  done
+  [ "$rc" = 0 ] && echo "updated: network is now $NET_MODE (was ${old%.usb0})"
+  return "$rc"
 }
 
 # 何も変えずに、付け直しが要るかを調べる（GADGET_CHECK=1）
@@ -261,7 +373,8 @@ if [ "${GADGET_CHECK:-0}" = 1 ]; then
       reason "the HID report descriptor or attributes differ (want $HID_KIND)"
     fi
     [ -e "$G/configs/c.1/acm.usb1" ] || reason "the ACM for the settings GUI is not linked"
-    want_conf="NCM+HID+ACM+ACM"
+    [ "$(net_linked)" = "$NET_MODE.usb0" ] || reason "the network function differs (want $NET_MODE, now $(net_linked))"
+    want_conf="$(echo "$NET_MODE" | tr a-z A-Z)+HID+ACM+ACM"
     [ "${GADGET_TERMINAL:-0}" = 1 ] && want_conf="$want_conf terminal"
     [ "$(cat "$G/configs/c.1/strings/0x409/configuration" 2>/dev/null)" = "$want_conf" ] || reason "the configuration name differs (want $want_conf)"
     want_attr=0x80
@@ -273,11 +386,24 @@ if [ "${GADGET_CHECK:-0}" = 1 ]; then
   if [ "$need" = 1 ]; then
     exit 10
   fi
-  echo "up to date: HID = $HID_KIND"
+  echo "up to date: HID = $HID_KIND, network = $NET_MODE"
   exit 0
 fi
 
 [ -d "$G" ] || create_eth
+
+# ネットワークの方式が違えば作り直す。作れない方式（ecm など）なら、今の方式のまま続ける
+if [ -n "$(net_linked)" ] && [ "$(net_linked)" != "$NET_MODE.usb0" ]; then
+  echo "ネットワークを $NET_MODE にします"
+  set +e
+  (set -e; switch_net)
+  rc=$?
+  set -e
+  if [ "$rc" != 0 ]; then
+    echo "ネットワークを $NET_MODE にできませんでした（$(net_linked) のまま続けます）" >&2
+    net_ok=0
+  fi
+fi
 
 # 判定はリンクの有無で行う（ファンクションだけ作られて途中で失敗した場合も追加し直す）
 if [ -e "$G/configs/c.1/hid.usb0" ]; then
@@ -316,13 +442,14 @@ if [ "$hid_ok" = 1 ]; then
   fi
 fi
 
-# 構成の名前。端末モード（lefthand の termmode.go が GADGET_TERMINAL=1 で実行する）では、最後に " terminal" を付ける。
+# 構成の名前（先頭はネットワークの方式。NCM、ECM、RNDIS）。端末モード（lefthand の termmode.go が GADGET_TERMINAL=1 で実行する）では、最後に " terminal" を付ける。
 # PC の udev の規則（contrib/udev/71-brain-terminal.rules）は、この名前のときだけ 1 つ目のシリアル（-if03）で
 # getty を起動する。ふだんの名前では何も起動しないので、Brain 側の getty（ttyGS0）とぶつからない。
 # 名前は付け直したときに PC に伝わるので、違っていれば UDC から切り離して書き換える
 set_conf_name() {
   [ -e "$G/configs/c.1/acm.usb1" ] || return 0
-  local want="NCM+HID+ACM+ACM" f="$G/configs/c.1/strings/0x409/configuration"
+  local want f="$G/configs/c.1/strings/0x409/configuration"
+  want="$(conf_label)+HID+ACM+ACM"
   [ "${GADGET_TERMINAL:-0}" = 1 ] && want="$want terminal"
   [ "$(cat "$f")" = "$want" ] && return 0
   unbind_udc
@@ -363,7 +490,7 @@ if [ "${SKIP_BIND:-0}" = 1 ]; then
     rm -f "$RESTART_MARK"
     systemctl start --no-block lefthand.service
   fi
-  [ "$hid_ok" = 1 ]
+  [ "$hid_ok" = 1 ] && [ "$net_ok" = 1 ]
   exit
 fi
 
@@ -383,5 +510,5 @@ if [ -e "$RESTART_MARK" ]; then
 fi
 
 ls -l /dev/hidg0 /dev/ttyGS0 /dev/ttyGS1 || echo "warning: /dev/hidg0、/dev/ttyGS0、/dev/ttyGS1 のどれかが見つかりません" >&2
-echo "done: usb0 = $BRAIN_IP, HID = $HID_KIND, remote wakeup = $([ "$USB_WAKEUP" = 1 ] && echo on || echo off)"
-[ "$hid_ok" = 1 ]
+echo "done: usb0 = $BRAIN_IP, network = $(conf_label), HID = $HID_KIND, remote wakeup = $([ "$USB_WAKEUP" = 1 ] && echo on || echo off)"
+[ "$hid_ok" = 1 ] && [ "$net_ok" = 1 ]
