@@ -35,6 +35,13 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 - ユーザーが「切り替えずに PC とスマホの両方で使う」形を選んだ：Brain の `/etc/lefthand/gadget.env` に `NET_MAC=phone`（新しく作った）。PC の NetworkManager の brain の設定 2 つ（1b90a6d6…、29f50787…）は、ユーザーが `match.interface-name "enx8a158b443a01 enx88158b443a01"` にした。`brain-deck net-mode phone` で切り替え、PC の enx88158b443a01 に 192.168.7.1 が付き、ssh と brain-deck が使えることを確かめた。
 - 試験のユニット、タイマー、ログのサービス、dhclient は止めた。`/tmp/lhu` と `/tmp/phone*` に試験の写しとログが残っている（再起動で消える）。
 - 終わったときの電池は 3.57 V（試験の初めは 3.81 V）。純正のファームウェアでの充電をユーザーに頼んだ。
+- 充電のあとの起動（20:45）で、gadget.env の `NET_MAC=phone` が効き、PC の enx88158b443a01 に 192.168.7.1 が付き、ssh が通った。
+
+### brain-deck run（同じ日の夜）
+
+- ssh が使えなかったことを受けて、ユーザーが決めた形（user で動かし、コマンドをジャーナルに残す）で作った（0060fce、文書 3a63395）。上限は私が決めた：時間は既定 1 分・最大 10 分、出力はそれぞれ 64 KiB、標準入力なし。
+- 試験のデーモンで確かめた：`id` が uid=1000(user)、HOME は /home/user、`sudo -n` が使える、終了コード 3 と 127 と時間切れの 124（2 秒で返り、子の sleep も残らない）、64 KiB で切る、ジャーナルの `run: as user: …` と `run: exit …`。`config put` と上書きの設定と解除も 2 回ずつ。
+- 20:49 に本番へ：デーモン 3a63395abf17（`.prev` 476947020804。gadget-setup.sh は同じ）、PC の brain-deck も。本番で `brain-deck run` と `brain-deck logs` の `run:` の行、ssh を確かめた。
 
 ### 次にすること（Brain の中で同期を動かすなら）
 
