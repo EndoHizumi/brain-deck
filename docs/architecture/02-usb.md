@@ -18,7 +18,7 @@ Brain では、これを `gadget-setup.sh`（Brain の上では `/usr/local/sbin
 ```mermaid
 flowchart LR
   subgraph G["ガジェット eth（1d6b:0104、SHARP Brain、シリアル番号 0123456789）"]
-    NCM["ncm.usb0<br/>インターフェイス 0, 1"]
+    NCM["ncm.usb0（既定。rndis.usb0 にもできる）<br/>インターフェイス 0, 1"]
     HID["hid.usb0<br/>インターフェイス 2"]
     A0["acm.usb0<br/>インターフェイス 3, 4"]
     A1["acm.usb1<br/>インターフェイス 5, 6"]
@@ -31,14 +31,14 @@ flowchart LR
 
 | ファンクション | Brain 側 | PC 側（Linux の例） | 使うもの |
 | --- | --- | --- | --- |
-| NCM（USB のネットワーク） | `usb0`、固定 IP 192.168.7.2/24 | `enx8a158b443a01`。PC 側で 192.168.7.1/24 を手で付ける | SSH |
+| ネットワーク（既定は NCM。下の「ネットワークの方式と MAC」） | `usb0`、固定 IP 192.168.7.2/24 | `enx8a158b443a01`。PC 側で 192.168.7.1/24 を手で付ける | SSH |
 | HID（入力機器） | `/dev/hidg0` | キーボード（「SHARP Brain」）。マウスありの形では「SHARP Brain Keyboard」と「SHARP Brain Mouse」 | lefthand が書く |
 | ACM 1 つ目（シリアル） | `/dev/ttyGS0` | `/dev/ttyACM0`、`/dev/serial/by-id/…-if03` | Brain の getty（ログイン）。端末モード |
 | ACM 2 つ目（シリアル） | `/dev/ttyGS1` | `/dev/ttyACM1`、`/dev/serial/by-id/…-if05` | lefthand（設定 GUI と brain-deck） |
 
 - 機器の ID は 1d6b:0104（Linux Foundation の「Multifunction Composite Gadget」。個人の開発用の汎用の ID）。製品名 `Brain`、メーカー名 `SHARP`、シリアル番号 `0123456789`。
 - 機器のクラスは 0xEF/0x02/0x01（IAD を使う複合デバイス）。Windows で NCM と ACM を正しく分けるため（gadget-setup.sh のコメント）。
-- NCM の MAC アドレス（`dev_addr`、`host_addr`）は Brainux 標準の `enable_ethernet_gadget` と同じ値にしてある。変えると PC 側のインターフェイスの名前が変わるため。
+- NCM の MAC アドレス（`dev_addr`、`host_addr`）は、既定では Brainux 標準の `enable_ethernet_gadget` と同じ値にしてある。変えると PC 側のインターフェイスの名前が変わるため。スマホ用に `host_addr` だけを変えられる（下の「ネットワークの方式と MAC」）。
 
 ### なぜこうなっているか
 
@@ -102,11 +102,50 @@ sequenceDiagram
 - ACM のファンクション自体は消さない（リンクを外して付け直すだけ）。`/dev/ttyGS0` と `/dev/ttyGS1` は同じ番号のまま残る。
 - 実装：usbmode.go の `USBMode.Request`、`applyHook`、`runGadgetSetup`。
 
+## ネットワークの方式と MAC
+
+ネットワークのファンクションは、方式（`NET_MODE`）と、相手から見た Brain の MAC（`NET_MAC`。`host_addr`）を選べる。既定は NCM と pc で、PC での使い方は変わらない（2026-10-15、フェーズ「ネットワークの方式」）。
+
+| NET_MODE | ファンクション | 相手のドライバ（Linux） | 状態 |
+| --- | --- | --- | --- |
+| `ncm`（既定） | ncm.usb0 | cdc_ncm | 使える |
+| `rndis` | rndis.usb0（Windows 用に `os_desc` の互換 ID `RNDIS`、`5162001` も書く。IAD は f_rndis が付ける） | rndis_host | 使える（Linux の PC で確かめた。Windows は未確認） |
+| `ecm` | ecm.usb0 | cdc_ether | **このカーネルにない**（`CONFIG_USB_CONFIGFS_ECM` なし、モジュールもない）。lefthand は `/proc/config.gz` を見て先に断る。gadget-setup.sh も作れなければ今の方式のまま |
+
+| NET_MAC | host_addr | 相手のカーネルが付ける名前 |
+| --- | --- | --- |
+| `pc`（既定） | `8a:15:8b:44:3a:01`（Brainux と同じ） | `usb0`（PC は udev の 73-usb-net-by-mac.link で enx8a158b443a01 に付け直す） |
+| `phone` | `88:15:8b:44:3a:01` | `eth0`（PC では enx88158b443a01 に付け直す） |
+
+```mermaid
+flowchart LR
+  B["Brain（NCM）"] -- "host_addr 8a:…（印あり）" --> U["相手のカーネル：usb0"]
+  B -- "host_addr 88:…（印なし）" --> E["相手のカーネル：eth0"]
+  U --> PC1["PC：udev が enx8a158b443a01 に"]
+  U --> A1["Android：イーサネットとして扱わない"]
+  E --> PC2["PC：udev が enx88158b443a01 に"]
+  E --> A2["Android：イーサネット テザリングの対象"]
+```
+
+- 切り替え方：`brain-deck net-mode`（デーモンの `set_net_mode`、netmode.go の `USBMode.RequestNet`）、起動したときは `/etc/lefthand/gadget.env` の `NET_MODE` と `NET_MAC`。
+- 方式を変えるとき（`switch_net`）：新しいファンクションを先に作り（作れなければ何も変えない）、UDC から切り離し、全部のリンクを外し、古いネットワークのファンクションを `rmdir` し、新しいものを先頭に、HID と ACM 2 つを同じ順でリンクし直す。MAC だけが違うときは、リンクを外しているあいだに `host_addr` を書き直す（リンク中は書けない）。
+- 決め方：環境変数 > lefthand から（`LEFTHAND_SELF=1`）で、もうネットワークがあれば今のもの > gadget.env > 既定。lefthand は、USB の形の切り替え、端末モード、更新のときは `NET_MODE` と `NET_MAC` を渡さないので、`brain-deck net-mode` で選んだものが戻らない。起動し直すと gadget.env の値になる。
+- 構成の名前の先頭は方式（`NCM+HID+ACM+ACM`、`RNDIS+HID+ACM+ACM`）。端末モードの udev の規則は「`* terminal`」で見るので、方式に関係なく動く。
+- 2026-10-15、Xperia 1 IV（Android 15）のイーサネット テザリングで試した結果：NCM と pc、RNDIS と pc、RNDIS と phone では、USB は `configured` になるが、スマホから 1 つもパケットが来なかった。NCM と phone でだけテザリングの対象になり、DHCP、ping、HTTPS が通った（README の「USB のネットワークの方式」）。
+
+### なぜこうなっているか
+
+- **なぜ古いネットワークのファンクションを消すか**：u_ether のネットワークは、ファンクションを作ったあと最初に付けたときに `usb0` の名前で登録され、ファンクションを消すまで残る。残したまま新しい方式を付けると、新しいものが `usb1` になり、192.168.7.2 が付かない。
+- **なぜ ACM を消さないか**：getty が開いている ttyGS の ACM を `rmdir` すると、カーネルの中で止まり、ssh のログインまで止まったことがある（2026-10-07）。リンクを外して付け直すだけなら、ttyGS0 と ttyGS1 は同じ番号のまま。
+- **なぜ既定の MAC を変えないか**：PC 側の NetworkManager などの設定が `enx8a158b443a01` に付いているため。phone は選んだときだけ使う。
+- **f_ncm の MAC の文字列**：このカーネルの f_ncm は、MAC の文字列を指す静的なポインタを、最後にリンクした ncm に向ける。ncm を 2 つ作ってから 1 つ消すと、残ったものの付け直しで壊れる（[16. 制約](16-limitations.md)の「作りの上で気をつけること」）。`switch_net` は ncm を 1 つしか持たないので、この問題は起きない。
+
 ## gadget-setup.sh の役目
 
 何度実行してもよい（冪等な）スクリプト。起動したときは `ethernet_gadget.service` の drop-in から（本番では段階 4 の `boot-early.conf` で basic.target を待たずに。[12. 起動の流れ](12-boot.md)）、動いているあいだは lefthand から呼ばれる。起動のときは、ガジェットを作ってから最後に 1 回だけ UDC に付ける（付け直さない）。
 
-1. ガジェット `eth` がなければ、Brainux と同じ値で NCM だけのものを作る（`create_eth`）。
+1. ガジェット `eth` がなければ、Brainux と同じ値で、ネットワーク（`NET_MODE`。既定は NCM）だけのものを作る（`create_eth`）。
+   ガジェットがあり、ネットワークの方式か MAC が `NET_MODE`、`NET_MAC` と違えば、作り直す（`switch_net`）。
 2. HID と ACM（1 つ目）がリンクされていなければ足す（`add_hid_acm`）。足せなくても、NCM だけは残して SSH を使えるようにする。
 3. HID の形が `HID_MOUSE` と違えば作り直す（`update_hid`）。
 4. 設定用の ACM（2 つ目）がなければ足す（`add_acm_gui`）。
@@ -114,7 +153,7 @@ sequenceDiagram
 6. リモートウェイクアップの印（`set_wakeup`、`USB_WAKEUP`、既定 1）と、MaxPower（`set_max_power`、`GADGET_MAX_POWER`、既定 500 mA）を合わせる。
 7. UDC に付け、`usb0` に固定 IP を付ける。
 
-環境変数（と `/etc/lefthand/gadget.env`）で動きを変える：`HID_MOUSE`、`USB_WAKEUP`、`GADGET_MAX_POWER`、`GADGET_TERMINAL`、`LEFTHAND_SELF`、`SKIP_BIND`、`GADGET_UNBIND_ONLY`（切り離すだけ。端末モードの切り替えの前半）、`GADGET_CHECK`（何も変えずに、付け直しが要るかを調べる。`brain-deck update` が使う）。
+環境変数（と `/etc/lefthand/gadget.env`）で動きを変える：`HID_MOUSE`、`NET_MODE`、`NET_MAC`、`USB_WAKEUP`、`GADGET_MAX_POWER`、`GADGET_TERMINAL`、`LEFTHAND_SELF`、`SKIP_BIND`、`GADGET_UNBIND_ONLY`（切り離すだけ。端末モードの切り替えの前半）、`GADGET_CHECK`（何も変えずに、付け直しが要るかを調べる。`brain-deck update` が使う）。
 変えるたびに切り離すのは、構成の名前や印を PC が読むのは「つながったとき」だけだから。
 
 - bash で実行すること。ディスクリプタを `printf` の `\x` で書くので、dash（`/bin/sh`）では壊れる。

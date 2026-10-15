@@ -24,6 +24,7 @@
 | PC に送るキーの名前 | main.go（`hidUsage`、`modBits`、`prettyKey`）、gui/src/keys.ts |
 | HID のレポートの形 | hid.go と gadget-setup.sh（同じディスクリプタ。両方を変える）、main.go（`State.send`）、mouse.go、media.go、pen.go |
 | USB の構成（ファンクション、名前、電流） | gadget-setup.sh、usbmode.go、update.go（`-check-gadget`） |
+| USB のネットワークの方式と MAC（スマホのイーサネット テザリング） | gadget-setup.sh（`NET_MODE`、`NET_MAC`、`switch_net`）、netmode.go、control.go（`set_net_mode`）、cmd/brain-deck/main.go（`net-mode`） |
 | 端末モード | termmode.go（出入り）、term.go（制御シーケンス）、termdraw.go（画面）、termkeys.go（キー）、termpty.go（PTY） |
 | 日本語入力 | ime.go、prompt.go、contrib/brain/lefthand-ime.sh |
 | 自分で足すアプリ | apps.go（置き場所、app.yaml）、appsrun.go（動かす係、上限）、appwidget.go（出力の決まり、描画）、docs/apps.md、cmd/brain-deck/apps.go |
@@ -69,6 +70,7 @@
 | media.go | メディアキー（Consumer Control）と、`media:` の割り当て |
 | pen.go | ペンタブレット（`widget: pentablet`）のレポート、PC の画面への当てはめ、筆圧 |
 | usbmode.go | USB の形の切り替え（`USBMode`）、端末モードの構成の名前、gadget-setup.sh の実行 |
+| netmode.go | USB のネットワークの方式（NCM、ECM、RNDIS）と相手から見た MAC（pc、phone）の切り替え（`RequestNet`）、今の方式を configfs から読む（`detectNetMode`）、カーネルにある方式か（`/proc/config.gz`） |
 | usbboot.go | 起動のときの USB の準備（`/dev/hidg0` ができるのを待つ `StartBoot`、ethernet_gadget を待つ `waitGadgetUnit`）、入力とフレームバッファを待つ（フェーズ K6） |
 | wakeup.go | スリープ中の PC を起こす（`Waker`） |
 | link.go | PC とのつながり（UDC の state と 5V。`LinkMonitor`） |

@@ -191,7 +191,7 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 | `online` | `configured`、`suspended`、空なら true |
 | `offline_mode` | デーモンが「外れている」として、PC に送るものを休みにしているか（5V があるまま `configured` でなくなったときは、8 秒続いてから） |
 
-`hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.media` は、メディアキー（`media:`）が PC に届くか。キーボードとマウスの形で true（ガジェットを作り直す前の古い形では、マウスがあっても false）。この項目がなければ、メディアキーに対応する前の版。`hid.switching` は、`set_usb_mode` で切り替えている途中か。`hid.usb_state` は、Brain の USB コントローラの状態（`/sys/class/udc/ci_hdrc.0/state`。`configured` でつながっている、`suspended` は PC がスリープしてバスを止めている）。`hid` がなければ、lefthand がマウスに対応する前の版。
+`hid.mouse` は、Brain の USB にマウスがあるか（`mouse:` とトラックパッドが PC に届くか）。起動したときはキーボードだけ（ブートキーボード）の形なので false。`hid.media` は、メディアキー（`media:`）が PC に届くか。キーボードとマウスの形で true（ガジェットを作り直す前の古い形では、マウスがあっても false）。この項目がなければ、メディアキーに対応する前の版。`hid.switching` は、`set_usb_mode` で切り替えている途中か。`hid.usb_state` は、Brain の USB コントローラの状態（`/sys/class/udc/ci_hdrc.0/state`。`configured` でつながっている、`suspended` は PC がスリープしてバスを止めている）。`hid` がなければ、lefthand がマウスに対応する前の版。`hid.net` は USB のネットワークの方式（`ncm`、`ecm`、`rndis`。分からなければ空）、`hid.net_mac` は相手から見た Brain の MAC（`pc`、`phone`、どちらでもなければその値）。`hid.net` がなければ、方式を切り替えられない版。
 
 `battery` は電池の状態（`battery.go` の `BatteryInfo`）。読めなければ `null`。この項目がなければ、電池を読まない版。
 
@@ -230,6 +230,20 @@ USB の形を切り替える（キーボードだけ ⇔ キーボードとマ�
 - **返事のあと**：`switching` が true なら、返事を送ってから 0.3 秒ほどあとに USB を付け直す。このシリアルも切れるので、GUI は接続し直す。2〜3 秒かかる。
 - **何もしないとき**：すでにその形なら `switching` は false。
 - **誤り**：切り替えの途中なら `conflict`、mode が違えば `bad_request`。
+
+### set_net_mode
+
+USB のネットワークの方式と、相手から見た Brain の MAC を切り替える（[README の「USB のネットワークの方式」](../README.md#usb-のネットワークの方式スマホのイーサネットテザリング)）。`mode` は `ncm`、`ecm`、`rndis`、`mac` は `pc`（省くとこれ）か `phone`（Android のイーサネット テザリング用）。HID の形と端末モードは変えない。
+
+```json
+→ {"id":9,"cmd":"set_net_mode","mode":"ncm","mac":"phone"}
+← {"id":9,"ok":true,"result":{"net":"ncm","mac":"phone","switching":true}}
+```
+
+- **返事のあと**：`switching` が true なら、返事を送ってから 0.3 秒ほどあとに USB を付け直す（ネットワークのファンクションも作り直す）。このシリアルも切れる。数秒かかる。終わったら `get_status` の `hid.net` と `hid.net_mac` で確かめる。
+- **何もしないとき**：すでにその方式と MAC なら `switching` は false。
+- **起動し直すと**：`/etc/lefthand/gadget.env` の `NET_MODE` と `NET_MAC`（既定 `ncm` と `pc`）に戻る。
+- **誤り**：切り替えの途中なら `conflict`。mode や mac が違うとき、カーネルにその方式がないとき（このカーネルの `ecm`）は `bad_request`。
 
 ### set_terminal
 

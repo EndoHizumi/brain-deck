@@ -15,7 +15,7 @@ README は「使い方」、REPORT.md は「作業の記録」、docs/config.md 
 | 章 | 内容 |
 | --- | --- |
 | [1. 全体像](architecture/01-overview.md) | Brain のデーモン（lefthand）、PC のコマンド（brain-deck）、設定 GUI。それぞれの役目とつながり。ハードウェア |
-| [2. USB の構成](architecture/02-usb.md) | NCM、HID（キーボード、マウス、メディアキー、ペン）、ACM 2 つ。形の切り替え。gadget-setup.sh の役目 |
+| [2. USB の構成](architecture/02-usb.md) | ネットワーク（NCM。RNDIS とスマホ向けの MAC に切り替えられる）、HID（キーボード、マウス、メディアキー、ペン）、ACM 2 つ。形の切り替え。gadget-setup.sh の役目 |
 | [3. 入力の流れ](architecture/03-input.md) | キーとタッチのイベントが、レイヤーを通って、PC へのキーやアプリの操作になるまで |
 | [4. 割り当ての重なり](architecture/04-layers.md) | レイヤー、セル、ソフトキー、ホーム画面、プロファイル、上書きの値が、どう重なって最終的な割り当てになるか |
 | [5. 描画](architecture/05-display.md) | フレームバッファ、描画のスレッド、部分的な描き直し、回転、フォント、背景画像、状態の帯 |

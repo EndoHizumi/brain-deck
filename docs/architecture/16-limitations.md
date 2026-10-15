@@ -19,6 +19,8 @@
 | **CPU が 1 つで遅い** | 起動に約 55 秒（lefthand の準備まで約 26 秒、PC へのキーまで約 28 秒。サービスを止める前は 84 秒と 86 秒）。YAML の解析は PC の約 150 倍。大きな画像は Brain で開かない | 重い処理は PC。描画の優先度を下げる。起動を速くする段階 1〜6（contrib/boot）を本番に適用した（2026-10-12）。lefthand と USB の構成は basic.target を待たない | README の「Brain の起動を速くする」 |
 | **cgroup が使えない** | コントローラーが有効でない | 自分で足すアプリは ulimit（仮想メモリ）で制限 | REPORT.md のフェーズ K5 |
 | **uinput がない** | カーネルに uinput がなく、本物のキーやタッチを自動で作れない。`/dev/input/event1` に書く試験は止められた | 実機のキーやふたの試験はユーザーが行う。タッチは記録と再生（`-record-touch`、`-replay-touch`） | record.go、PROGRESS.md |
+| **ECM がない** | カーネルに `CONFIG_USB_CONFIGFS_ECM` がなく（モジュールもない）、USB のネットワークを ECM にできない。NCM と RNDIS はある | `brain-deck net-mode ecm` は断る。使うにはカーネルの再ビルドが要る（`/boot` に触れるので、別の仕事） | [2. USB の構成](02-usb.md)の「ネットワークの方式と MAC」 |
+| **USB のホストになれない** | デバイスツリーの USB が `dr_mode = "peripheral"`（`role` は gadget のまま）。スマホの「USB テザリング」はスマホが USB の機器になるので、Brain がホストでないと使えない。ホストのドライバ（rndis_host、cdc_ncm、cdc_ether）はカーネルにある | イーサネット テザリング（スマホがホスト）で使う。ホストにするには `/boot` のデバイスツリーの変更、スマホへの 5 V（`usb0_vbus` は評価ボードの記述を引き継いだもので、出るかは未確認）、OTG のケーブルが要り、そのあいだはキーボードになれない | 2026-10-15 に読んだだけ（変えていない） |
 | **RTC はドライバなしで読む** | `/dev/mem` から直接読む（カーネルの設定が変わると読めなくなるかもしれない） | 読めなければ使わない | rtc.go |
 
 ## 確かめていないこと（未確認）
@@ -30,6 +32,8 @@
 | **macOS と Windows のペン** | Windows は Windows Ink、macOS は標準のドライバがない。どちらも試していない | README の「ペンタブレット」 |
 | **macOS と Windows のショートカット、スリープ解除** | F13〜F24 の割り当て、キーボードからのスリープ解除 | README の「メディアキー、F13〜F24、スリープ解除」 |
 | **Windows の設定 GUI、NCM** | WebSerial のポートの見え方、NCM のドライバ | README、REPORT.md |
+| **macOS と Windows の RNDIS、スマホ向けの MAC** | RNDIS は Windows 用の `os_desc` を書いたが、Windows でも macOS でも試していない（macOS は RNDIS のドライバを持たない）。phone の MAC でも同じ | README の「USB のネットワークの方式」 |
+| **ほかのスマホのイーサネット テザリング** | 確かめたのは Xperia 1 IV（Android 15）だけ。NCM と phone で使えた。RNDIS はこのスマホでは使われなかった。スマホにつないだまま Brain のキーボードで打てるかも未確認 | README の「USB のネットワークの方式」 |
 | **BIOS と UEFI** | F24 まで送れるようにしたディスクリプタで、BIOS での入力が変わらないこと（理屈の上では変わらない） | README の「BIOS や UEFI で確かめる」 |
 | **RTC の日付** | フェーズ R2 で RTC が 1 日進んでいた。純正のファームウェアで 1 日先にしたのか、読み方が 1 日ずれているのか分かっていない | REPORT.md の「あとで確かめてほしいこと」 |
 | **時間に頼るテスト** | `go test` 全体で 1 度だけ落ち、くり返しでは出なかった（K5、J） | REPORT.md |
@@ -58,6 +62,7 @@
 
 - **エンジンのロック**：`Engine.mu` を持ったまま、ウィジェットのタップの処理、通知（`onView`、`onStatus`、`onRotate`、`notify`）を呼ぶ。そこからエンジン（`Engine.Status`、`View` など）や設定の置き場所（`configStore`）のロックを取ると止まる。K1（設定の反映のとき）と K5（アプリのタップで、設定のアプリの写しを作ったとき。コミット d18b7d3）で実機で起きた。描画の goroutine も画面のロックを持ったままエンジンを読むので、同じ形に気をつける。
 - **Go と TypeScript の描き方は 2 つある**：display.go などと gui/src/preview.ts など。fixture を使った画素単位の比べで合わせている。片方だけ変えるとテストが落ちる。
+- **NCM を 2 つ作らない**：このカーネルの f_ncm は、MAC の文字列を指す静的なポインタを、最後にリンクした ncm に向ける。別のガジェットで ncm を作って消すと、本物のガジェットの付け直しで PC の cdc_ncm が MAC を読めず、usb0 が使えなくなった（2026-10-07。直すには付け直すか再起動）。gadget-setup.sh の方式の切り替え（`switch_net`）は、ncm を 1 つしか持たない。
 - **HID のディスクリプタは 2 か所にある**：hid.go と gadget-setup.sh。テストと `-check-gadget` で合わせている。
 - **設定の項目を足したら反映も足す**：main.go の `cstore` の `apply`（と、上書きで変わるものは `light`）。足し忘れると、保存しても再起動するまで効かない。
 - **データの書き込みは待たせない**：返事や入力の処理で SD カードを待たない形（保存の goroutine）にそろえる。

@@ -177,7 +177,7 @@ USB でつなぐと、PC には次の 4 つが見える。
 
 | 機能 | インターフェイスの番号 | PC 側の見え方 | Brain 側 | 用途 |
 | --- | --- | --- | --- | --- |
-| NCM | 0、1 | ネットワークインターフェース（Linux では enx8a158b443a01） | usb0 | SSH |
+| ネットワーク（既定は NCM） | 0、1 | ネットワークインターフェース（Linux では enx8a158b443a01） | usb0 | SSH。方式は [USB のネットワークの方式](#usb-のネットワークの方式スマホのイーサネットテザリング)で切り替えられる（番号は変わらない） |
 | HID | 2 | 「SHARP Brain」のキーボード（ブートキーボード）。マウスをオンにすると「SHARP Brain Keyboard」と「SHARP Brain Mouse」（Linux の /dev/input/by-id/ では `…-if02-event-kbd` と `…-if02-event-mouse`） | /dev/hidg0 | 左手デバイスとしての入力 |
 | CDC-ACM（1 つ目） | 3、4 | シリアルポート（Linux では /dev/ttyACM0、by-id は `…-if03`） | /dev/ttyGS0 | シリアルコンソール（getty のログイン画面）。設定 GUI のコンソールのタブ。[端末モード](#端末モード)では逆向きに使う |
 | CDC-ACM（2 つ目） | 5、6 | シリアルポート（Linux では /dev/ttyACM1、by-id は `…-if05`） | /dev/ttyGS1 | 設定 GUI、brain-deck |
@@ -600,7 +600,8 @@ PC の OS も、マウスの動きに加速をかける（Windows の「ポイ�
 
 ### スマホで使う
 
-- **Android**：USB OTG のケーブル（または USB-C どうしのケーブル）でつなぐだけで、キーボードとマウスとして使える。画面にカーソルが出る。NCM とシリアルは、Android では使わない（無視される）。
+- **Android**：USB OTG のケーブル（または USB-C どうしのケーブル）でつなぐだけで、キーボードとマウスとして使える。画面にカーソルが出る。シリアルは、Android では使わない（無視される）。つないだときに「USB カメラを開きますか？」などと聞かれることがあるが、USB の機器を扱うアプリを並べているだけなので、閉じてよい。
+- **スマホのネットに出る**：`brain-deck net-mode phone` にしてからスマホにつなぐと、Android の「イーサネット テザリング」の対象になり、Brain がスマホ経由でインターネットに出られる（[USB のネットワークの方式](#usb-のネットワークの方式スマホのイーサネットテザリング)）。
 - **iPhone、iPad**：キーボードはそのまま使える。マウスのカーソルを出すには、「設定」→「アクセシビリティ」→「タッチ」→「AssistiveTouch」をオンにする（iPad は、オンにしなくてもカーソルが出る）。ケーブルは、Lightning なら「Lightning - USB カメラアダプタ」、USB-C なら USB-C どうし。
 - **電源**：Brain は自分の電池で動くので、スマホから給電しなくてよい。スマホが USB 機器に電気を送れないと言うときは、電源付きのアダプタを使う。
 
@@ -620,6 +621,52 @@ Brain は起動したとき、USB の HID をキーボードだけ（ブート�
 - **仕組み**：lefthand が /dev/hidg0 を閉じ、`HID_MOUSE=1`（か 0）と `LEFTHAND_SELF=1` を付けて `/usr/local/sbin/lefthand-gadget-setup` を実行し（lefthand.service は止めない）、付け直したあとに HID の形を読み直す（`journalctl -u lefthand` の `usb: ... keyboard + mouse`）。gadget-setup.sh は、HID と、そのあとの ACM 2 つのリンクを外し、HID の属性を書いて、同じ順でリンクし直す。インターフェイスの番号は変わらない。
 - **新しくするとき**：デーモンと gadget-setup.sh は組で入れる。古いデーモンは、キーボードとマウスの形を正しく扱えない。
 - **メディアキー**：キーボードとマウスの形には、メディアキー（`media:`）も入る（[メディアキー、F13〜F24、スリープ解除](#メディアキーf13f24スリープ解除)）。
+
+### USB のネットワークの方式（スマホのイーサネットテザリング）
+
+USB のネットワークの方式と、相手から見た Brain の MAC を切り替えられる。既定（起動したとき）は NCM と PC 用の MAC で、PC での使い方は変わらない。
+
+| 選ぶもの | 値 | 使う相手 |
+| --- | --- | --- |
+| 方式（`NET_MODE`） | `ncm`（既定） | Linux、macOS、Windows 10 以降の PC。Android のイーサネットテザリング（MAC を phone にする） |
+| | `rndis` | NCM を持たない相手（古い Windows など）。Windows のための Microsoft OS ディスクリプタも書く |
+| | `ecm` | **この Brain のカーネルでは使えない**（`CONFIG_USB_CONFIGFS_ECM` がない。使うにはカーネルの再ビルドが要る）。選ぶと断る |
+| 相手から見た MAC（`NET_MAC`） | `pc`（既定）：`8a:15:8b:44:3a:01` | PC（Linux では enx8a158b443a01。PC の 192.168.7.1 の設定がそのまま当たる） |
+| | `phone`：`88:15:8b:44:3a:01` | Android のイーサネットテザリング |
+
+| 切り替え方 | 書き方 |
+| --- | --- |
+| PC のコマンド | `brain-deck net-mode phone`（NCM と phone。スマホ用）、`brain-deck net-mode ncm`（既定に戻す）、`brain-deck net-mode rndis [pc\|phone]`、`brain-deck net-mode`（今の方式を見る）。`brain-deck status` の「USB のネットワーク」にも出る |
+| 起動したときの方式 | Brain の `/etc/lefthand/gadget.env` に `NET_MODE=ncm` と `NET_MAC=phone` などと書いて、Brain を再起動する |
+
+- **切り替えると USB を付け直す**：数秒、キー入力、SSH、シリアルが切れる。ネットワークのファンクションは作り直す（Brain の usb0 も一度消えて、同じ名前ででき直し、192.168.7.2 も付け直す）。HID と ACM は消さない。
+- **変わらないもの**：インターフェイスの番号（シリアルの `-if03`、`-if05`）。どの方式もネットワークのインターフェイスは 2 つ（0 と 1）なので、brain-deck、設定 GUI、PC の udev の規則はそのまま使える。USB の形（マウス）や端末モードを切り替えても、方式と MAC はそのまま。
+- **起動し直すと戻る**：`brain-deck net-mode` で選んだものは、Brain を起動し直すと `gadget.env` の値（書いていなければ NCM と pc）に戻る。
+- **phone のときの PC**：PC のネットワークの名前が `enx88158b443a01` に変わり、192.168.7.1 の設定（NetworkManager などで enx8a158b443a01 に付けたもの）が当たらないので、ssh できない。brain-deck と設定 GUI（シリアル）は使えるので、PC に戻したら `brain-deck net-mode ncm` で戻す。phone のままでも PC で ssh したいなら、PC で `enx88158b443a01` にも 192.168.7.1/24 を付ける設定を足す。
+
+**スマホのイーサネットテザリングで使う**（2026-10-15、Xperia 1 IV、Android 15 で確かめた）
+
+1. PC につないだまま `brain-deck net-mode phone` を実行し、`brain-deck net-mode` が「NCM、スマホ向けの MAC」になるのを待つ。
+2. Brain を PC から外し、スマホにつなぐ（USB-C と micro-B の OTG のケーブル）。
+3. スマホの「設定」→「ネットワークとインターネット」→「テザリング」で「イーサネット テザリング」をオンにする。
+4. Brain で、スマホから IP を取る：`sudo dhclient -v usb0`（Brain の画面の端末モードか、つなぐ前に仕込んだスクリプトで）。スマホの DHCP（例：10.71.219.59）から 10.71.219.170/24 のようなアドレスと、既定の経路と DNS をもらう。192.168.7.2 は残る。
+5. 確かめ方：`ping -c3 8.8.8.8`、`curl -sS -o /dev/null -w '%{http_code}\n' https://www.google.com/generate_204`（204 が出ればよい）。
+6. PC に戻すときは、`sudo pkill -x dhclient; sudo ip route del default dev usb0; sudo ip addr del <もらったアドレス> dev usb0` で後片付けし、PC につないで `brain-deck net-mode ncm`。
+
+確かめた結果：
+
+| 方式と MAC | スマホ（Xperia 1 IV、Android 15）| Linux の PC |
+| --- | --- | --- |
+| NCM と pc（既定） | テザリングの対象にならない。スマホから 1 つもパケットが来ない | 使える（いつもどおり） |
+| RNDIS と pc | 対象にならない。パケットは来ない | 使える（`rndis_host`、enx8a158b443a01、ssh、brain-deck） |
+| RNDIS と phone | 対象にならない。パケットは来ない（このスマホのカーネルは RNDIS を扱わないと考えられる） | 使える（enx88158b443a01。192.168.7.1 は付け直しが要る） |
+| **NCM と phone** | **対象になる**。DHCP でアドレスをもらい、ping（スマホ、8.8.8.8、example.com）と HTTPS（Google の generate_204 が 204、example.com が 200）が通った。このとき Brain のキーボードでスマホに打てるかは未確認 | 使える（`cdc_ncm`、enx88158b443a01） |
+| ECM | このカーネルでは作れない | — |
+
+- **なぜ MAC を変えるか**：相手の Linux のカーネル（usbnet）は、MAC の先頭のバイトに「ローカルに割り当てた」印（0x02）が立った機器のネットワークを `usb0`、立っていない機器を `eth0` と名付ける。PC の Linux は udev が MAC から `enx…` に付け直すので気にならないが、Android は付け直さず、イーサネットテザリングは `eth0` のような名前しか扱わない。既定の pc の値（`8a:…`、Brainux と同じ）は印が立っているので、スマホでは `usb0` になって無視される。phone の値（`88:…`）は印を立てない。
+- **macOS と Windows**：RNDIS と phone は、macOS と Windows では確かめていない（未確認）。macOS は RNDIS のドライバを持たない。
+- **スマホの電池**：スマホが Brain に給電することがある。Brain の電池は充電されないので、長く使うときは Brain の電圧に気をつける。
+- **仕組み**：gadget-setup.sh の `NET_MODE` と `NET_MAC`（環境変数か gadget.env）。lefthand からは、渡さないときは今の方式と MAC のまま（USB の形の切り替えや更新で戻らない）。[仕組みの資料の 2. USB の構成](docs/architecture/02-usb.md)。
 
 ### トラックパッドの調整（タッチの記録と再生）
 

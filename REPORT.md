@@ -6,6 +6,43 @@ Sharp Brain PW-SH2 は、起動すると USB HID キーボードとして PC に
 
 共有用のドキュメント: https://claude.ai/code/artifact/e37cc86b-6e33-4eea-92b1-5f55695dabd4
 
+## 追記：USB のネットワークの方式とスマホのイーサネット テザリング（2026-10-15 夕方、ユーザーあり）
+
+### 結果
+
+- **Brain がスマホ経由でインターネットに出られた**（Xperia 1 IV、Android 15 のイーサネット テザリング）。NCM と、相手から見た MAC を「ローカルに割り当てた」印のない値（`88:15:8b:44:3a:01`）にしたときだけ。DHCP で 10.71.219.170/24（スマホは 10.71.219.59。DNS もスマホ）、ping（スマホ、8.8.8.8、example.com）3/3、HTTPS（`https://www.google.com/generate_204` が 204、`https://example.com/` が 200）。
+- 試した組み合わせ（スマホ）：NCM と pc（最初の形）、RNDIS と pc、RNDIS と phone は、どれも USB が `configured` になるが、スマホから 1 つもパケットが来ず、テザリングの対象にならなかった。RNDIS と pc のときは「USB カメラを開きますか？」と聞かれた（USB の機器を扱うアプリを並べるだけで、関係ない）。
+- 原因：相手の Linux のカーネル（usbnet）は、MAC に印のある機器のネットワークを `usb0`、ない機器を `eth0` と名付ける。PC は udev（73-usb-net-by-mac.link）が `enx…` に付け直すが、Android は付け直さず、イーサネットテザリングは `eth0` の形しか扱わない。PC のカーネルのログ（`cdc_ncm … usb0: register` と `… eth0: register`）で確かめた。RNDIS は、このスマホのカーネルが扱わないと考えられる（確かめていない）。
+- **ECM はこのカーネルにない**（`CONFIG_USB_CONFIGFS_ECM` なし、モジュールもない。`mkdir functions/ecm.*` が ENOENT）。使うには再ビルドが要る。RNDIS はある。
+- USB テザリング（スマホが USB の機器になる）は、Brain が USB のホストでないと使えない。デバイスツリーが `dr_mode = "peripheral"` で、ホストにするには `/boot` の変更と 5 V の給電が要る（読んだだけ。docs/architecture/16-limitations.md）。
+
+### 作ったもの（コミット b42cf0e、1583afd）
+
+- gadget-setup.sh：`NET_MODE=ncm|ecm|rndis`、`NET_MAC=pc|phone`（環境変数か `/etc/lefthand/gadget.env`。既定は ncm と pc で、PC での使い方は変わらない）。方式を変えるときはネットワークのファンクションを作り直し、HID と ACM は同じ順でリンクし直す。インターフェイスの番号（`-if03`、`-if05`）は変わらない。RNDIS では Windows 用の `os_desc` も書く。構成の名前の先頭は方式（`RNDIS+HID+ACM+ACM`）。lefthand からは、渡さなければ今の方式と MAC のまま。
+- デーモン：`set_net_mode`（`mode`、`mac`）、`get_status` の `hid.net` と `hid.net_mac`。ECM は `/proc/config.gz` を見て先に断る。
+- brain-deck：`net-mode [ncm|ecm|rndis|phone] [pc|phone]`。`phone` は NCM と phone。status に「USB のネットワーク」。
+
+### 確かめたこと（Linux の PC）
+
+- 試験のデーモン（netmode-hw1、netmode-hw2）で、ncm → rndis → ncm、phone → usb-mode mouse → ncm → rndis phone → rndis → ncm。どれも PC のドライバ（cdc_ncm、rndis_host）、名前（enx8a158b443a01、phone のときは enx88158b443a01）、シリアルの `-if03` と `-if05`、ssh（pc のとき）、brain-deck が期待どおり。USB の形を切り替えても方式と MAC は残る。`net-mode ecm` は USB に触らず断る。
+- 設定 GUI は、brain-deck と同じ `-if05` を使うので変わらないはずだが、画面では確かめていない。
+- macOS と Windows は未確認。
+- phone のとき、PC の NetworkManager は名前の変わったインターフェイスで DHCP を試しては失敗し、IPv6 のリンクローカルも付いたり消えたりした。ssh は続かないので、PC 用に戻すのはシリアルの `brain-deck net-mode ncm` で行う。
+
+### 本番の状態（終わったとき）
+
+- デーモンは本番の 5c08f95ede53 のまま（今回の版は本番に入れていない）。USB は NCM と pc（gadget-setup.sh も本番の古いもの）。試験のユニット、タイマー、ログのサービス、dhclient は止めた。`/tmp/lhu` と `/tmp/phone*` に試験の写しとログが残っている（再起動で消える）。
+- 終わったときの電池は 3.59 V（試験の初めは 3.81 V）。
+
+### 次にすること（Brain の中で同期を動かすなら）
+
+- スマホにつないだら自動で DHCP を取り、外したら片付ける（UDC の state を見る。lefthand の link.go か、小さな systemd のユニット）。0.5 日。
+- 時刻：HTTPS は時刻がずれると失敗する。インターネットに出たときに時刻を合わせる（timesyncd は段階 2 で止めた。HTTP の Date で合わせる案）。0.5 日。
+- 同期の処理：今は PC の `brain-deck sync` が予定と天気を取って、シリアルで送る。Brain で動かすには、デーモンの中に取る処理を移す（Go なのでそのまま使える部分が多い）か、ARM の brain-deck をデーモンの UNIX ソケットにつなぐ。1〜2 日。
+- 設定と秘密：予定の URL などは PC の `~/.config/brain-deck/` にある（今回は読んでいない）。Brain に置く方法と権限を決める。0.5 日。
+- 電池：スマホにつないでも Brain は充電されない。長くつなぐときの電圧の扱いを決める。
+- 合わせて 3〜4 日の見込み（実機の試験を含む）。
+
 ## 追記：フェーズ K7　実行ファイルを小さくする（2026-10-12 夜〜10-13、ユーザーあり）
 
 ### 本番の状態（終わったとき）
