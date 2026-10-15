@@ -30,6 +30,7 @@
 
 ## 本番の状態（最後に確かめたとき）
 
+- 2026-10-16 21:45：デーモン 99b412788322（`.prev` は同じコードの 99b412788322+dirty。その前は 3a63395abf17）。PC の brain-deck も 99b412788322。設定のアプリの「タブレットの形の本体キー」の行と上書き `lid.tablet_keys` を消した（PW-SH2 はタブレットの形のあいだキーを送らない。REPORT.md の「タブレットの形のキー」）。本番の上書きはなし。
 - 2026-10-13 01:12（フェーズ K7 の終わり）：デーモン 5c08f95ede53（`.prev` 7a97a93e5130）。読み物の本文の文字は `/usr/local/share/lefthand/reader-24.lrf.gz`、`reader-32.lrf.gz`（`-check-fonts` で ok）。設定は config/current.yaml（profiles なし、例のアプリなし）。PC の `~/.local/bin/brain-deck` は 4a1cd8cc04ba（「.prev はそのまま」の表示を直した版。デーモンの側は 5c08f95 と同じ）。
 - Brain：boot-tune.sh の段階 1〜6 を適用（`/etc/lefthand/boot-tune.state`）。ly は止めている（Brain の画面のログインは、lefthand を止めて tty1 で Enter）。`/etc/systemd/system/lefthand.service` は getty@tty1 も ethernet_gadget も待たない版（段階 3 の前は `.prev`、K6 の前は `.prev2`）。Brain の ~/boot に contrib/boot の写し。
 - 戻すとき：`brain-deck update --rollback` は 7a97a93e5130（文字を埋め込んだ版。今のユニットと組み合わせてよい）。d18b7d39e6c6 以前に戻すなら、先にユニットを `.prev2` に戻し、段階 4 も戻す。8a09379808bb には月の表示のタップで固まる不具合がある（docs/architecture/16-limitations.md）。
