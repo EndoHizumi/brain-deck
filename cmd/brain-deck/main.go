@@ -164,6 +164,10 @@ const usage = `使い方：
   brain-deck profile use <名前>|none  手で選ぶ（別の PC が名乗るまで続く）。profile auto でやめる
   brain-deck profile announce [<名前>]   この PC の名前を Brain に知らせる（sync が最初に行う。名前は sync.yaml の
                                       pc_name、なければホスト名）
+  brain-deck run [--limit 1m] -- <コマンド> [引数...]  Brain でコマンドを動かす（ssh を使わない）。Brain のふつうのユーザー
+                                      （user）で動き、root が要るときは sudo を付ける。シェルは通さないので、パイプなどは
+                                      sh -c '...'。出力はそれぞれ 64 KiB まで。終了コードはコマンドのもの（時間切れは 124）。
+                                      動かしたコマンドは Brain のジャーナル（brain-deck logs）に残る
   brain-deck exec --result <id> [--limit 10m] -- <コマンド> [引数...]
                                       コマンドを実行し、結果をテキストのタイル <id> に出す（実行中、成功、失敗と、
                                       出力の最後の行）。終了コードはコマンドのもの
@@ -186,7 +190,7 @@ const usage = `使い方：
   --prev             config get で、前の版（.prev）を読む
   --restart          config put で、再起動が要る項目を変えてもよい（書いて lefthand を再起動する）
   --result <id>      exec で、結果を出すテキストのタイルの id
-  --limit <時間>     exec で、コマンドの時間の上限（既定 10m。過ぎたら止めて「失敗」にする）
+  --limit <時間>     exec で、コマンドの時間の上限（既定 10m。過ぎたら止めて「失敗」にする）。run では既定 1m、10m まで
   -q, --quiet        成功したときに何も出さない
   -v, --verbose      通信の内容を標準エラーに出す
 
@@ -469,7 +473,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		name string
 		cmds string
 	}{{o.rollback, "--rollback", "update"}, {o.status, "--status", "update calibrate"}, {o.usb, "--usb", "restart"}, {o.noWait, "--no-wait", "reboot poweroff calibrate"},
-		{o.follow, "-f", "logs"}, {o.lines != 0, "-n", "logs battery"}, {o.fit, "--fit", "battery"}, {o.prev || o.restartOK, "--prev、--restart", "config"}, {o.result != "" || o.limit != 0, "--result、--limit", "exec"}} {
+		{o.follow, "-f", "logs"}, {o.lines != 0, "-n", "logs battery"}, {o.fit, "--fit", "battery"}, {o.prev || o.restartOK, "--prev、--restart", "config"}, {o.result != "", "--result", "exec"}, {o.limit != 0, "--limit", "exec run"}} {
 		if f.on && !strings.Contains(" "+f.cmds+" ", " "+o.args[0]+" ") {
 			fmt.Fprintf(stderr, "brain-deck: %s は %s で使います%s\n", f.name, f.cmds, hint)
 			return exitUsage
@@ -511,6 +515,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runConfig(o, stdin, stdout, stderr)
 	case "exec":
 		return runExec(o, stdout, stderr)
+	case "run":
+		return runRun(o, stdout, stderr)
 	case "images":
 		cmd, err = imagesCommand(o)
 	case "photo":

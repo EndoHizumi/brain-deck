@@ -191,6 +191,16 @@ func (f *fakeBrain) serve(commands []string) {
 			want := map[string]bool{"mouse": true, "keyboard": false, "toggle": !f.mouse}[req["mode"].(string)]
 			res = map[string]any{"mouse": want, "switching": want != f.mouse}
 			f.mouse = want
+		case "run":
+			argv, _ := req["argv"].([]any)
+			switch {
+			case len(argv) > 0 && argv[0] == "false":
+				res = map[string]any{"exit": 1, "stdout": "", "stderr": "failed\n", "user": "user"}
+			case len(argv) > 0 && argv[0] == "sleep":
+				res = map[string]any{"exit": 124, "stdout": "", "stderr": "", "timed_out": true, "user": "user"}
+			default:
+				res = map[string]any{"exit": 0, "stdout": fmt.Sprintf("ran %v (limit %v)\n", argv, req["limit_ms"]), "stderr": "", "user": "user"}
+			}
 		case "set_net_mode":
 			if req["mode"] == "ecm" {
 				b, _ := json.Marshal(map[string]any{"id": req["id"], "ok": false, "error": map[string]any{"code": "bad_request", "message": "this kernel cannot make ECM"}})
@@ -386,6 +396,29 @@ func TestNetMode(t *testing.T) {
 	for _, bad := range [][]string{{"net-mode", "eem"}, {"net-mode", "ncm", "rndis"}, {"net-mode", "phone", "pc"}, {"net-mode", "ncm", "pc", "x"}} {
 		if code, _, _ := runCLI(t, append([]string{"--port", f.slave}, bad...)...); code != exitUsage {
 			t.Fatalf("%v: %d", bad, code)
+		}
+	}
+}
+
+func TestRun(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := newFakeBrain(t)
+	go f.serve([]string{"hello", "run"})
+	if code, out, errs := runCLI(t, "--port", f.slave, "run", "--", "ls", "-l", "/tmp"); code != 0 || out != "ran [ls -l /tmp] (limit 60000)\n" {
+		t.Fatalf("run: %d %q %s", code, out, errs)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "run", "--limit", "5m", "--", "uptime"); code != 0 || !strings.Contains(out, "limit 300000") {
+		t.Fatalf("limit: %d %q", code, out)
+	}
+	if code, _, errs := runCLI(t, "--port", f.slave, "run", "--", "false"); code != 1 || errs != "failed\n" {
+		t.Fatalf("false: %d %q", code, errs)
+	}
+	if code, _, errs := runCLI(t, "--port", f.slave, "run", "--", "sleep", "100"); code != 124 || !strings.Contains(errs, "時間切れ") {
+		t.Fatalf("timeout: %d %q", code, errs)
+	}
+	for _, bad := range [][]string{{"run"}, {"run", "ls"}, {"run", "--limit", "11m", "--", "ls"}, {"text", "x", "y", "--limit", "1m"}} {
+		if code, _, _ := runCLI(t, append([]string{"--port", f.slave}, bad...)...); code != exitUsage {
+			t.Errorf("%v: %d", bad, code)
 		}
 	}
 }

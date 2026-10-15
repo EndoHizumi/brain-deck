@@ -168,21 +168,23 @@ type request struct {
 	State  string   `json:"state,omitempty"` // set_presence：状態の名前
 	Step   int      `json:"step,omitempty"`  // set_presence：+1 で次、-1 で前の状態
 	// 更新、再起動、電源、ログ、設定のテキスト
-	Kind    string `json:"kind,omitempty"`    // upload_begin：受け取るものの種類（update、image）
-	Stage   string `json:"stage,omitempty"`   // update_apply、update_confirm、update_discard：upload_end などが返した名前
-	USB     bool   `json:"usb,omitempty"`     // restart：USB も付け直す
-	Action  string `json:"action,omitempty"`  // power：reboot か poweroff
-	Lines   int    `json:"lines,omitempty"`   // get_logs：行数
-	Cursor  string `json:"cursor,omitempty"`  // get_logs：前の結果の cursor（そのあとだけ読む）
-	Prev    bool   `json:"prev,omitempty"`    // get_config_text：前の版（.prev）を読む
-	Restart bool   `json:"restart,omitempty"` // put_config_text：再起動が要る項目が変わってもよい（書いて再起動する）
-	Of      string `json:"of,omitempty"`      // upload_begin（kind: photo）：縦向きに切り抜き直したもとの写真の id
-	Photo   string `json:"photo,omitempty"`   // get_photo、delete_photo：写真の id
-	Memo    string `json:"memo,omitempty"`    // get_memo、delete_memo：メモの id（m1 など）
-	Read    string `json:"read,omitempty"`    // delete_read：読み物の id
-	App     string `json:"app,omitempty"`     // delete_app：アプリの名前
-	Path    string `json:"path,omitempty"`    // list_files、get_file、delete_file：場所（絶対パス。list_files で空なら場所の一覧）。upload_begin（kind: file）：置くフォルダ
-	BySize  bool   `json:"by_size,omitempty"` // list_files：大きい順（フォルダは中の合計。du）
+	Kind    string   `json:"kind,omitempty"`     // upload_begin：受け取るものの種類（update、image）
+	Stage   string   `json:"stage,omitempty"`    // update_apply、update_confirm、update_discard：upload_end などが返した名前
+	USB     bool     `json:"usb,omitempty"`      // restart：USB も付け直す
+	Action  string   `json:"action,omitempty"`   // power：reboot か poweroff
+	Lines   int      `json:"lines,omitempty"`    // get_logs：行数
+	Cursor  string   `json:"cursor,omitempty"`   // get_logs：前の結果の cursor（そのあとだけ読む）
+	Prev    bool     `json:"prev,omitempty"`     // get_config_text：前の版（.prev）を読む
+	Restart bool     `json:"restart,omitempty"`  // put_config_text：再起動が要る項目が変わってもよい（書いて再起動する）
+	Argv    []string `json:"argv,omitempty"`     // run：コマンドと引数（シェルは通さない）
+	LimitMS int64    `json:"limit_ms,omitempty"` // run：時間の上限（ミリ秒。省くと 1 分、最大 10 分）
+	Of      string   `json:"of,omitempty"`       // upload_begin（kind: photo）：縦向きに切り抜き直したもとの写真の id
+	Photo   string   `json:"photo,omitempty"`    // get_photo、delete_photo：写真の id
+	Memo    string   `json:"memo,omitempty"`     // get_memo、delete_memo：メモの id（m1 など）
+	Read    string   `json:"read,omitempty"`     // delete_read：読み物の id
+	App     string   `json:"app,omitempty"`      // delete_app：アプリの名前
+	Path    string   `json:"path,omitempty"`     // list_files、get_file、delete_file：場所（絶対パス。list_files で空なら場所の一覧）。upload_begin（kind: file）：置くフォルダ
+	BySize  bool     `json:"by_size,omitempty"`  // list_files：大きい順（フォルダは中の合計。du）
 	// set_override、clear_overrides：Brain で変える上書きの値（overrides.go）
 	Key   string          `json:"key,omitempty"`   // set_override：上書きの名前（backlight.level など）
 	Value json.RawMessage `json:"value,omitempty"` // set_override：値（JSON）
@@ -508,7 +510,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			"commands": []string{"hello", "get_config", "validate", "set_config", "get_keymap", "get_status", "subscribe_input", "set_time", "set_text", "get_text",
 				"get_todo", "todo_add", "todo_update", "todo_delete", "todo_move", "todo_clear_done", "subscribe_data",
 				"set_calendar", "get_calendar", "set_weather", "get_weather", "get_weather_icon",
-				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_net_mode", "set_terminal", "set_rotate",
+				"list_images", "image_begin", "image_chunk", "image_end", "image_abort", "get_image", "prune_images", "set_usb_mode", "set_net_mode", "run", "set_terminal", "set_rotate",
 				"set_qr", "get_qr", "get_widgets", "set_presence", "add_graph", "clear_graph", "get_graph",
 				"upload_begin", "upload_chunk", "upload_end", "upload_abort",
 				"update_apply", "update_discard", "update_rollback", "update_confirm", "update_status",
@@ -609,6 +611,12 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		}
 		// changed なら、この返事のあとに USB を付け直す（ネットワークのファンクションも作り直す）。シリアルも一度切れる
 		return ok(map[string]any{"net": req.Mode, "mac": cmp.Or(req.MAC, netMACPC), "switching": changed})
+	case "run":
+		r, err := runUserCommand(req.Argv, time.Duration(req.LimitMS)*time.Millisecond)
+		if err != nil {
+			return errResp(id, errBadRequest, err.Error(), nil)
+		}
+		return ok(r)
 	case "set_time":
 		if req.UnixMS == nil {
 			return errResp(id, errBadRequest, `"unix_ms" (milliseconds since 1970-01-01 UTC) is required`, nil)
