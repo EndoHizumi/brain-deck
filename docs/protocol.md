@@ -177,7 +177,7 @@ GUI は、接続する前にも使えるよう、同じ内容を `gui/src/keymap
 | `boot` | デーモンが起動したときにどうしたか（`set the clock from the RTC (…)`、`not used: …`、`not needed (…)`） |
 | `last_write`、`written_at` | `write` のとき、最後に書いた結果（`ok` か `failed: …`）と時刻 |
 
-`lid` はふた（`lid.go`）：`{"closed":false,"tablet":false,"tablet_keys":"off","keys_off":false,"close":"off","since":"…"}`。`closed` はふたが閉じている、`tablet` は画面を裏返したタブレットの形、`tablet_keys` はタブレットの形のときに本体のキーを使うか（設定の `lid.tablet_keys`、上書き）、`keys_off` は今、本体のキーを使っていない（タブレットの形で `tablet_keys` が `off`）、`close` は閉じたときの動き（設定の `lid.close`、上書き）、`screen` は閉じて画面を消しているとき `off`。`overrides` は上書きの値（`get_overrides` と同じ）。`backlight.lid` は、ふたが閉じていて画面を消している。どれもなければ、フェーズ K1 より前の版。
+`lid` はふた（`lid.go`）：`{"closed":false,"tablet":false,"tablet_keys":"off","keys_off":false,"close":"off","since":"…"}`。`closed` はふたが閉じている、`tablet` は画面を裏返したタブレットの形、`tablet_keys` はタブレットの形のときに本体のキーを使うか（設定の `lid.tablet_keys`）、`keys_off` は今、本体のキーを使っていない（タブレットの形で `tablet_keys` が `off`）、`close` は閉じたときの動き（設定の `lid.close`、上書き）、`screen` は閉じて画面を消しているとき `off`。`overrides` は上書きの値（`get_overrides` と同じ）。`backlight.lid` は、ふたが閉じていて画面を消している。どれもなければ、フェーズ K1 より前の版。
 
 `profile` は PC ごとの設定（下の「PC ごとの設定」の結果と同じ）、`backup` はバックアップの状態（下の「バックアップと復元」）。どれもなければ、フェーズ K3 より前の版。
 
@@ -894,7 +894,7 @@ Brain の設定のアプリで変えた値は、設定ファイルを書き換�
 ```json
 → {"id":1,"cmd":"get_overrides"}
 ← {"id":1,"ok":true,"result":{"overrides":[{"key":"backlight.level","label":"明るさ","value":3,"shown":"3","file":"起動したときの明るさ","used":true}],
-   "keys":["backlight.level","backlight.dim_after","backlight.offline.dim_after","backlight.photo","ime.method","lid.close","lid.tablet_keys"]}}
+   "keys":["backlight.level","backlight.dim_after","backlight.offline.dim_after","backlight.photo","ime.method","lid.close"]}}
 → {"id":2,"cmd":"set_override","key":"lid.close","value":"none","source":"brain-deck"}
 ← {"id":2,"ok":true,"result":{"overrides":[…],"keys":[…]}}
 → {"id":3,"cmd":"clear_overrides","keys":[],"source":"gui"}
