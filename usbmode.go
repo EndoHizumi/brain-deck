@@ -41,15 +41,15 @@ type USBMode struct {
 	dev       string
 	script    string
 	switching bool
-	preparing bool                                                                             // 起動のときの USB の準備を待っている（usbboot.go）
-	terminal  bool                                                                             // 端末モード（構成の名前に terminal を付ける。termmode.go）
-	netWant   string                                                                           // 次の付け直しで変えるネットワークの方式（netmode.go）。空なら今のまま
-	onChange  []func()                                                                         // 切り替えたあと（画面の描き直し、トラックパッドの取り消し）
-	run       func(ctx context.Context, script string, mouse, terminal bool, net string) error // テストで差し替える
-	unbind    func(ctx context.Context, script string) error                                   // 切り離すだけ（テストで差し替える）
+	preparing bool                                                                                // 起動のときの USB の準備を待っている（usbboot.go）
+	terminal  bool                                                                                // 端末モード（構成の名前に terminal を付ける。termmode.go）
+	netWant   netChoice                                                                           // 次の付け直しで変えるネットワーク（netmode.go）。空なら今のまま
+	onChange  []func()                                                                            // 切り替えたあと（画面の描き直し、トラックパッドの取り消し）
+	run       func(ctx context.Context, script string, mouse, terminal bool, net netChoice) error // テストで差し替える
+	unbind    func(ctx context.Context, script string) error                                      // 切り離すだけ（テストで差し替える）
 	detect    func(dev string) HIDLayout
-	netMode   func() string // 今のネットワークの方式（テストで差し替える）
-	waitUnit  func()        // gadget-setup.sh を動かす前に、ethernet_gadget の終わりを待つ（usbboot.go）
+	netMode   func() netChoice // 今のネットワークの方式と MAC（テストで差し替える）
+	waitUnit  func()           // gadget-setup.sh を動かす前に、ethernet_gadget の終わりを待つ（usbboot.go）
 }
 
 func NewUSBMode(s *State, hid *HIDWriter, dev, script string) *USBMode {
@@ -156,7 +156,7 @@ func (u *USBMode) applyHook(mouse bool, unbound func()) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	u.mu.Lock()
 	terminal, net := u.terminal, u.netWant
-	u.netWant = ""
+	u.netWant = netChoice{}
 	u.mu.Unlock()
 	if unbound != nil {
 		if err := u.unbind(ctx, u.script); err != nil {
@@ -183,13 +183,16 @@ func (u *USBMode) applyHook(mouse bool, unbound func()) error {
 }
 
 // runGadgetSetup は gadget-setup.sh を実行する。mouse は HID の形、terminal は構成の名前（端末モード）、
-// net はネットワークの方式（空なら渡さない。スクリプトは今の方式のままにする）。
-func runGadgetSetup(ctx context.Context, script string, mouse, terminal bool, net string) error {
+// net はネットワークの方式と MAC（空なら渡さない。スクリプトは今のままにする）。
+func runGadgetSetup(ctx context.Context, script string, mouse, terminal bool, net netChoice) error {
 	b := map[bool]string{false: "0", true: "1"}
 	cmd := exec.CommandContext(ctx, script)
 	cmd.Env = append(os.Environ(), "HID_MOUSE="+b[mouse], "GADGET_TERMINAL="+b[terminal], "LEFTHAND_SELF=1")
-	if net != "" {
-		cmd.Env = append(cmd.Env, "NET_MODE="+net)
+	if net.Mode != "" {
+		cmd.Env = append(cmd.Env, "NET_MODE="+net.Mode)
+	}
+	if net.MAC != "" {
+		cmd.Env = append(cmd.Env, "NET_MAC="+net.MAC)
 	}
 	out, err := cmd.CombinedOutput()
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {

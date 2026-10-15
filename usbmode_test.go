@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,7 @@ type fakeGadget struct {
 	block chan struct{} // 閉じるまで付け直しを終えない
 }
 
-func (g *fakeGadget) run(ctx context.Context, script string, mouse, terminal bool, net string) error {
+func (g *fakeGadget) run(ctx context.Context, script string, mouse, terminal bool, net netChoice) error {
 	if g.block != nil {
 		<-g.block
 	}
@@ -119,15 +120,15 @@ func TestNetModeSwitch(t *testing.T) {
 	s := &State{hid: h, active: map[string]Combo{}, kbdID: hidKeyboardID, mouse: NewMouse(h, hidMouseID), media: NewMedia(h, hidMediaID)}
 	g := &fakeGadget{mouse: true}
 	var mu sync.Mutex
-	cur := "ncm"
-	var nets []string
+	cur := netChoice{Mode: "ncm", MAC: "pc"}
+	var nets []netChoice
 	u := NewUSBMode(s, NewHIDWriter(os.DevNull), "/dev/null", "gadget-setup")
 	u.detect = g.detect
-	u.netMode = func() string { mu.Lock(); defer mu.Unlock(); return cur }
-	u.run = func(ctx context.Context, script string, mouse, terminal bool, net string) error {
+	u.netMode = func() netChoice { mu.Lock(); defer mu.Unlock(); return cur }
+	u.run = func(ctx context.Context, script string, mouse, terminal bool, net netChoice) error {
 		mu.Lock()
 		nets = append(nets, net)
-		if net != "" {
+		if net.Mode != "" {
 			cur = net
 		}
 		mu.Unlock()
@@ -136,20 +137,28 @@ func TestNetModeSwitch(t *testing.T) {
 	changed := make(chan struct{}, 4)
 	u.OnChange(func() { changed <- struct{}{} })
 
-	if ch, err := u.RequestNet("ecm"); err == nil || ch || !strings.Contains(err.Error(), "CONFIG_USB_CONFIGFS_ECM") {
+	if ch, err := u.RequestNet("ecm", ""); err == nil || ch || !strings.Contains(err.Error(), "CONFIG_USB_CONFIGFS_ECM") {
 		t.Fatalf("ecm must be refused when the kernel lacks it: %v %v", ch, err)
 	}
-	if _, err := u.RequestNet("eem"); err == nil {
+	if _, err := u.RequestNet("eem", ""); err == nil {
 		t.Fatal("bad mode should fail")
 	}
-	if ch, err := u.RequestNet("ncm"); err != nil || ch {
+	if _, err := u.RequestNet("ncm", "mine"); err == nil {
+		t.Fatal("bad mac should fail")
+	}
+	if ch, err := u.RequestNet("ncm", ""); err != nil || ch {
 		t.Fatalf("same mode: %v %v", ch, err)
 	}
-	if ch, err := u.RequestNet("rndis"); err != nil || !ch {
+	// 方式が同じでも、MAC が違えば付け直す
+	if ch, err := u.RequestNet("ncm", "phone"); err != nil || !ch {
+		t.Fatalf("ncm phone: %v %v", ch, err)
+	}
+	<-changed
+	if ch, err := u.RequestNet("rndis", ""); err != nil || !ch {
 		t.Fatalf("rndis: %v %v", ch, err)
 	}
 	<-changed
-	if u.NetMode() != "rndis" || !u.Mouse() {
+	if (u.NetMode() != netChoice{Mode: "rndis", MAC: "pc"}) || !u.Mouse() {
 		t.Fatalf("after switching: net %q, mouse %v", u.NetMode(), u.Mouse())
 	}
 	// マウスの切り替えでは、方式を渡さない（スクリプトが今の方式のままにする）
@@ -159,10 +168,10 @@ func TestNetModeSwitch(t *testing.T) {
 	<-changed
 	mu.Lock()
 	defer mu.Unlock()
-	if want := []string{"rndis", ""}; strings.Join(nets, ",") != strings.Join(want, ",") {
-		t.Errorf("NET_MODE passed = %q, want %q", nets, want)
+	if want := []netChoice{{"ncm", "phone"}, {"rndis", "pc"}, {}}; fmt.Sprint(nets) != fmt.Sprint(want) {
+		t.Errorf("NET_MODE and NET_MAC passed = %v, want %v", nets, want)
 	}
-	if want := []bool{true, false}; !equalBools(g.runs, want) {
+	if want := []bool{true, true, false}; !equalBools(g.runs, want) {
 		t.Errorf("mouse = %v, want %v", g.runs, want)
 	}
 	// カーネルの設定が読めなければ、作れるとする
@@ -179,13 +188,19 @@ func TestDetectNetMode(t *testing.T) {
 	configfsGadgets = t.TempDir()
 	c := filepath.Join(configfsGadgets, "eth", "configs", "c.1")
 	os.MkdirAll(c, 0o755)
-	if m := detectNetMode(); m != "" {
-		t.Fatalf("no function: %q", m)
+	if m := detectNetMode(); (m != netChoice{}) {
+		t.Fatalf("no function: %v", m)
 	}
 	os.WriteFile(filepath.Join(c, "hid.usb0"), nil, 0o644)
-	os.WriteFile(filepath.Join(c, "rndis.usb0"), nil, 0o644)
-	if m := detectNetMode(); m != "rndis" {
-		t.Fatalf("rndis: %q", m)
+	os.MkdirAll(filepath.Join(c, "rndis.usb0"), 0o755)
+	// configfs は host_addr の最後に NUL を付けて返す
+	os.WriteFile(filepath.Join(c, "rndis.usb0", "host_addr"), []byte("88:15:8b:44:3a:01\n\x00"), 0o644)
+	if m := detectNetMode(); (m != netChoice{Mode: "rndis", MAC: "phone"}) {
+		t.Fatalf("rndis phone: %v", m)
+	}
+	os.WriteFile(filepath.Join(c, "rndis.usb0", "host_addr"), []byte("02:00:00:00:00:01\n"), 0o644)
+	if m := detectNetMode(); (m != netChoice{Mode: "rndis", MAC: "02:00:00:00:00:01"}) {
+		t.Fatalf("other mac: %v", m)
 	}
 }
 

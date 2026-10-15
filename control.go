@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -156,6 +157,7 @@ type request struct {
 	W      int      `json:"w,omitempty"`      // image_begin：幅
 	H      int      `json:"h,omitempty"`      // image_begin：高さ
 	Mode   string   `json:"mode,omitempty"`   // set_usb_mode：keyboard、mouse、toggle。set_terminal：on、off、toggle。set_net_mode：ncm、ecm、rndis
+	MAC    string   `json:"mac,omitempty"`    // set_net_mode：相手から見た MAC（pc、phone。省くと pc）
 	Upload string   `json:"upload,omitempty"` // image_chunk、image_end、image_abort：image_begin が返した名前
 	Offset *int64   `json:"offset,omitempty"` // image_chunk、get_image：ファイルの中の位置
 	Data   string   `json:"data,omitempty"`   // image_chunk：中身（base64）
@@ -564,7 +566,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 	case "get_status":
 		return ok(map[string]any{"status": c.engine.Status(), "uptime_sec": int(time.Since(c.started).Seconds()),
 			"subscribed": c.monitor.subscribed(), "suppressing": c.monitor.suppressing(), "time": c.clock.Info(),
-			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "preparing": c.usb.Preparing(), "usb_state": USBState(), "net": c.usb.NetMode()},
+			"hid":      map[string]any{"mouse": c.engine.out.mouse.Available(), "media": c.engine.out.media.Available(), "switching": c.usb.Switching(), "preparing": c.usb.Preparing(), "usb_state": USBState(), "net": c.usb.NetMode().Mode, "net_mac": c.usb.NetMode().MAC},
 			"terminal": c.term.Info(), "battery": c.battery.Info(), "backlight": c.dim.Info(), "photo": c.photoStatus(), "sync": c.sync.Info(),
 			"rtc": c.clock.RTCInfo(), "lid": c.lid.Info(), "ime": c.ime.Info(), "overrides": c.store.Overrides(), "link": map[string]any{"state": c.link.State(), "online": c.link.Online(), "offline_mode": c.engine.Offline()},
 			"profile": c.profileInfo(), "backup": c.backup.Info()})
@@ -598,7 +600,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 		// changed なら、この返事のあとに USB を付け直す。シリアルも一度切れるので、つなぎ直すこと
 		return ok(map[string]any{"mouse": mouse, "switching": changed})
 	case "set_net_mode":
-		changed, err := c.usb.RequestNet(req.Mode)
+		changed, err := c.usb.RequestNet(req.Mode, req.MAC)
 		switch {
 		case errors.Is(err, errUSBBusy):
 			return errResp(id, errConflict, err.Error(), nil)
@@ -606,7 +608,7 @@ func (c *Controller) handle(line []byte, events chan []byte) response {
 			return errResp(id, errBadRequest, err.Error(), nil)
 		}
 		// changed なら、この返事のあとに USB を付け直す（ネットワークのファンクションも作り直す）。シリアルも一度切れる
-		return ok(map[string]any{"net": req.Mode, "switching": changed})
+		return ok(map[string]any{"net": req.Mode, "mac": cmp.Or(req.MAC, netMACPC), "switching": changed})
 	case "set_time":
 		if req.UnixMS == nil {
 			return errResp(id, errBadRequest, `"unix_ms" (milliseconds since 1970-01-01 UTC) is required`, nil)

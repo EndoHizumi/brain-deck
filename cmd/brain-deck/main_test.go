@@ -87,6 +87,7 @@ func TestReportExitCodes(t *testing.T) {
 type fakeBrain struct {
 	mouse bool   // USB にマウスがあるか（set_usb_mode）
 	net   string // USB のネットワークの方式（set_net_mode。空なら ncm）
+	mac   string // 相手から見た MAC（set_net_mode。空なら pc）
 	term  bool   // 端末モード（set_terminal）
 	// noPresence なら、get_widgets で在席ランプのセルがない設定のふりをする
 	noPresence bool
@@ -180,7 +181,7 @@ func (f *fakeBrain) serve(commands []string) {
 			res = map[string]any{"protocol": 1, "daemon": "lefthand", "version": v, "commands": commands, "upload_kinds": []string{"update", "image"}}
 		case "get_status":
 			res = map[string]any{"time": map[string]any{"now": time.Now().Format(time.RFC3339Nano), "synced": true},
-				"hid":      map[string]any{"mouse": f.mouse, "switching": false, "net": cmp.Or(f.net, "ncm")},
+				"hid":      map[string]any{"mouse": f.mouse, "switching": false, "net": cmp.Or(f.net, "ncm"), "net_mac": cmp.Or(f.mac, "pc")},
 				"terminal": map[string]any{"active": f.term, "state": map[bool]string{true: "on", false: "off"}[f.term], "transport": "serial", "cols": 100, "rows": 31}}
 		case "set_terminal":
 			want := map[string]bool{"on": true, "off": false, "toggle": !f.term}[req["mode"].(string)]
@@ -196,8 +197,10 @@ func (f *fakeBrain) serve(commands []string) {
 				f.master.Write(append(b, '\n'))
 				continue
 			}
-			res = map[string]any{"net": req["mode"], "switching": req["mode"] != cmp.Or(f.net, "ncm")}
-			f.net = req["mode"].(string)
+			mac, _ := req["mac"].(string)
+			mac = cmp.Or(mac, "pc")
+			res = map[string]any{"net": req["mode"], "mac": mac, "switching": req["mode"] != cmp.Or(f.net, "ncm") || mac != cmp.Or(f.mac, "pc")}
+			f.net, f.mac = req["mode"].(string), mac
 		case "set_text":
 			if req["style"] == "pink" {
 				b, _ := json.Marshal(map[string]any{"id": req["id"], "ok": false, "error": map[string]any{"code": "bad_request", "message": "unknown style"}})
@@ -353,7 +356,19 @@ func TestNetMode(t *testing.T) {
 	if code, out, errs := runCLI(t, "--port", f.slave, "net-mode"); code != exitOK || !strings.Contains(out, "NCM（既定") {
 		t.Fatalf("show: %d %s %s", code, out, errs)
 	}
-	if code, out, errs := runCLI(t, "--port", f.slave, "net-mode", "rndis"); code != exitOK || !strings.Contains(out, "RNDIS（Android のイーサネットテザリング、Windows） に切り替えます") {
+	if code, out, errs := runCLI(t, "--port", f.slave, "net-mode", "phone"); code != exitOK || !strings.Contains(out, "NCM、スマホ向けの MAC（Android のイーサネットテザリング） に切り替えます") || !strings.Contains(out, "enx88158b443a01") {
+		t.Fatalf("phone: %d %s %s", code, out, errs)
+	}
+	if r := lastReq(f, "set_net_mode"); r["mode"] != "ncm" || r["mac"] != "phone" {
+		t.Fatalf("phone request: %v", r)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "net-mode", "ncm", "phone"); code != exitOK || !strings.Contains(out, "すでに") {
+		t.Fatalf("ncm phone again: %d %s", code, out)
+	}
+	if code, out, _ := runCLI(t, "--port", f.slave, "status"); code != exitOK || !strings.Contains(out, "USB のネットワーク\tNCM、スマホ向けの MAC") {
+		t.Fatalf("status phone: %d %s", code, out)
+	}
+	if code, out, errs := runCLI(t, "--port", f.slave, "net-mode", "rndis"); code != exitOK || !strings.Contains(out, "RNDIS（NCM を持たない相手向け） に切り替えます") {
 		t.Fatalf("rndis: %d %s %s", code, out, errs)
 	}
 	if code, out, _ := runCLI(t, "--port", f.slave, "net-mode", "rndis"); code != exitOK || !strings.Contains(out, "すでに") {
@@ -365,7 +380,10 @@ func TestNetMode(t *testing.T) {
 	if code, _, errs := runCLI(t, "--port", f.slave, "net-mode", "ecm"); code != exitBrainError || !strings.Contains(errs, "cannot make ECM") {
 		t.Fatalf("ecm: %d %s", code, errs)
 	}
-	for _, bad := range [][]string{{"net-mode", "eem"}, {"net-mode", "ncm", "rndis"}} {
+	if code, out, _ := runCLI(t, "--port", f.slave, "net-mode", "rndis", "phone"); code != exitOK || !strings.Contains(out, "RNDIS（NCM を持たない相手向け）、スマホ向けの MAC に切り替えます") {
+		t.Fatalf("rndis phone: %d %s", code, out)
+	}
+	for _, bad := range [][]string{{"net-mode", "eem"}, {"net-mode", "ncm", "rndis"}, {"net-mode", "phone", "pc"}, {"net-mode", "ncm", "pc", "x"}} {
 		if code, _, _ := runCLI(t, append([]string{"--port", f.slave}, bad...)...); code != exitUsage {
 			t.Fatalf("%v: %d", bad, code)
 		}
@@ -722,4 +740,15 @@ func TestUSBHIDDescribe(t *testing.T) {
 			t.Errorf("%+v: %q, want %q", c.h, got, c.want)
 		}
 	}
+}
+
+// lastReq は、偽の Brain が受け取った要求を読み切り、cmd の最後のものを返す。
+func lastReq(f *fakeBrain, cmd string) map[string]any {
+	var last map[string]any
+	for len(f.got) > 0 {
+		if r := <-f.got; r["cmd"] == cmd {
+			last = r
+		}
+	}
+	return last
 }

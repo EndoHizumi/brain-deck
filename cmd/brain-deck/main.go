@@ -130,10 +130,12 @@ const usage = `使い方：
   brain-deck battery log --fit        記録から、残りの見積もりの表（設定の battery.curve）を作る
   brain-deck usb-mode [keyboard|mouse|toggle]  USB の形を見る・切り替える。keyboard はキーボードだけ（ブートキーボード。
                                       起動したときの形）、mouse はキーボードとマウス。USB を付け直すので、2〜3 秒切れる
-  brain-deck net-mode [ncm|ecm|rndis]  USB のネットワークの方式を見る・切り替える。ncm は既定（PC 向け）、rndis は
-                                      Android のイーサネットテザリングなど NCM を持たない相手向け。ecm はカーネルにあるときだけ。
+  brain-deck net-mode [ncm|ecm|rndis|phone] [pc|phone]  USB のネットワークの方式と、相手から見た MAC を見る・
+                                      切り替える。ncm は既定（PC 向け）。phone は NCM とスマホ向けの MAC（Android の
+                                      イーサネットテザリング用。PC のネットワークの名前は enx88158b443a01 に変わる）。
+                                      rndis は NCM を持たない相手向け、ecm はカーネルにあるときだけ。MAC を省くと pc。
                                       USB を付け直すので、数秒、キー入力、SSH、シリアルが切れる。起動し直すと
-                                      /etc/lefthand/gadget.env の NET_MODE（既定 ncm）に戻る
+                                      /etc/lefthand/gadget.env の NET_MODE と NET_MAC（既定 ncm と pc）に戻る
   brain-deck terminal [on|off|toggle|pc|brain]  端末モード（Brain の画面とキーボードで PC か Brain 自身にログインする）を
                                       見る・切り替える。on は Brain の画面で PC か Brain かを選ぶ。pc、brain で直接選ぶ。
                                       シリアルの端末モードでは、入るとき・抜けるときに USB を付け直す
@@ -1053,7 +1055,7 @@ func status(c *Client) (string, error) {
 	if st.HID != nil {
 		out += "\nUSB\t" + st.HID.describe()
 		if st.HID.Net != nil && *st.HID.Net != "" {
-			out += "\nUSB のネットワーク\t" + netModeName(*st.HID.Net)
+			out += "\nUSB のネットワーク\t" + netModeName(*st.HID.Net, st.HID.NetMAC)
 		}
 	}
 	if st.Term != nil {
@@ -1310,6 +1312,7 @@ type usbHID struct {
 	Preparing bool    `json:"preparing"` // 起動のときの USB の準備中（フェーズ K6。古い lefthand にはない）
 	USBState  *string `json:"usb_state"` // 古い lefthand にはない
 	Net       *string `json:"net"`       // ネットワークの方式（ncm、ecm、rndis。古い lefthand にはない）
+	NetMAC    string  `json:"net_mac"`   // 相手から見た MAC（pc、phone か、その値）
 }
 
 func (h usbHID) describe() string {
@@ -1383,23 +1386,39 @@ func usbModeCommand(o *options) (func(*Client) (string, error), error) {
 	}, nil
 }
 
-// netModeName は、ネットワークの方式の表示。
-func netModeName(m string) string {
+// netModeName は、ネットワークの方式と MAC の表示。
+func netModeName(m, mac string) string {
+	if m == "ncm" && mac == "phone" {
+		return "NCM、スマホ向けの MAC（Android のイーサネットテザリング）"
+	}
+	var s string
 	switch m {
 	case "ncm":
-		return "NCM（既定。Linux、macOS、Windows 10 以降の PC）"
+		s = "NCM"
+		if mac == "pc" || mac == "" {
+			return s + "（既定。Linux、macOS、Windows 10 以降の PC）"
+		}
 	case "ecm":
-		return "ECM"
+		s = "ECM"
 	case "rndis":
-		return "RNDIS（Android のイーサネットテザリング、Windows）"
+		s = "RNDIS（NCM を持たない相手向け）"
+	default:
+		s = m
 	}
-	return m
+	switch mac {
+	case "", "pc":
+	case "phone":
+		s += "、スマホ向けの MAC"
+	default:
+		s += "、MAC " + mac
+	}
+	return s
 }
 
 // netModeCommand は net-mode。引数がなければ今の方式を出し、あれば切り替える。
 func netModeCommand(o *options) (func(*Client) (string, error), error) {
-	if len(o.args) > 2 {
-		return nil, usageError("net-mode の引数は ncm、ecm、rndis のどれか 1 つです")
+	if len(o.args) > 3 {
+		return nil, usageError("net-mode の引数は、方式（ncm、ecm、rndis、phone）と MAC（pc、phone）です")
 	}
 	old := errors.New("Brain の lefthand が古く、USB のネットワークの方式を切り替えられません")
 	if len(o.args) == 1 {
@@ -1418,24 +1437,39 @@ func netModeCommand(o *options) (func(*Client) (string, error), error) {
 			if *st.HID.Net == "" {
 				return "USB のネットワークの方式が分かりません（ネットワークのファンクションがありません）", nil
 			}
-			s := "USB のネットワークは " + netModeName(*st.HID.Net)
+			s := "USB のネットワークは " + netModeName(*st.HID.Net, st.HID.NetMAC)
 			if st.HID.Switching {
 				s += "（切り替え中）"
 			}
 			return s, nil
 		}, nil
 	}
-	mode := o.args[1]
+	mode, mac := o.args[1], "pc"
 	switch mode {
 	case "ncm", "ecm", "rndis":
+	case "phone":
+		mode, mac = "ncm", "phone"
+		if len(o.args) == 3 {
+			return nil, usageError("net-mode phone には MAC を付けません（NCM とスマホ向けの MAC）")
+		}
 	default:
-		return nil, usageError("net-mode の引数は ncm、ecm、rndis のどれかです（" + strconv.Quote(mode) + "）")
+		return nil, usageError("net-mode の方式は ncm、ecm、rndis、phone のどれかです（" + strconv.Quote(mode) + "）")
+	}
+	if len(o.args) == 3 {
+		mac = o.args[2]
+		if mac != "pc" && mac != "phone" {
+			return nil, usageError("net-mode の MAC は pc か phone です（" + strconv.Quote(mac) + "）")
+		}
 	}
 	return func(c *Client) (string, error) {
 		if !c.Hello.has("set_net_mode") {
 			return "", old
 		}
-		raw, err := c.Call("set_net_mode", map[string]any{"mode": mode}, callTimeout())
+		args := map[string]any{"mode": mode}
+		if mac != "pc" {
+			args["mac"] = mac
+		}
+		raw, err := c.Call("set_net_mode", args, callTimeout())
 		if err != nil {
 			return "", err
 		}
@@ -1444,10 +1478,14 @@ func netModeCommand(o *options) (func(*Client) (string, error), error) {
 		}
 		json.Unmarshal(raw, &r)
 		if !r.Switching {
-			return "USB のネットワークはすでに " + netModeName(mode) + " です", nil
+			return "USB のネットワークはすでに " + netModeName(mode, mac) + " です", nil
 		}
-		return "USB のネットワークを " + netModeName(mode) + " に切り替えます。数秒、キー入力、SSH、シリアルが切れます。" +
-			"終わったら brain-deck net-mode で確かめてください", nil
+		s := "USB のネットワークを " + netModeName(mode, mac) + " に切り替えます。数秒、キー入力、SSH、シリアルが切れます。" +
+			"終わったら brain-deck net-mode で確かめてください"
+		if mac == "phone" {
+			s += "。PC では、ネットワークの名前が enx88158b443a01 に変わります（PC の 192.168.7.1 の設定は当たりません。戻すには brain-deck net-mode ncm）"
+		}
+		return s, nil
 	}, nil
 }
 

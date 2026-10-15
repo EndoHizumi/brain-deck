@@ -53,6 +53,14 @@
 #                lefthand から切り替えるときは brain-deck net-mode（環境変数で渡す）。
 #                方式を変えるときは、ネットワークのファンクションを作り直す（usb0 は消えて、同じ名前・同じ MAC で
 #                でき直す）。HID と ACM はリンクを外して付け直すだけで、ファンクションは消さない
+#   NET_MAC      相手（PC やスマホ）から見た Brain の MAC（host_addr）。pc（既定。8a:15:8b:44:3a:01）か phone
+#                （88:15:8b:44:3a:01）。/etc/lefthand/gadget.env にも書ける。決め方は NET_MODE と同じ（環境変数 >
+#                lefthand からなら今のもの > gadget.env > pc）。
+#                pc の値は「ローカルに割り当てた」印（先頭のバイトの 0x02）が立っているので、相手の Linux のカーネルは
+#                ネットワークの名前を usb0 にする。PC は udev で enx8a158b443a01 に付け直すが、Android は付け直さず、
+#                イーサネットテザリングは eth0 のような名前しか扱わない。phone は印を立てない値で、相手のカーネルは
+#                eth0 にする（2026-10-15、Xperia 1 IV の Android 15 で、NCM と phone でだけテザリングの対象になった）。
+#                phone のとき、PC のネットワークの名前は enx88158b443a01 に変わる
 #   GADGET_CHECK=1   何も変えずに、このスクリプトを実行したら USB を付け直すかを調べる。付け直すなら理由を
 #                    「rebind: …」の行に書いて終了コード 10、今のままでよければ 0。brain-deck update が、
 #                    入れ替える前に知らせるために使う（lefthand の update.go）
@@ -64,6 +72,7 @@ GADGET_ENV=${GADGET_ENV:-/etc/lefthand/gadget.env}
 want_mouse=${HID_MOUSE:-}
 want_wakeup=${USB_WAKEUP:-}
 want_net=${NET_MODE:-}
+want_mac=${NET_MAC:-}
 [ -r "$GADGET_ENV" ] && . "$GADGET_ENV"
 HID_MOUSE=${want_mouse:-${HID_MOUSE:-0}}
 USB_WAKEUP=${want_wakeup:-${USB_WAKEUP:-1}}
@@ -103,11 +112,38 @@ case "$NET_MODE" in
 esac
 net_ok=1
 
+# MAC の決め方も NET_MODE と同じ。今のものは、リンクしているネットワークの host_addr から読む
+NET_MAC_PC=8a:15:8b:44:3a:01
+NET_MAC_PHONE=88:15:8b:44:3a:01
+# cur_host_addr は、リンクしているネットワークの host_addr（configfs は最後に NUL を付けて返すので消す）
+cur_host_addr() {
+  local f
+  f=$(net_linked)
+  [ -n "$f" ] && tr -d '\0\n' < "$G/functions/$f/host_addr"
+  return 0
+}
+gadget_env_mac=${NET_MAC:-}
+if [ -n "$want_mac" ]; then
+  NET_MAC=$want_mac
+elif [ "${LEFTHAND_SELF:-0}" = 1 ] && [ -n "$(net_linked)" ]; then
+  case "$(cur_host_addr)" in
+    "$NET_MAC_PHONE") NET_MAC=phone ;;
+    *) NET_MAC=pc ;;
+  esac
+else
+  NET_MAC=${gadget_env_mac:-pc}
+fi
+case "$NET_MAC" in
+  pc) NET_HOST=$NET_MAC_PC ;;
+  phone) NET_HOST=$NET_MAC_PHONE ;;
+  *) echo "NET_MAC=$NET_MAC は pc か phone ではありません。pc にします" >&2; NET_MAC=pc; NET_HOST=$NET_MAC_PC ;;
+esac
+
 # Brainux の enable_ethernet_gadget と同じ値。
 # host_addr を変えると PC 側のインターフェース名（enx8a158b443a01）が変わるので変えないこと
-# NCM のほか、ECM と RNDIS でも同じ値にする（PC は MAC から名前を付けるので、方式を変えても同じ名前になる）
+# NCM のほか、ECM と RNDIS でも同じ値にする（PC は MAC から名前を付けるので、方式を変えても同じ名前になる）。
+# 相手から見た MAC（host_addr）は NET_MAC で選ぶ（NET_HOST。既定は pc の 8a:15:8b:44:3a:01）
 NCM_DEV_ADDR=8a:15:8b:44:3a:02
-NCM_HOST_ADDR=8a:15:8b:44:3a:01
 
 # HID のレポートディスクリプタ。lefthand の hid.go の hidDescKeyboard、hidDescCombo と同じ（テストで比べている）。
 # bash の printf で \x を解釈させる（dash では効かないので sh で実行しないこと）
@@ -172,7 +208,7 @@ make_net() {
     return 1
   fi
   echo "$NCM_DEV_ADDR" > "$f/dev_addr"
-  echo "$NCM_HOST_ADDR" > "$f/host_addr"
+  echo "$NET_HOST" > "$f/host_addr"
   if [ "$1" = rndis ]; then
     echo RNDIS > "$f/os_desc/interface.rndis/compatible_id"
     echo 5162001 > "$f/os_desc/interface.rndis/sub_compatible_id"
@@ -331,16 +367,19 @@ add_acm_gui() {
   echo "added: ACM for the settings GUI (port $(cat functions/acm.usb1/port_num))"
 }
 
-# switch_net は、ネットワークの方式を NET_MODE に変える。新しいファンクションを先に作って（作れなければ何も変えない）、
-# UDC から切り離し、全部のリンクを外し、古いネットワークのファンクションを消し、新しいものを先頭に、
-# ほかを同じ順でリンクし直す（インターフェイスの番号は変わらない）。古いものを消すのは、残すと
-# usb0 の名前を持ったままで、新しいものが usb1 になるため。
+# switch_net は、ネットワークの方式を NET_MODE に、相手から見た MAC を NET_HOST に変える。方式が変わるときは、
+# 新しいファンクションを先に作って（作れなければ何も変えない）、UDC から切り離し、全部のリンクを外し、
+# 古いネットワークのファンクションを消し、新しいものを先頭に、ほかを同じ順でリンクし直す（インターフェイスの
+# 番号は変わらない）。古いものを消すのは、残すと usb0 の名前を持ったままで、新しいものが usb1 になるため。
+# 方式が同じで MAC だけが変わるときは、リンクを外しているあいだに host_addr を書き直す（リンク中は書けない）。
 # ACM のファンクションは消さない（ttyGS を開いている getty で rmdir が止まる）
 switch_net() {
   cd "$G"
   local old f linked="" rc=0
   old=$(net_linked)
-  make_net "$NET_MODE" || return 1
+  if [ "$old" != "$NET_MODE.usb0" ]; then
+    make_net "$NET_MODE" || return 1
+  fi
   unbind_udc
   [ -n "$old" ] && rm "configs/c.1/$old"
   for f in $LINK_ORDER; do
@@ -350,13 +389,17 @@ switch_net() {
     fi
   done
   set_os_desc "$NET_MODE" || rc=$?
-  [ -n "$old" ] && { rmdir "functions/$old" || rc=$?; }
+  if [ "$old" = "$NET_MODE.usb0" ]; then
+    echo "$NET_HOST" > "functions/$old/host_addr" || rc=$?
+  elif [ -n "$old" ]; then
+    rmdir "functions/$old" || rc=$?
+  fi
   ln -s "functions/$NET_MODE.usb0" configs/c.1/ || rc=$?
   # 失敗しても、リンクは必ず元に戻す
   for f in $linked; do
     ln -s "functions/$f" configs/c.1/ || rc=$?
   done
-  [ "$rc" = 0 ] && echo "updated: network is now $NET_MODE (was ${old%.usb0})"
+  [ "$rc" = 0 ] && echo "updated: network is now $NET_MODE, MAC $NET_MAC ($NET_HOST) (was ${old%.usb0})"
   return "$rc"
 }
 
@@ -374,6 +417,7 @@ if [ "${GADGET_CHECK:-0}" = 1 ]; then
     fi
     [ -e "$G/configs/c.1/acm.usb1" ] || reason "the ACM for the settings GUI is not linked"
     [ "$(net_linked)" = "$NET_MODE.usb0" ] || reason "the network function differs (want $NET_MODE, now $(net_linked))"
+    [ "$(cur_host_addr)" = "$NET_HOST" ] || reason "the host MAC differs (want $NET_MAC $NET_HOST, now $(cur_host_addr))"
     want_conf="$(echo "$NET_MODE" | tr a-z A-Z)+HID+ACM+ACM"
     [ "${GADGET_TERMINAL:-0}" = 1 ] && want_conf="$want_conf terminal"
     [ "$(cat "$G/configs/c.1/strings/0x409/configuration" 2>/dev/null)" = "$want_conf" ] || reason "the configuration name differs (want $want_conf)"
@@ -386,15 +430,15 @@ if [ "${GADGET_CHECK:-0}" = 1 ]; then
   if [ "$need" = 1 ]; then
     exit 10
   fi
-  echo "up to date: HID = $HID_KIND, network = $NET_MODE"
+  echo "up to date: HID = $HID_KIND, network = $NET_MODE, MAC = $NET_MAC"
   exit 0
 fi
 
 [ -d "$G" ] || create_eth
 
-# ネットワークの方式が違えば作り直す。作れない方式（ecm など）なら、今の方式のまま続ける
-if [ -n "$(net_linked)" ] && [ "$(net_linked)" != "$NET_MODE.usb0" ]; then
-  echo "ネットワークを $NET_MODE にします"
+# ネットワークの方式か MAC が違えば作り直す。作れない方式（ecm など）なら、今の方式のまま続ける
+if [ -n "$(net_linked)" ] && { [ "$(net_linked)" != "$NET_MODE.usb0" ] || [ "$(cur_host_addr)" != "$NET_HOST" ]; }; then
+  echo "ネットワークを $NET_MODE（MAC $NET_MAC）にします"
   set +e
   (set -e; switch_net)
   rc=$?
@@ -510,5 +554,5 @@ if [ -e "$RESTART_MARK" ]; then
 fi
 
 ls -l /dev/hidg0 /dev/ttyGS0 /dev/ttyGS1 || echo "warning: /dev/hidg0、/dev/ttyGS0、/dev/ttyGS1 のどれかが見つかりません" >&2
-echo "done: usb0 = $BRAIN_IP, network = $(conf_label), HID = $HID_KIND, remote wakeup = $([ "$USB_WAKEUP" = 1 ] && echo on || echo off)"
+echo "done: usb0 = $BRAIN_IP, network = $(conf_label), MAC = $(cur_host_addr), HID = $HID_KIND, remote wakeup = $([ "$USB_WAKEUP" = 1 ] && echo on || echo off)"
 [ "$hid_ok" = 1 ] && [ "$net_ok" = 1 ]
