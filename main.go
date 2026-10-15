@@ -975,7 +975,7 @@ func main() {
 	pngFilesSize := flag.Bool("render-files-by-size", false, "-render-files を大きい順に")
 	pngReadSize := flag.Int("render-read-size", 24, "-render-read の文字の大きさ（24 か 32）")
 	pngSettings := flag.String("render-settings", "", "-render-png で、widget: settings に設定のアプリのこのタブを描く（settings、settings2（設定のタブの 2 ページ目）、info、power）")
-	pngSettingsChoice := flag.String("render-settings-choice", "", "-render-settings で、この行の選ぶ画面を出す（level、dim、dim_offline、photo、rotate、reader、lid、tablet、ime）")
+	pngSettingsChoice := flag.String("render-settings-choice", "", "-render-settings で、この行の選ぶ画面を出す（level、dim、dim_offline、photo、rotate、reader、lid、ime、profile）")
 	pngHelp := flag.Int("render-help", 0, "-render-png で、widget: help にヘルプのこのページ（1 から）を描く。-render-read-size で文字の大きさ")
 	pngReadH := flag.Bool("render-read-horizontal", false, "-render-read を横書きで出す")
 	pngMemo := flag.String("render-memo", "", "-render-png で、手書きメモのセルに出すメモ（memo の <id>.json の形のファイル。最後のページを出す）")

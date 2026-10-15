@@ -199,21 +199,14 @@ func TestTabletModeDropsKeys(t *testing.T) {
 	if l.KeysBlocked() || f.drop(k(evdev.KEY_C, 1)) {
 		t.Error("lid.tablet_keys: on must keep the keys")
 	}
-	// 上書き lid.tablet_keys と lid.close は、もう一方を消さない
+	// 上書き lid.close は、設定ファイルの tablet_keys を消さない（tablet_keys は上書きできない）
 	c := mustCfg(t, "lid: {close: none, tablet_keys: on}")
-	for _, kv := range []struct {
-		key string
-		v   any
-	}{{"lid.tablet_keys", tabletKeysOff}, {"lid.close", lidOff}} {
-		overrideKeyOf(kv.key).apply(c, c, kv.v)
-	}
-	if c.Lid.action() != lidOff || c.Lid.tabletKeys() != tabletKeysOff {
-		t.Errorf("lid = %+v", c.Lid)
-	}
-	c = mustCfg(t, "lid: {close: none, tablet_keys: on}")
 	overrideKeyOf("lid.close").apply(c, c, lidOff)
-	if c.Lid.tabletKeys() != tabletKeysOn {
+	if c.Lid.action() != lidOff || c.Lid.tabletKeys() != tabletKeysOn {
 		t.Errorf("the lid.close override dropped tablet_keys: %+v", c.Lid)
+	}
+	if overrideKeyOf("lid.tablet_keys") != nil {
+		t.Error("lid.tablet_keys must not be an override (PW-SH2 sends no keys in tablet mode)")
 	}
 }
 

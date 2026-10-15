@@ -22,6 +22,8 @@ import (
 //
 // タブレットの形（画面を裏返す）のあいだは、裏になったキーボードが押されることがあるので、本体のキーを PC にも
 // brain-deck の操作にも使わない（lid.tablet_keys: off が既定。on なら使う）。タッチはそのまま使える。
+// ただし PW-SH2 では、タブレットの形のあいだキーボードがキーを送らない（2026-10-15 に実機で確かめた。割り込みも
+// 起きない）ので、これは別のハードや将来のドライバのための網。設定のアプリと上書きでは変えられない（設定ファイルだけ）。
 
 const (
 	lidOff  = "off"  // 閉じたら画面を消す（既定）
@@ -245,15 +247,4 @@ func lidLabel(a string) string {
 		return "画面を消す"
 	}
 	return fmt.Sprintf("%q", a)
-}
-
-// tabletKeysLabel は、タブレットの形のときの本体のキーの日本語の名前。
-func tabletKeysLabel(k string) string {
-	switch k {
-	case tabletKeysOn:
-		return "使う"
-	case tabletKeysOff, "":
-		return "使わない"
-	}
-	return fmt.Sprintf("%q", k)
 }

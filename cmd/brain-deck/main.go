@@ -125,7 +125,7 @@ const usage = `使い方：
   brain-deck overrides clear <名前>... | all   上書きを消して、設定ファイルの値に戻す
   brain-deck overrides set <名前> <値>   上書きを置く（backlight.level 1〜7、backlight.dim_after 3m か off、
                                       backlight.offline.dim_after、backlight.photo true か false、lid.close off か none、
-                                      lid.tablet_keys off か on、ime.method）
+                                      ime.method）
   brain-deck battery log [-n 行数]    電池だけで動かしたときの電圧の記録（CSV。Brain の battery-log.csv）
   brain-deck battery log --fit        記録から、残りの見積もりの表（設定の battery.curve）を作る
   brain-deck usb-mode [keyboard|mouse|toggle]  USB の形を見る・切り替える。keyboard はキーボードだけ（ブートキーボード。
