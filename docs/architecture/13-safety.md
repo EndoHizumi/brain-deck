@@ -8,6 +8,7 @@
 
 - 設定を書き換える、Brain のデータを読む・消す、見られる場所のファイルを取り出す
 - `brain-deck update` で、root で動くデーモンを好きな実行ファイルに入れ替える（更新のファイルの確かめは「壊れていないか」「この設定で動くか」で、だれが作ったかの署名はない）
+- `brain-deck run` で、Brain のコマンドを user で動かす。user は sudo を使えるので、root のコマンドも動かせる（README の「コマンド（run）」）
 - 自分で足すアプリ（Brain の user で動くスクリプト）を置く
 
 つまり「USB ケーブルでつないだ PC と、その PC の dialout グループのユーザー」が、Brain の root と同じ力を持つ。brain-deck は「自分の机の上の、自分の PC につなぐ道具」として作られている。
@@ -26,6 +27,7 @@
 | `terminal.command`（ssh など） | `terminal.user`（root は設定の検証で断る） | |
 | uim-fep と line.sh（日本語入力） | `ime.user`（既定 `terminal.brain_user`、なければ `user`。root は断る） | |
 | 自分で足すアプリ | `terminal.brain_user`（既定 `user`。root なら動かさない）。補助グループはなし | |
+| `brain-deck run` のコマンド | `user`（決まった名前。補助グループも付ける。root が要るときはコマンドの中で sudo） | シェルを通さず、標準入力は /dev/null、決まった環境変数。動かしたものと結果はジャーナルに残す（runcmd.go） |
 | 1 つ目のシリアルの getty | root（systemd の serial-getty のまま）。ログインにはパスワード | |
 
 - user で動かすものは、`setuid` してから exec する（termpty.go の `startUserPTY`、appsrun.go の `AppService.command`）。
@@ -67,6 +69,7 @@
 | 更新のファイル | 24 MiB、展開した lefthand 32 MiB | update.go |
 | バックアップ | 受け取り 192 MiB、戻した中身 512 MiB、20,000 ファイル | backup.go |
 | 自分で足すアプリ | 32 個、1 つ 32 ファイル、1 ファイル 256 KiB、合計 1 MiB。動かすときは仮想メモリ、CPU の時間、ファイルの大きさ 16 MiB、ファイル 64 個、プロセスの数、時間、出力、同時に 3 つ | apps.go、appsrun.go |
+| `brain-deck run` | 時間 既定 1 分、最大 10 分（過ぎたらプロセスグループに SIGTERM、3 秒後に SIGKILL）、出力はそれぞれ 64 KiB | runcmd.go |
 | ログ（`get_logs`） | 2000 行、200 KiB | update.go |
 
 ## 失敗したときに戻す仕組み

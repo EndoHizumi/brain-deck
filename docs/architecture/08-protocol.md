@@ -123,11 +123,11 @@ sequenceDiagram
 | --- | --- |
 | 設定 | `get_config`、`validate`、`set_config`、`get_config_text`、`put_config_text`、`get_keymap`、`get_overrides`、`set_override`、`clear_overrides` |
 | 状態 | `hello`、`get_status`（`hid.preparing` は起動のときの USB の準備中）、`get_logs`、`get_battery_log` |
-| 切り替え | `set_usb_mode`、`set_terminal`、`set_rotate`、`set_pc`、`get_profile`、`set_profile`、`calibrate` |
+| 切り替え | `set_usb_mode`、`set_net_mode`、`set_terminal`、`set_rotate`、`set_pc`、`get_profile`、`set_profile`、`calibrate` |
 | データ（PC → Brain） | `set_time`、`set_text`、`set_qr`、`set_calendar`、`set_weather`、`add_graph`、`clear_graph`、`set_presence`、`set_sync` |
 | データ（読む・変える） | `get_text`、`get_qr`、`get_calendar`、`get_weather`、`get_weather_icon`、`get_widgets`、`get_graph`、`get_todo`、`todo_*` |
 | ファイル | `list_images`、`image_*`、`get_image`、`prune_images`、`list_photos`、`get_photo`、`delete_photo`、`list_memos`、`get_memo`、`delete_memo`、`list_reads`、`delete_read`、`list_files`、`get_file`、`delete_file`、`list_apps`、`delete_app`、`upload_*` |
-| 保守 | `update_apply`、`update_discard`、`update_rollback`、`update_confirm`、`update_status`、`restart`、`power`、`backup_create`、`backup_read`、`backup_done`、`restore_apply` |
+| 保守 | `update_apply`、`update_discard`、`update_rollback`、`update_confirm`、`update_status`、`restart`、`power`、`backup_create`、`backup_read`、`backup_done`、`restore_apply`、`run`（コマンドを user で動かし、結果を返すまでこの接続のほかの要求は待つ） |
 | 通知 | `subscribe_input`、`subscribe_data` |
 
 ### なぜこうなっているか

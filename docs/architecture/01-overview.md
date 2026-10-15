@@ -75,8 +75,8 @@ flowchart TB
 | --- | --- |
 | データを送る | `text`、`qr`、`presence`、`graph`、`todo`、`calendar sync`、`weather sync`、`photo add`、`images put`、`read add`、`files put`、`app install`、`time sync` |
 | まとめて行う | `sync`（PC の名前を知らせる、時刻、予定、天気、RSS、手書きメモの取り出し、バックアップ） |
-| 保守 | `update`、`restart`、`reboot`、`poweroff`、`logs`、`config get/put`、`backup`、`restore`、`status` |
-| 切り替え | `usb-mode`、`terminal`、`profile`、`overrides`、`calibrate` |
+| 保守 | `update`、`restart`、`reboot`、`poweroff`、`logs`、`config get/put`、`backup`、`restore`、`status`、`run`（ssh なしで Brain のコマンドを user で動かす） |
+| 切り替え | `usb-mode`、`net-mode`（USB のネットワークの方式と MAC）、`terminal`、`profile`、`overrides`、`calibrate` |
 | ショートカットから | `exec`（コマンドを動かし、結果をテキストのタイルに出す） |
 
 重い処理（ICS の繰り返しの展開、天気の API、SVG のアイコンを描く、画像の変換、EPUB や青空文庫の解釈）は、ここで行い、Brain には結果だけを送る。

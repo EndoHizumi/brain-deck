@@ -16,7 +16,7 @@ Brain の上で lefthand が読み書きするファイル。3 つに分けて�
 | --- | --- | --- | --- | --- |
 | `config.yaml` | 設定ファイル（YAML。docs/config.md） | 設定 GUI（`set_config`。コメントは消える）、`brain-deck config put`（`put_config_text`。コメントは残る）、手で編集、復元 | 設定 | 入る（`config/config.yaml`） |
 | `config.yaml.prev` | 1 つ前の設定ファイル。最後の保存の前の版だけ | 保存のたびに | 設定（戻すため） | 入らない |
-| `gadget.env` | gadget-setup.sh の環境変数（`HID_MOUSE=1`、`USB_WAKEUP`、`GADGET_MAX_POWER`）。なくてもよい | 手で | 設定 | 入らない |
+| `gadget.env` | gadget-setup.sh の環境変数（`HID_MOUSE=1`、`USB_WAKEUP`、`GADGET_MAX_POWER`、`NET_MODE`（ncm、ecm、rndis）、`NET_MAC`（pc、phone））。なくてもよい。本番は `NET_MAC=phone`（2026-10-15） | 手で | 設定 | 入らない |
 | `boot-tune.state` | contrib/boot/boot-tune.sh が止めたサービス、置いたファイル、mask したものの記録（`revert` で戻すため）。本番では段階 1〜6 を適用している | boot-tune.sh | 記録 | 入らない |
 
 ## `/var/lib/lefthand/`（データ。lefthand の `-data-dir`）
